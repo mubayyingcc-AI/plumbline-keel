@@ -6,4 +6,4 @@ Run `npm test` then `npm start`; open `http://127.0.0.1:3000`.
 
 Endpoints: `GET /api/health`, `GET /api/demo`, `POST /api/evaluate`. See `docs/LOCAL_ALPHA.md`.
 
-Local only. The dedicated GitHub repository exists, but source upload has not yet been completed. Railway has not been configured or deployed. Advisory prototype only; do not submit real customer data or rely on it to authorize live financial activity.
+Local only. The source for this local alpha has been uploaded to the dedicated GitHub repository on the main branch. Railway has not been configured or deployed. Advisory prototype only; do not submit real customer data or rely on it to authorize live financial activity.
