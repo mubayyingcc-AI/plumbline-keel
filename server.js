@@ -177,21 +177,21 @@ function assuranceAuthorized(req) {
   const a = Buffer.from(supplied), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a,b);
 }
+async function recordEventWithClient(client, tenant, type, subjectId, payload) {
+  const tenantLock=await client.query("SELECT tenant_id,status FROM keel_tenants WHERE tenant_id=$1 FOR UPDATE",[tenant.tenant_id]);
+  if(!tenantLock.rowCount || tenantLock.rows[0].status!=='active') throw Object.assign(new Error('tenant_not_active'),{status:403});
+  const last=await client.query('SELECT tenant_sequence,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT 1',[tenant.tenant_id]);
+  const sequence=last.rowCount?Number(last.rows[0].tenant_sequence)+1:1;
+  const previousFingerprint=last.rowCount?last.rows[0].event_fingerprint:null;
+  const event={tenantId:tenant.tenant_id,sequence,previousFingerprint,eventId:crypto.randomUUID(),eventType:type,subjectId,actorKeyId:tenant.key_id,actorRole:tenant.role,payload};
+  const eventFingerprint=authorityChain.eventDigest(event);
+  await client.query('INSERT INTO keel_assurance_events (event_id,tenant_id,tenant_sequence,previous_event_fingerprint,actor_key_id,actor_role,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[event.eventId,event.tenantId,sequence,previousFingerprint,event.actorKeyId,event.actorRole,type,subjectId,eventFingerprint,JSON.stringify(payload)]);
+  return {eventId:event.eventId,sequence,eventFingerprint};
+}
 async function recordEvent(pool, tenant, type, subjectId, payload) {
   const client=await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const tenantLock=await client.query("SELECT tenant_id,status FROM keel_tenants WHERE tenant_id=$1 FOR UPDATE",[tenant.tenant_id]);
-    if(!tenantLock.rowCount || tenantLock.rows[0].status!=='active') throw Object.assign(new Error('tenant_not_active'),{status:403});
-    const last=await client.query('SELECT tenant_sequence,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT 1',[tenant.tenant_id]);
-    const sequence=last.rowCount?Number(last.rows[0].tenant_sequence)+1:1;
-    const previousFingerprint=last.rowCount?last.rows[0].event_fingerprint:null;
-    const event={tenantId:tenant.tenant_id,sequence,previousFingerprint,eventId:crypto.randomUUID(),eventType:type,subjectId,actorKeyId:tenant.key_id,actorRole:tenant.role,payload};
-    const eventFingerprint=authorityChain.eventDigest(event);
-    await client.query('INSERT INTO keel_assurance_events (event_id,tenant_id,tenant_sequence,previous_event_fingerprint,actor_key_id,actor_role,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[event.eventId,event.tenantId,sequence,previousFingerprint,event.actorKeyId,event.actorRole,type,subjectId,eventFingerprint,JSON.stringify(payload)]);
-    await client.query('COMMIT');
-    return {eventId:event.eventId,sequence,eventFingerprint};
-  } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  try { await client.query('BEGIN'); const result=await recordEventWithClient(client,tenant,type,subjectId,payload); await client.query('COMMIT'); return result; }
+  catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 async function authenticateTenant(req) {
   const token=tenantSecurity.keyFromAuthorization(req.headers.authorization);
@@ -309,12 +309,22 @@ const server = http.createServer(async (req,res) => {
       const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=await dbPool(), docketId=decodeURIComponent(approvalMatch[1]);
       const docket=await pool.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
       if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
-      const prior=await pool.query('SELECT principal_id FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
-      if(prior.rows.some(x=>x.principal_id===actor.principal_id)) return send(res,409,{error:'principal_already_acted'});
       const client=await pool.connect(); let count=0;
-      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_docket_approvals(approval_id,tenant_id,docket_id,principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),actor.tenant_id,docketId,actor.principal_id,decision.decision,decision.rationale]); const q=await client.query("SELECT COUNT(DISTINCT principal_id)::int AS count FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2",[actor.tenant_id,docketId]); count=q.rows[0].count; await client.query('COMMIT'); }
-      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-      await recordEvent(pool,actor,'WITNESS_RECORDED',docketId,{principalId:actor.principal_id,decision:decision.decision,rationale:decision.rationale,distinctApprovals:count});
+      try {
+        await client.query('BEGIN');
+        const locked=await client.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2 FOR UPDATE',[actor.tenant_id,docketId]);
+        if(!locked.rowCount) { await client.query('ROLLBACK'); return send(res,404,{error:'tenant_docket_not_found'}); }
+        const prior=await client.query('SELECT principal_id FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
+        if(prior.rows.some(x=>x.principal_id===actor.principal_id)) { await client.query('ROLLBACK'); return send(res,409,{error:'principal_already_acted'}); }
+        const docketPayload=await client.query('SELECT payload FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
+        const submitter=docketPayload.rows[0]?.payload?.decisionWitness?.reviewerId;
+        if(submitter && submitter===actor.key_id) { await client.query('ROLLBACK'); return send(res,403,{error:'submitter_cannot_approve_own_docket'}); }
+        await client.query('INSERT INTO keel_docket_approvals(approval_id,tenant_id,docket_id,principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),actor.tenant_id,docketId,actor.principal_id,decision.decision,decision.rationale]);
+        const q=await client.query("SELECT COUNT(DISTINCT principal_id)::int AS count, BOOL_OR(decision='reject') AS rejected FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2",[actor.tenant_id,docketId]);
+        count=q.rows[0].count;
+        await recordEventWithClient(client,actor,'WITNESS_RECORDED',docketId,{principalId:actor.principal_id,decision:decision.decision,rationale:decision.rationale,distinctApprovals:count,rejected:q.rows[0].rejected});
+        await client.query('COMMIT');
+      } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,docketId,recordedBy:actor.principal_id,distinctApprovals:count,threshold:2,approvalState:count>=2?'two_person_threshold_met':'awaiting_second_independent_principal',note:'Two distinct authenticated principals have acted; this does not authorize financial execution.'});
     }
     if(req.method==='POST' && ['/api/tenants/keys','/api/tenants/keys/revoke'].includes(route)){
@@ -351,10 +361,15 @@ const server = http.createServer(async (req,res) => {
       if(route==='/api/assurance/dockets'){
         const docketInput={...payload,witness:{...(payload.witness||{}),reviewerId:tenant.key_id,role:tenant.role}};
         const d=assurance.buildProofDocket(docketInput);
-        await pool.query('INSERT INTO keel_proof_dockets (docket_id,tenant_id,decision_id,decision,docket_fingerprint,decision_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7)',[d.docketId,tenant.tenant_id,d.decision.decisionId,d.decision.decision,d.docketFingerprint,d.decision.recordFingerprint,JSON.stringify(d)]);
-        await recordEvent(pool,tenant,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
-        if(d.fallbackMandate.status==='restricted') await recordEvent(pool,tenant,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
-        if(d.decisionWitness.status!=='pending') await recordEvent(pool,tenant,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
+        const client=await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('INSERT INTO keel_proof_dockets (docket_id,tenant_id,decision_id,decision,docket_fingerprint,decision_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7)',[d.docketId,tenant.tenant_id,d.decision.decisionId,d.decision.decision,d.docketFingerprint,d.decision.recordFingerprint,JSON.stringify(d)]);
+          await recordEventWithClient(client,tenant,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
+          if(d.fallbackMandate.status==='restricted') await recordEventWithClient(client,tenant,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
+          if(d.decisionWitness.status!=='pending') await recordEventWithClient(client,tenant,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
+          await client.query('COMMIT');
+        } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
         return send(res,201,{ok:true,docketId:d.docketId,decision:d.decision.decision,docketFingerprint:d.docketFingerprint,proofDocket:d});
       }
       const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant,'DRIFT_DETECTED',drift.driftId,drift);
