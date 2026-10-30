@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { evaluateAction, fingerprint } = require('./src/core');
 const assurance = require('./src/assurance');
+const tenantSecurity = require('./src/tenant-security');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -58,6 +59,15 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_created_idx ON keel_proof_dockets(created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_tenant_keys_tenant_idx ON keel_tenant_keys(tenant_id,status)');
+      await pool.query('ALTER TABLE keel_model_census ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
+      await pool.query('ALTER TABLE keel_proof_dockets ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
+      await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_model_census_tenant_idx ON keel_model_census(tenant_id,model_id)');
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_tenant_idx ON keel_proof_dockets(tenant_id,created_at DESC)');
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_tenant_idx ON keel_assurance_events(tenant_id,created_at DESC)');
       return pool;
     })().catch(err => { poolPromise = null; throw err; });
   }
@@ -147,9 +157,19 @@ function assuranceAuthorized(req) {
   const a = Buffer.from(supplied), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a,b);
 }
-function recordEvent(pool, type, subjectId, payload) {
-  return pool.query('INSERT INTO keel_assurance_events (event_id,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5)',
-    [crypto.randomUUID(),type,subjectId,fingerprint(payload),JSON.stringify(payload)]);
+function recordEvent(pool, tenantId, type, subjectId, payload) {
+  return pool.query('INSERT INTO keel_assurance_events (event_id,tenant_id,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6)',
+    [crypto.randomUUID(),tenantId,type,subjectId,fingerprint(payload),JSON.stringify(payload)]);
+}
+async function authenticateTenant(req) {
+  const token=tenantSecurity.keyFromAuthorization(req.headers.authorization);
+  if(!token) return null;
+  const pool=await dbPool(); if(!pool) return null;
+  const hash=tenantSecurity.hashPresentedKey(token);
+  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  if(!result.rowCount) return null;
+  await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
+  return result.rows[0];
 }
 function cleanString(value, max=2000) {
   return typeof value === 'string' ? value.trim().slice(0,max) : '';
@@ -172,7 +192,9 @@ const apiDescription = {
   paths:{
     '/api/health':{get:{summary:'Service and database readiness'}},
     '/api/products':{get:{summary:'Current product catalogue'}},
-    '/api/assurance/status':{get:{summary:'Assurance Fabric status and aggregate counts'}},
+    '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
+    '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time API key'}},
+    '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
     '/api/assurance/drift':{post:{summary:'Record fingerprint drift (token restricted)'} },
@@ -201,40 +223,53 @@ const server = http.createServer(async (req,res) => {
       });
     }
     if (req.method === 'GET' && route === '/api/assurance/status') {
-      const pool = await dbPool();
-      if (!pool) return send(res,503,{error:'assurance_storage_unavailable'});
-      const q = await Promise.all([
-        pool.query('SELECT COUNT(*)::int AS count FROM keel_model_census'),
-        pool.query('SELECT COUNT(*)::int AS count FROM keel_proof_dockets'),
-        pool.query('SELECT COUNT(*)::int AS count FROM keel_assurance_events')
-      ]);
-      return send(res,200,{fabric:'Keel Assurance Fabric',version:'1.0',controls:['OriginMark','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'],counts:{registeredModels:q[0].rows[0].count,proofDockets:q[1].rows[0].count,assuranceEvents:q[2].rows[0].count},writeAccess:process.env.KEEL_ASSURANCE_TOKEN?'restricted_token':'disabled_until_token_configured',boundary:'Advisory evidence records only; no external registry verification or financial execution.'});
+      return send(res,200,{fabric:'Keel Assurance Fabric',version:'1.0',availability:'available',tenantIsolation:'credential-scoped',boundary:'Advisory evidence records only; no external registry verification or financial execution.'});
+    }
+    if (req.method === 'POST' && route === '/api/tenants/bootstrap') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const expected=process.env.KEEL_TENANT_BOOTSTRAP_TOKEN;
+      if (!expected) return send(res,503,{error:'tenant_bootstrap_not_configured'});
+      const supplied=String(req.headers.authorization||'').replace(/^Bearer\\s+/i,'');
+      const a=Buffer.from(supplied), b=Buffer.from(expected);
+      if (!a.length || a.length!==b.length || !crypto.timingSafeEqual(a,b)) return send(res,401,{error:'bootstrap_authorization_required'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'tenant_storage_unavailable'});
+      const tenant=tenantSecurity.normalizeTenant(await readBody(req));
+      const issued=tenantSecurity.issueTenantKey(), tenantId=crypto.randomUUID(), client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label) VALUES ($1,$2,$3,$4)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key']); await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      return send(res,201,{ok:true,tenant:{id:tenantId,name:tenant.name,slug:tenant.slug},apiKey:issued.token,keyId:issued.keyId,warning:'This key is shown once; only its hash is stored.'});
     }
     if (req.method === 'POST' && ['/api/assurance/models','/api/assurance/dockets','/api/assurance/drift'].includes(route)) {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
-      if (!assuranceAuthorized(req)) return send(res,process.env.KEEL_ASSURANCE_TOKEN?401:503,{error:process.env.KEEL_ASSURANCE_TOKEN?'assurance_authorization_required':'assurance_write_access_not_configured'});
-      const pool = await dbPool();
-      if (!pool) return send(res,503,{error:'assurance_storage_unavailable'});
-      const payload = await readBody(req);
-      if (route === '/api/assurance/models') {
-        const m = assurance.buildModelCensus(payload);
-        await pool.query('INSERT INTO keel_model_census (model_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (model_id) DO UPDATE SET provider=EXCLUDED.provider,model_name=EXCLUDED.model_name,version=EXCLUDED.version,owner_ref=EXCLUDED.owner_ref,purpose=EXCLUDED.purpose,access_scope=EXCLUDED.access_scope,external=EXCLUDED.external,model_fingerprint=EXCLUDED.model_fingerprint,updated_at=NOW()',
-          [m.modelId,m.provider,m.modelName,m.version,m.owner,m.purpose,m.accessScope,m.external,m.modelFingerprint]);
-        await recordEvent(pool,'MODEL_REGISTERED',m.modelId,m);
+      const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
+      const payload=await readBody(req);
+      if(route==='/api/assurance/models'){
+        const m=assurance.buildModelCensus(payload), scopedId=tenant.tenant_id+':'+m.modelId;
+        await pool.query('INSERT INTO keel_model_census (model_id,tenant_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (model_id) DO UPDATE SET provider=EXCLUDED.provider,model_name=EXCLUDED.model_name,version=EXCLUDED.version,owner_ref=EXCLUDED.owner_ref,purpose=EXCLUDED.purpose,access_scope=EXCLUDED.access_scope,external=EXCLUDED.external,model_fingerprint=EXCLUDED.model_fingerprint,updated_at=NOW() WHERE keel_model_census.tenant_id=EXCLUDED.tenant_id',[scopedId,tenant.tenant_id,m.provider,m.modelName,m.version,m.owner,m.purpose,m.accessScope,m.external,m.modelFingerprint]);
+        await recordEvent(pool,tenant.tenant_id,'MODEL_REGISTERED',m.modelId,m);
         return send(res,201,{ok:true,modelId:m.modelId,modelFingerprint:m.modelFingerprint});
       }
-      if (route === '/api/assurance/dockets') {
-        const d = assurance.buildProofDocket(payload);
-        await pool.query('INSERT INTO keel_proof_dockets (docket_id,decision_id,decision,docket_fingerprint,decision_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6)',
-          [d.docketId,d.decision.decisionId,d.decision.decision,d.docketFingerprint,d.decision.recordFingerprint,JSON.stringify(d)]);
-        await recordEvent(pool,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
-        if (d.fallbackMandate.status === 'restricted') await recordEvent(pool,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
-        if (d.decisionWitness.status !== 'pending') await recordEvent(pool,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
+      if(route==='/api/assurance/dockets'){
+        const d=assurance.buildProofDocket(payload);
+        await pool.query('INSERT INTO keel_proof_dockets (docket_id,tenant_id,decision_id,decision,docket_fingerprint,decision_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7)',[d.docketId,tenant.tenant_id,d.decision.decisionId,d.decision.decision,d.docketFingerprint,d.decision.recordFingerprint,JSON.stringify(d)]);
+        await recordEvent(pool,tenant.tenant_id,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
+        if(d.fallbackMandate.status==='restricted') await recordEvent(pool,tenant.tenant_id,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
+        if(d.decisionWitness.status!=='pending') await recordEvent(pool,tenant.tenant_id,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
         return send(res,201,{ok:true,docketId:d.docketId,decision:d.decision.decision,docketFingerprint:d.docketFingerprint,proofDocket:d});
       }
-      const drift = assurance.assessDrift(payload.previous,payload.current);
-      await recordEvent(pool,'DRIFT_DETECTED',drift.driftId,drift);
+      const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant.tenant_id,'DRIFT_DETECTED',drift.driftId,drift);
       return send(res,201,{ok:true,drift});
+    }
+    if(req.method==='GET' && route==='/api/assurance/records'){
+      const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool(), limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit')||25)));
+      const q=await Promise.all([
+        pool.query('SELECT model_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint,registered_at,updated_at FROM keel_model_census WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT $2',[tenant.tenant_id,limit]),
+        pool.query('SELECT docket_id,created_at,decision_id,decision,docket_fingerprint,decision_fingerprint FROM keel_proof_dockets WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[tenant.tenant_id,limit]),
+        pool.query('SELECT event_id,created_at,event_type,subject_id,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[tenant.tenant_id,limit])
+      ]);
+      return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},models:q[0].rows,dockets:q[1].rows,events:q[2].rows});
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
