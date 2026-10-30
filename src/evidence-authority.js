@@ -32,4 +32,25 @@ function exportManifest(input){
  payload.manifestFingerprint=crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
  return payload;
 }
-module.exports={ROLES,normalizePrincipal,normalizeDelegation,approvalDecision,exportManifest};
+
+function signManifest(manifest, privateKeyPem, keyId){
+ if(typeof privateKeyPem!=='string'||!privateKeyPem.trim()) throw new Error('export signing key is not configured');
+ const privateKey=crypto.createPrivateKey(privateKeyPem);
+ if(privateKey.asymmetricKeyType!=='ed25519') throw new Error('export signing key must be Ed25519');
+ const publicKey=crypto.createPublicKey(privateKey).export({type:'spki',format:'pem'});
+ const unsigned={...manifest};
+ delete unsigned.signature;
+ delete unsigned.signing;
+ const canonicalJson=require('./authority-chain').canonical(unsigned);
+ const signature=crypto.sign(null,Buffer.from(canonicalJson),privateKey).toString('base64');
+ return {...unsigned,signing:{algorithm:'Ed25519',keyId:keyId||'keel-export-key-1',publicKey},signature};
+}
+function verifyManifestSignature(manifest){
+ try {
+  if(!manifest||manifest.signing?.algorithm!=='Ed25519'||!manifest.signing.publicKey||!manifest.signature) return false;
+  const unsigned={...manifest}; const signature=unsigned.signature; delete unsigned.signature; delete unsigned.signing;
+  return crypto.verify(null,Buffer.from(require('./authority-chain').canonical(unsigned)),crypto.createPublicKey(manifest.signing.publicKey),Buffer.from(signature,'base64'));
+ } catch { return false; }
+}
+
+module.exports={ROLES,normalizePrincipal,normalizeDelegation,approvalDecision,exportManifest,signManifest,verifyManifestSignature};
