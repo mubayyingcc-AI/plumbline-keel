@@ -16,7 +16,7 @@ test('product catalogue is served by the API', async () => {
   const response = await fetch(base + '/api/products');
   const data = await response.json();
   assert.equal(response.status, 200);
-  assert.equal(data.products.length, 4);
+  assert.equal(data.products.length, 5);
   assert.ok(data.products.some(p => p.id === 'capacity'));
 });
 
