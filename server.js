@@ -230,6 +230,7 @@ const apiDescription = {
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
+    '/api/assurance/dockets/{docketId}/export':{get:{summary:'Export tenant-scoped docket evidence manifest'}},
     '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
     '/api/assurance/delegations':{post:{summary:'Grant expiring scoped authority'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
@@ -384,6 +385,22 @@ const server = http.createServer(async (req,res) => {
         pool.query('SELECT event_id,created_at,tenant_sequence,previous_event_fingerprint,event_type,subject_id,actor_key_id,actor_role,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT $2',[tenant.tenant_id,limit])
       ]);
       return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},models:q[0].rows,dockets:q[1].rows,events:q[2].rows});
+    }
+    if(req.method==='GET' && route.startsWith('/api/assurance/dockets/') && route.endsWith('/export')){
+      const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const prefix='/api/assurance/dockets/', suffix='/export';
+      const docketId=decodeURIComponent(route.slice(prefix.length,-suffix.length));
+      if(!docketId || docketId.includes('/')) return send(res,400,{error:'invalid_docket_id'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
+      const [docket,approvals,events]=await Promise.all([
+        pool.query('SELECT docket_id,created_at,decision_id,decision,docket_fingerprint,decision_fingerprint,payload FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[tenant.tenant_id,docketId]),
+        pool.query('SELECT a.principal_id,p.display_name,p.email,a.decision,a.rationale,a.created_at FROM keel_docket_approvals a JOIN keel_principals p ON p.tenant_id=a.tenant_id AND p.principal_id=a.principal_id WHERE a.tenant_id=$1 AND a.docket_id=$2 ORDER BY a.created_at ASC',[tenant.tenant_id,docketId]),
+        pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND subject_id=$2 ORDER BY tenant_sequence ASC',[tenant.tenant_id,docketId])
+      ]);
+      if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
+      const chainVerification=authorityChain.verifyChain((await pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND tenant_sequence IS NOT NULL ORDER BY tenant_sequence ASC',[tenant.tenant_id])).rows.map(row=>({tenantId:row.tenant_id,sequence:Number(row.tenant_sequence),previousFingerprint:row.previous_event_fingerprint,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,actorKeyId:row.actor_key_id,actorRole:row.actor_role,payload:row.payload,eventFingerprint:row.event_fingerprint})));
+      const manifest=authorityIdentity.exportManifest({tenantId:tenant.tenant_id,docket:{...docket.rows[0],approvals:approvals.rows,events:events.rows},chainVerification});
+      return send(res,200,manifest,'application/json; charset=utf-8',{'Content-Disposition':'attachment; filename="keel-evidence-'+docketId.replace(/[^a-zA-Z0-9_-]/g,'_')+'.json"'});
     }
     if(req.method==='GET' && route==='/api/assurance/chain/verify'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
