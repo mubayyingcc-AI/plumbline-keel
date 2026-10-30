@@ -195,6 +195,8 @@ const apiDescription = {
     '/api/products':{get:{summary:'Current product catalogue'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
+    '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
+    '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
@@ -239,6 +241,24 @@ const server = http.createServer(async (req,res) => {
       try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key','owner']); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,tenant:{id:tenantId,name:tenant.name,slug:tenant.slug},apiKey:issued.token,keyId:issued.keyId,warning:'This key is shown once; only its hash is stored.'});
+    }
+    if(req.method==='POST' && ['/api/tenants/keys','/api/tenants/keys/revoke'].includes(route)){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!['owner','admin'].includes(tenant.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'admin'});
+      const pool=await dbPool(), payload=await readBody(req);
+      if(route==='/api/tenants/keys/revoke'){
+        const keyId=cleanString(payload.keyId,100); if(!keyId) return send(res,400,{error:'key_id_required'});
+        const result=await pool.query("UPDATE keel_tenant_keys SET status='revoked' WHERE key_id=$1 AND tenant_id=$2 AND status='active' RETURNING key_id",[keyId,tenant.tenant_id]);
+        if(!result.rowCount) return send(res,404,{error:'active_tenant_key_not_found'});
+        return send(res,200,{ok:true,revokedKeyId:keyId});
+      }
+      const role=cleanString(payload.role,30), label=cleanString(payload.label,120);
+      if(!['admin','reviewer','analyst','integration'].includes(role)) return send(res,400,{error:'invalid_key_role'});
+      if(!label) return send(res,400,{error:'key_label_required'});
+      const issued=tenantSecurity.issueTenantKey();
+      await pool.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenant.tenant_id,issued.tokenHash,label,role]);
+      return send(res,201,{ok:true,keyId:issued.keyId,role,label,apiKey:issued.token,warning:'This key is shown once. Store it securely; only its hash is retained.'});
     }
     if (req.method === 'POST' && ['/api/assurance/models','/api/assurance/dockets','/api/assurance/drift'].includes(route)) {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
