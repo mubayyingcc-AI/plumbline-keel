@@ -83,3 +83,5 @@ test('tenant API key management rejects missing credentials', async () => {
   const response = await fetch(base + '/api/tenants/keys', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'analyst',label:'Analyst key'})});
   assert.equal(response.status,401);
 });
+
+test('Authority Chain verification is tenant-authenticated', async () => { const response=await fetch(base+'/api/assurance/chain/verify'); assert.equal(response.status,401); assert.equal((await response.json()).error,'valid_tenant_api_key_required'); });
