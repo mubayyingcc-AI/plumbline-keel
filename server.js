@@ -190,7 +190,7 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'POST' && ['/api/evaluate','/api/leads'].includes(route)) {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
-      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded',message:'Please wait before submitting another request.'},{'Retry-After':'60'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded',message:'Please wait before submitting another request.'},undefined,{'Retry-After':'60'});
       const payload = await readBody(req);
       if (route === '/api/evaluate') {
         const result = evaluateAction(payload);
