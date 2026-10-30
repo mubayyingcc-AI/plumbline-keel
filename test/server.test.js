@@ -64,3 +64,22 @@ test('unknown routes return a structured 404', async () => {
   const response = await fetch(base + '/api/not-a-route');
   assert.equal(response.status, 404);
 });
+
+test('tenant-scoped assurance writes reject missing credentials', async () => {
+  const response = await fetch(base + '/api/assurance/models', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+  assert.equal(response.status,401);
+  assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
+test('tenant assurance records cannot be read without tenant credentials', async () => {
+  const response = await fetch(base + '/api/assurance/records');
+  assert.equal(response.status,401);
+});
+test('tenant bootstrap stays disabled until its separate secret is configured', async () => {
+  const response = await fetch(base + '/api/tenants/bootstrap', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Example Institution',slug:'example-institution'})});
+  assert.equal(response.status,503);
+  assert.equal((await response.json()).error,'tenant_bootstrap_not_configured');
+});
+test('tenant API key management rejects missing credentials', async () => {
+  const response = await fetch(base + '/api/tenants/keys', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'analyst',label:'Analyst key'})});
+  assert.equal(response.status,401);
+});
