@@ -218,6 +218,7 @@ const apiDescription = {
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
+    '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
     '/api/assurance/drift':{post:{summary:'Record fingerprint drift (token restricted)'} },
@@ -314,6 +315,13 @@ const server = http.createServer(async (req,res) => {
         pool.query('SELECT event_id,created_at,tenant_sequence,previous_event_fingerprint,event_type,subject_id,actor_key_id,actor_role,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT $2',[tenant.tenant_id,limit])
       ]);
       return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},models:q[0].rows,dockets:q[1].rows,events:q[2].rows});
+    }
+    if(req.method==='GET' && route==='/api/assurance/chain/verify'){
+      const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool();
+      const result=await pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND tenant_sequence IS NOT NULL ORDER BY tenant_sequence ASC',[tenant.tenant_id]);
+      const verification=authorityChain.verifyChain(result.rows.map(row=>({tenantId:row.tenant_id,sequence:Number(row.tenant_sequence),previousFingerprint:row.previous_event_fingerprint,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,actorKeyId:row.actor_key_id,actorRole:row.actor_role,payload:row.payload,eventFingerprint:row.event_fingerprint})));
+      return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},verification,checkedAt:new Date().toISOString(),note:'Verifies the stored tenant event sequence and fingerprints; it is not an independent external notarization.'});
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
