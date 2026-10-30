@@ -193,8 +193,12 @@ const server = http.createServer(async (req,res) => {
       if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded',message:'Please wait before submitting another request.'},undefined,{'Retry-After':'60'});
       const payload = await readBody(req);
       if (route === '/api/evaluate') {
-        const result = evaluateAction(payload);
-        return send(res,200,{synthetic:payload.synthetic === true,result});
+        try {
+          const result = evaluateAction(payload);
+          return send(res,200,{synthetic:payload.synthetic === true,result});
+        } catch (error) {
+          return send(res,400,{error:'invalid_financial_payload',message:error.message});
+        }
       }
       const lead = {
         id:crypto.randomUUID(),
