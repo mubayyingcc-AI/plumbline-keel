@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { evaluateAction, fingerprint } = require('./src/core');
 const assurance = require('./src/assurance');
 const tenantSecurity = require('./src/tenant-security');
+const authorityChain = require('./src/authority-chain');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -69,6 +70,14 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_model_census_tenant_idx ON keel_model_census(tenant_id,model_id)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_tenant_idx ON keel_proof_dockets(tenant_id,created_at DESC)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_tenant_idx ON keel_assurance_events(tenant_id,created_at DESC)');
+      await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_sequence BIGINT');
+      await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS previous_event_fingerprint CHAR(64)');
+      await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS actor_key_id TEXT');
+      await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS actor_role TEXT');
+      await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS keel_assurance_events_tenant_sequence_uq ON keel_assurance_events(tenant_id,tenant_sequence) WHERE tenant_id IS NOT NULL');
+      await pool.query("CREATE OR REPLACE FUNCTION keel_reject_assurance_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RAISE EXCEPTION 'Keel Authority Chain events are append-only'; END; $");
+      await pool.query('DROP TRIGGER IF EXISTS keel_assurance_events_immutable ON keel_assurance_events');
+      await pool.query('CREATE TRIGGER keel_assurance_events_immutable BEFORE UPDATE OR DELETE ON keel_assurance_events FOR EACH ROW EXECUTE FUNCTION keel_reject_assurance_event_mutation()');
       return pool;
     })().catch(err => { poolPromise = null; throw err; });
   }
@@ -158,9 +167,20 @@ function assuranceAuthorized(req) {
   const a = Buffer.from(supplied), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a,b);
 }
-function recordEvent(pool, tenantId, type, subjectId, payload) {
-  return pool.query('INSERT INTO keel_assurance_events (event_id,tenant_id,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6)',
-    [crypto.randomUUID(),tenantId,type,subjectId,fingerprint(payload),JSON.stringify(payload)]);
+async function recordEvent(pool, tenant, type, subjectId, payload) {
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT tenant_id FROM keel_tenants WHERE tenant_id=$1 FOR UPDATE',[tenant.tenant_id]);
+    const last=await client.query('SELECT tenant_sequence,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT 1',[tenant.tenant_id]);
+    const sequence=last.rowCount?Number(last.rows[0].tenant_sequence)+1:1;
+    const previousFingerprint=last.rowCount?last.rows[0].event_fingerprint:null;
+    const event={tenantId:tenant.tenant_id,sequence,previousFingerprint,eventId:crypto.randomUUID(),eventType:type,subjectId,actorKeyId:tenant.key_id,actorRole:tenant.role,payload};
+    const eventFingerprint=authorityChain.eventDigest(event);
+    await client.query('INSERT INTO keel_assurance_events (event_id,tenant_id,tenant_sequence,previous_event_fingerprint,actor_key_id,actor_role,event_type,subject_id,event_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[event.eventId,event.tenantId,sequence,previousFingerprint,event.actorKeyId,event.actorRole,type,subjectId,eventFingerprint,JSON.stringify(payload)]);
+    await client.query('COMMIT');
+    return {eventId:event.eventId,sequence,eventFingerprint};
+  } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 async function authenticateTenant(req) {
   const token=tenantSecurity.keyFromAuthorization(req.headers.authorization);
@@ -270,18 +290,19 @@ const server = http.createServer(async (req,res) => {
       if(route==='/api/assurance/models'){
         const m=assurance.buildModelCensus(payload), scopedId=tenant.tenant_id+':'+m.modelId;
         await pool.query('INSERT INTO keel_model_census (model_id,tenant_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (model_id) DO UPDATE SET provider=EXCLUDED.provider,model_name=EXCLUDED.model_name,version=EXCLUDED.version,owner_ref=EXCLUDED.owner_ref,purpose=EXCLUDED.purpose,access_scope=EXCLUDED.access_scope,external=EXCLUDED.external,model_fingerprint=EXCLUDED.model_fingerprint,updated_at=NOW() WHERE keel_model_census.tenant_id=EXCLUDED.tenant_id',[scopedId,tenant.tenant_id,m.provider,m.modelName,m.version,m.owner,m.purpose,m.accessScope,m.external,m.modelFingerprint]);
-        await recordEvent(pool,tenant.tenant_id,'MODEL_REGISTERED',m.modelId,m);
+        await recordEvent(pool,tenant,'MODEL_REGISTERED',m.modelId,m);
         return send(res,201,{ok:true,modelId:m.modelId,modelFingerprint:m.modelFingerprint});
       }
       if(route==='/api/assurance/dockets'){
-        const d=assurance.buildProofDocket(payload);
+        const docketInput={...payload,witness:{...(payload.witness||{}),reviewerId:tenant.key_id,role:tenant.role}};
+        const d=assurance.buildProofDocket(docketInput);
         await pool.query('INSERT INTO keel_proof_dockets (docket_id,tenant_id,decision_id,decision,docket_fingerprint,decision_fingerprint,payload) VALUES ($1,$2,$3,$4,$5,$6,$7)',[d.docketId,tenant.tenant_id,d.decision.decisionId,d.decision.decision,d.docketFingerprint,d.decision.recordFingerprint,JSON.stringify(d)]);
-        await recordEvent(pool,tenant.tenant_id,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
-        if(d.fallbackMandate.status==='restricted') await recordEvent(pool,tenant.tenant_id,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
-        if(d.decisionWitness.status!=='pending') await recordEvent(pool,tenant.tenant_id,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
+        await recordEvent(pool,tenant,'DOCKET_CREATED',d.docketId,{docketFingerprint:d.docketFingerprint,decision:d.decision.decision});
+        if(d.fallbackMandate.status==='restricted') await recordEvent(pool,tenant,'FALLBACK_RESTRICTED',d.docketId,d.fallbackMandate);
+        if(d.decisionWitness.status!=='pending') await recordEvent(pool,tenant,'WITNESS_RECORDED',d.docketId,d.decisionWitness);
         return send(res,201,{ok:true,docketId:d.docketId,decision:d.decision.decision,docketFingerprint:d.docketFingerprint,proofDocket:d});
       }
-      const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant.tenant_id,'DRIFT_DETECTED',drift.driftId,drift);
+      const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant,'DRIFT_DETECTED',drift.driftId,drift);
       return send(res,201,{ok:true,drift});
     }
     if(req.method==='GET' && route==='/api/assurance/records'){
@@ -290,7 +311,7 @@ const server = http.createServer(async (req,res) => {
       const q=await Promise.all([
         pool.query('SELECT model_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint,registered_at,updated_at FROM keel_model_census WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT $2',[tenant.tenant_id,limit]),
         pool.query('SELECT docket_id,created_at,decision_id,decision,docket_fingerprint,decision_fingerprint FROM keel_proof_dockets WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[tenant.tenant_id,limit]),
-        pool.query('SELECT event_id,created_at,event_type,subject_id,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[tenant.tenant_id,limit])
+        pool.query('SELECT event_id,created_at,tenant_sequence,previous_event_fingerprint,event_type,subject_id,actor_key_id,actor_role,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT $2',[tenant.tenant_id,limit])
       ]);
       return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},models:q[0].rows,dockets:q[1].rows,events:q[2].rows});
     }
