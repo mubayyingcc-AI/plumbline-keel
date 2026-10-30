@@ -1,0 +1,31 @@
+
+> plumbline-keel-local-alpha@0.2.0 test
+> node --test
+
+✔ encumbrance then haircut gives $7.2m (1.6593ms)
+✔ over-capacity action is held (0.4864ms)
+✔ within-capacity authorized action allowed (0.166ms)
+✔ missing authorization triggers review (0.6857ms)
+✔ stale evidence holds and capacity is unavailable (0.2204ms)
+✔ unknown encumbrance is not treated as zero (0.2654ms)
+✔ duplicate relationship flagged (0.1579ms)
+✔ conflicting evidence flagged (0.1183ms)
+✔ negative amount rejected (0.3594ms)
+✔ fingerprint stable across object key order (0.2059ms)
+✔ missing encumbered value makes capacity unavailable (0.1619ms)
+✔ null encumbered value makes capacity unavailable (0.1288ms)
+✔ missing encumbrance status makes capacity unavailable (0.1084ms)
+✔ NaN haircut rate is rejected (0.102ms)
+✔ infinite haircut rate is rejected (0.1032ms)
+✔ missing encumbrance causes action HOLD (0.1514ms)
+✔ aggregate encumbrance is unavailable when any asset is unknown (0.1108ms)
+✔ unknown evidence status makes aggregate encumbrance unavailable (0.0819ms)
+✔ aggregate gross overflow is rejected (0.137ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 129.7812

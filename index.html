@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101b2a">
+<meta name="description" content="Plumbline Keel helps financial institutions trace collateral relationships, assess policy-specific capacity, and understand how risk propagates under stress.">
+<title>Plumbline Keel — Financial State Assurance</title>
+<style>
+:root{--navy:#101b2a;--navy2:#16283b;--ink:#172334;--muted:#637184;--paper:#f5f7f8;--white:#fff;--line:#dce3e8;--teal:#64d6c1;--teal2:#1d8c82;--gold:#e5b66b;--red:#b85b57;--radius:18px;--shadow:0 18px 55px rgba(16,27,42,.10)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.55}a{color:inherit;text-decoration:none}button,input{font:inherit}.container{width:min(1160px,calc(100% - 44px));margin:auto}.topbar{position:sticky;top:0;z-index:20;background:rgba(16,27,42,.96);backdrop-filter:blur(14px);color:white;border-bottom:1px solid rgba(255,255,255,.09)}.nav{height:76px;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:12px;font-weight:760;letter-spacing:-.035em;font-size:18px}.mark{width:35px;height:35px;border:1px solid rgba(100,214,193,.65);border-radius:10px;display:grid;place-items:center;color:var(--teal);position:relative}.mark:before{content:"";height:19px;width:2px;background:var(--teal);position:absolute;transform:rotate(25deg)}.mark:after{content:"";height:2px;width:20px;background:var(--teal);position:absolute;transform:rotate(-18deg)}.brand small{display:block;color:#9aaabd;font-size:9px;letter-spacing:.19em;text-transform:uppercase;font-weight:650;margin-top:1px}.navlinks{display:flex;align-items:center;gap:25px;font-size:13px;color:#d5deea}.navlinks a:hover{color:var(--teal)}.navcta{padding:10px 15px;border:1px solid #547083;border-radius:9px;color:white!important}.menu{display:none;background:none;border:1px solid #405366;color:white;border-radius:8px;padding:8px 11px}.hero{background:radial-gradient(ellipse at 78% 35%,rgba(36,106,112,.26),transparent 38%),linear-gradient(120deg,#101b2a,#142438 68%,#172e3c);color:white;padding:82px 0 74px;overflow:hidden}.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;align-items:center;gap:54px}.eyebrow{font-size:11px;letter-spacing:.19em;text-transform:uppercase;color:var(--teal);font-weight:750;display:flex;align-items:center;gap:10px}.eyebrow:before{content:"";width:24px;height:1px;background:currentColor}.hero h1{font-size:clamp(40px,5vw,63px);letter-spacing:-.055em;line-height:1.02;margin:20px 0 22px;max-width:660px}.hero h1 span{color:var(--teal)}.hero p{color:#c3cfdb;font-size:17px;max-width:570px;line-height:1.75}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}.btn{border:1px solid transparent;border-radius:10px;padding:13px 17px;font-weight:700;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;transition:.2s}.btn-primary{background:var(--teal);color:#102432}.btn-primary:hover{background:#8be7d7;transform:translateY(-1px)}.btn-ghost{border-color:#51677b;color:white;background:transparent}.btn-ghost:hover{border-color:var(--teal);color:var(--teal)}.micro{font-size:11px;color:#8fa1b4;margin-top:18px}.hero-visual{position:relative}.panel{background:rgba(255,255,255,.055);border:1px solid rgba(190,220,229,.18);border-radius:20px;padding:22px;box-shadow:0 30px 80px rgba(0,0,0,.2)}.panel-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.12);padding-bottom:15px;margin-bottom:18px}.panel-head strong{font-size:13px}.live-label{font-size:10px;color:var(--teal);display:flex;align-items:center;gap:7px}.live-label:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--teal)}.state-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.state-card{background:rgba(7,15,26,.36);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:15px}.state-card label{display:block;color:#9dafc1;font-size:10px;margin-bottom:8px}.state-card strong{font-size:25px;letter-spacing:-.04em}.state-card small{display:block;color:#9dafc1;font-size:10px;margin-top:5px}.graph{width:100%;height:auto;display:block;margin:17px 0 12px}.legend{display:flex;gap:14px;flex-wrap:wrap;color:#9dafc1;font-size:10px}.legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}.status-strip{border-top:1px solid rgba(255,255,255,.12);margin-top:18px;padding-top:15px;display:flex;justify-content:space-between;gap:10px;align-items:center;font-size:11px;color:#b7c4d0}.status-strip b{color:var(--teal);font-weight:700}.section{padding:88px 0}.section-white{background:white}.section-dark{background:var(--navy);color:white}.section-head{max-width:710px;margin-bottom:37px}.section-head .eyebrow{margin-bottom:15px}.section h2{font-size:clamp(30px,3.5vw,43px);line-height:1.1;letter-spacing:-.045em;margin:0 0 16px}.section-head p{color:var(--muted);font-size:15px;line-height:1.8;margin:0}.section-dark .section-head p{color:#afbdcc}.three-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{background:white;border:1px solid var(--line);border-radius:var(--radius);padding:24px;min-height:210px}.card-number{font-size:10px;letter-spacing:.15em;color:var(--teal2);font-weight:800}.card h3{font-size:18px;letter-spacing:-.025em;margin:17px 0 10px}.card p{font-size:13px;color:var(--muted);line-height:1.75;margin:0}.icon-box{height:38px;width:38px;border:1px solid #c9e8e2;background:#f0faf7;border-radius:10px;display:grid;place-items:center;color:var(--teal2);font-size:18px}.product-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.product{border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.045);border-radius:15px;padding:22px;min-height:230px}.product .index{color:var(--teal);font-size:10px;font-weight:800;letter-spacing:.14em}.product h3{font-size:18px;margin:18px 0 8px}.product p{color:#aebdcb;font-size:12px;line-height:1.75}.product .tag{display:inline-block;margin-top:13px;padding:5px 8px;border:1px solid rgba(100,214,193,.28);border-radius:6px;color:#9fe9dc;font-size:10px}.demo-wrap{display:grid;grid-template-columns:.92fr 1.08fr;gap:24px;align-items:stretch}.demo-control,.demo-output{border:1px solid var(--line);border-radius:18px;padding:25px;background:white}.demo-control h3,.demo-output h3{font-size:19px;margin:0 0 8px}.muted{color:var(--muted);font-size:13px}.slider-row{margin-top:25px}.slider-top{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;margin-bottom:10px}.slider-top output{color:var(--teal2);font-size:14px}.slider-row input{width:100%;accent-color:var(--teal2)}.scale{display:flex;justify-content:space-between;color:#8591a0;font-size:10px;margin-top:3px}.result-big{font-size:42px;letter-spacing:-.05em;font-weight:760;margin-top:18px}.result-big small{font-size:13px;color:var(--muted);letter-spacing:0;font-weight:500}.result-change{font-size:12px;color:var(--red);margin-top:3px}.bartrack{height:9px;background:#e7edf0;border-radius:20px;overflow:hidden;margin:19px 0 23px}.barfill{height:100%;width:73%;background:var(--teal2);border-radius:20px;transition:width .25s}.evidence-list{display:grid;gap:10px}.evidence{display:flex;justify-content:space-between;gap:12px;align-items:center;border-top:1px solid #edf0f2;padding-top:11px;font-size:12px}.pill{font-size:10px;padding:4px 7px;border-radius:6px;background:#e9f6f2;color:#267b6e;white-space:nowrap}.pill.warn{background:#fff3df;color:#8a6427}.disclaimer{font-size:10px;color:#758292;line-height:1.6;margin-top:17px}.demo-note{font-size:11px;color:#758292;margin-top:17px;padding:12px;background:#f6f8f9;border-radius:8px}.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:0;position:relative}.step{padding:0 17px 0 0;position:relative}.step:not(:last-child):after{content:"";position:absolute;top:16px;left:34px;right:8px;height:1px;background:#d5e2e4}.step-num{width:33px;height:33px;display:grid;place-items:center;border:1px solid #9fd9d0;border-radius:50%;background:#f0faf7;color:#217e74;font-size:11px;font-weight:800;position:relative;z-index:1}.step h3{font-size:14px;margin:15px 0 7px}.step p{font-size:12px;color:var(--muted);line-height:1.7;margin:0}.trust-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.trust-item{padding:23px;border:1px solid rgba(255,255,255,.15);border-radius:14px}.trust-item h3{font-size:15px;margin:0 0 8px}.trust-item p{font-size:12px;color:#aebdcb;line-height:1.8;margin:0}.trust-item .symbol{color:var(--teal);font-size:18px;margin-bottom:12px}.cta-band{background:#dff5f0;border:1px solid #b9e5dc;border-radius:20px;padding:35px;display:flex;align-items:center;justify-content:space-between;gap:24px}.cta-band h2{font-size:29px;max-width:590px;margin:0 0 8px;letter-spacing:-.04em}.cta-band p{margin:0;color:#526c70;font-size:13px}.btn-dark{background:var(--navy);color:white}.btn-dark:hover{background:#263c50}.faq{max-width:850px}.faq details{border-bottom:1px solid var(--line);padding:17px 0}.faq summary{font-size:14px;font-weight:700;cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:15px}.faq summary:after{content:"+";font-size:18px;color:var(--teal2)}.faq details[open] summary:after{content:"−"}.faq details p{font-size:13px;line-height:1.8;color:var(--muted);max-width:760px}.footer{background:#0c1521;color:white;padding:42px 0 28px}.footer-top{display:flex;justify-content:space-between;gap:30px;align-items:flex-start;padding-bottom:32px;border-bottom:1px solid rgba(255,255,255,.12)}.footer p{font-size:12px;color:#94a4b5;max-width:360px}.footer-links{display:flex;gap:20px;flex-wrap:wrap;color:#c5d0dc;font-size:12px}.copyright{display:flex;justify-content:space-between;gap:15px;padding-top:19px;color:#788a9d;font-size:10px}.notice{background:#fff8e9;border:1px solid #f0d8a9;border-radius:10px;padding:13px 15px;font-size:11px;color:#70572b;margin-top:22px}
+@media(max-width:900px){.hero-grid{grid-template-columns:1fr;gap:38px}.hero-visual{max-width:650px}.product-grid{grid-template-columns:repeat(2,1fr)}.three-grid{grid-template-columns:1fr 1fr}.demo-wrap{grid-template-columns:1fr}.steps{grid-template-columns:repeat(5,1fr)}.navlinks{gap:14px}.navlinks a:nth-child(3),.navlinks a:nth-child(4){display:none}}
+@media(max-width:620px){.container{width:min(100% - 30px,1160px)}.nav{height:66px}.navlinks{display:none;position:absolute;top:66px;left:0;right:0;padding:18px 22px 24px;background:var(--navy);border-bottom:1px solid #304254;flex-direction:column;align-items:stretch;gap:17px}.navlinks.open{display:flex}.navlinks a:nth-child(3),.navlinks a:nth-child(4){display:block}.menu{display:block}.navcta{display:inline-block;text-align:center}.hero{padding:60px 0 54px}.hero h1{font-size:43px}.hero p{font-size:15px}.section{padding:64px 0}.three-grid,.product-grid,.trust-grid{grid-template-columns:1fr}.card{min-height:unset}.product{min-height:unset}.steps{grid-template-columns:1fr;gap:22px}.step{display:grid;grid-template-columns:36px 1fr;column-gap:13px;padding:0}.step:not(:last-child):after{top:37px;left:16px;right:auto;width:1px;height:calc(100% + 4px)}.step-num{grid-row:span 2}.step h3{margin:2px 0 5px}.step p{grid-column:2}.cta-band{padding:25px;align-items:flex-start;flex-direction:column}.cta-band h2{font-size:25px}.footer-top,.copyright{flex-direction:column}.state-card strong{font-size:22px}.panel{padding:16px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="container nav">
+    <a class="brand" href="#top" aria-label="Plumbline Keel home"><span class="mark" aria-hidden="true"></span><span>Plumbline Keel<small>Financial state assurance</small></span></a>
+    <nav class="navlinks" id="navlinks" aria-label="Main navigation">
+      <a href="#platform">Platform</a><a href="#how">How it works</a><a href="#bench">Keel Bench</a><a href="#control-gate">Control Gate</a><a href="#trust">Trust & evidence</a><a href="#research">Finance Lab</a>
+      <a class="navcta" href="#contact">Explore a pilot ↗</a>
+    </nav>
+    <button class="menu" id="menu" aria-label="Open navigation" aria-expanded="false">Menu</button>
+  </div>
+</header>
+<main id="top">
+<section class="hero">
+ <div class="container hero-grid">
+  <div>
+   <div class="eyebrow">Financial state assurance</div>
+   <h1>Know what supports your capacity. <span>Prove it.</span></h1>
+   <p>Plumbline Keel helps financial institutions trace collateral relationships, assess available capacity under explicit policies, and see how risk can propagate when conditions change.</p>
+   <div class="actions"><a class="btn btn-primary" href="#bench">Run the synthetic Bench <span>↗</span></a><a class="btn btn-ghost" href="#platform">Explore the platform</a></div>
+   <div class="micro">Read-only by design · Evidence-linked outputs · No native token required</div>
+  </div>
+  <div class="hero-visual">
+   <div class="panel">
+    <div class="panel-head"><strong>Illustrative capacity state</strong><span class="live-label">SYNTHETIC DATA</span></div>
+    <div class="state-row">
+     <div class="state-card"><label>Eligible collateral value</label><strong>$100.0M</strong><small>Example portfolio</small></div>
+     <div class="state-card"><label>Policy-adjusted capacity</label><strong id="heroCapacity">$73.2M</strong><small id="heroHaircut">Illustrative assumptions</small></div>
+    </div>
+    <svg class="graph" viewBox="0 0 500 180" role="img" aria-label="Illustrative graph linking collateral, financing, and exposure">
+      <defs><linearGradient id="glow" x1="0" x2="1"><stop offset="0" stop-color="#64d6c1" stop-opacity=".15"/><stop offset="1" stop-color="#64d6c1" stop-opacity=".02"/></linearGradient></defs>
+      <path d="M80 82 L250 42 L414 86 M80 82 L250 139 L414 86" stroke="#547587" stroke-width="1.5" fill="none" stroke-dasharray="4 5"/>
+      <path d="M80 82 L250 42 L414 86 L250 139 Z" fill="url(#glow)" stroke="#315e6b" stroke-width="1"/>
+      <circle cx="80" cy="82" r="28" fill="#19394a" stroke="#64d6c1" stroke-width="1.5"/><circle cx="250" cy="42" r="28" fill="#19394a" stroke="#64d6c1" stroke-width="1.5"/><circle cx="414" cy="86" r="28" fill="#19394a" stroke="#e5b66b" stroke-width="1.5"/><circle cx="250" cy="139" r="28" fill="#19394a" stroke="#64d6c1" stroke-width="1.5"/>
+      <g fill="#eaf7f6" font-size="10" text-anchor="middle" font-family="system-ui"><text x="80" y="86">Asset</text><text x="250" y="46">Claim</text><text x="414" y="90">Facility</text><text x="250" y="143">Policy</text></g>
+      <g fill="#94b5c2" font-size="9" text-anchor="middle" font-family="system-ui"><text x="160" y="49">source record</text><text x="332" y="48">secured by</text><text x="164" y="124">adjusted by</text><text x="336" y="132">supports</text></g>
+    </svg>
+    <div class="legend"><span><i style="background:#64d6c1"></i>Evidence-linked node</span><span><i style="background:#e5b66b"></i>Review boundary</span></div>
+    <div class="status-strip"><span>Evidence status</span><b>Scoped · Not global verification</b></div>
+   </div>
+  </div>
+ </div>
+</section>
+<section class="section section-white" id="problem">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">The gap</div><h2>Financial risk often hides between systems.</h2><p>Institutions already have risk models, collateral platforms and reporting systems. The difficult part is often reconciling what each source knows, what it cannot see, and how one change affects connected obligations.</p></div>
+  <div class="three-grid">
+   <article class="card"><div class="icon-box">⌁</div><div class="card-number" style="margin-top:18px">01 / LINEAGE</div><h3>What supports what?</h3><p>Trace collateral and obligation relationships across connected records. Surface potential reuse or conflicts without pretending unconnected sources were checked.</p></article>
+   <article class="card"><div class="icon-box">◉</div><div class="card-number" style="margin-top:18px">02 / CAPACITY</div><h3>What capacity remains?</h3><p>Calculate policy-specific capacity with explicit eligibility, encumbrance, haircut, concentration and freshness rules.</p></article>
+   <article class="card"><div class="icon-box">↗</div><div class="card-number" style="margin-top:18px">03 / CONSEQUENCE</div><h3>What changes under stress?</h3><p>Trace how a price move, haircut change, missing feed or counterparty event can flow through a defined relationship graph.</p></article>
+  </div>
+ </div>
+</section>
+<section class="section section-dark" id="platform">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">One foundation · Four capabilities</div><h2>Built around evidence, not just a score.</h2><p>Each capability shares a common state model and relationship graph. Outputs retain their source, time, scope, assumptions and limitations.</p></div>
+  <div class="product-grid">
+   <article class="product"><div class="index">01 — TRACE</div><h3>Keel Thread</h3><p>Map collateral lineage, related obligations and potential reuse across the sources actually connected.</p><span class="tag">Lineage & conflicts</span></article>
+   <article class="product"><div class="index">02 — CALCULATE</div><h3>Keel Capacity</h3><p>Calculate available capacity against named rules, with adjustments and unknowns visible.</p><span class="tag">Policy-specific</span></article>
+   <article class="product"><div class="index">03 — STRESS</div><h3>Keel Scenario</h3><p>Replay shocks and follow modeled consequences through a declared dependency graph.</p><span class="tag">Inspectable scenarios</span></article>
+   <article class="product"><div class="index">04 — VERIFY</div><h3>Keel Evidence</h3><p>Package claims, source references, versions, freshness, scope and signatures into verifiable records.</p><span class="tag">Proof with limits</span></article>
+  </div>
+ </div>
+</section>
+<section class="section" id="bench">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">Keel Bench · Interactive concept</div><h2>Change one assumption. See the effect.</h2><p>Explore a small, transparent capacity example. The calculation updates in your browser; the numbers are synthetic and do not represent a live institution, production engine, or investment advice.</p></div>
+  <div class="demo-wrap">
+   <div class="demo-control">
+    <h3>Scenario controls</h3><p class="muted">Illustrative portfolio · USD millions</p>
+    <div class="slider-row"><div class="slider-top"><label for="haircut">Haircut assumption</label><output id="haircutOut" for="haircut">5%</output></div><input id="haircut" type="range" min="0" max="30" value="5" step="1"><div class="scale"><span>0%</span><span>15%</span><span>30%</span></div></div>
+    <div class="slider-row"><div class="slider-top"><label for="liquidity">Liquidity adjustment</label><output id="liquidityOut" for="liquidity">4%</output></div><input id="liquidity" type="range" min="0" max="20" value="4" step="1"><div class="scale"><span>0%</span><span>10%</span><span>20%</span></div></div>
+    <div class="slider-row"><div class="slider-top"><label for="concentration">Concentration adjustment</label><output id="concentrationOut" for="concentration">3%</output></div><input id="concentration" type="range" min="0" max="20" value="3" step="1"><div class="scale"><span>0%</span><span>10%</span><span>20%</span></div></div>
+    <div class="slider-row"><div class="slider-top"><label for="stress">Stress adjustment</label><output id="stressOut" for="stress">8%</output></div><input id="stress" type="range" min="0" max="30" value="8" step="1"><div class="scale"><span>0%</span><span>15%</span><span>30%</span></div></div>
+    <div class="notice">For this demonstration only, the formula is multiplicative and assumes a known encumbrance of $10M. Real policies may require different ordering, eligibility rules, floors, caps and overlap controls.</div>
+   </div>
+   <div class="demo-output">
+    <h3>Policy-adjusted capacity</h3><p class="muted">Synthetic inputs · simplified example</p>
+    <div class="result-big">$<span id="capacityResult">73.2</span>M <small>illustrative capacity</small></div>
+    <div class="result-change" id="capacityDelta">Baseline example: $73.2M</div>
+    <div class="bartrack"><div class="barfill" id="capacityBar"></div></div>
+    <div class="evidence-list">
+     <div class="evidence"><span>Gross collateral value</span><strong>$100.0M</strong></div>
+     <div class="evidence"><span>Known encumbrance assumption</span><strong>$10.0M</strong></div>
+     <div class="evidence"><span>Input type</span><span class="pill">Synthetic / supplied</span></div>
+     <div class="evidence"><span>Formula result</span><span class="pill">Derived</span></div>
+     <div class="evidence"><span>Source coverage</span><span class="pill warn">Not independently verified</span></div>
+    </div>
+    <div class="demo-note" id="formulaNote">Formula: (100 − 10) × (1 − haircut) × (1 − liquidity) × (1 − concentration) × (1 − stress).</div>
+    <p class="disclaimer">A cryptographic signature can establish who issued a record and whether it changed; it does not, by itself, prove the underlying financial fact is true. Production use requires authoritative source evidence and institution-approved policy.</p>
+   </div>
+  </div>
+ </div>
+</section>
+<section class="section section-white" id="control-gate"><div class="container"><div class="section-head"><div class="eyebrow">Keel Control Gate · Local alpha</div><h2>Test a financial action against its evidence.</h2><p>This lab calls the local API using synthetic data. It returns a decision and reasons; it does not move or block money.</p></div><div class="demo-wrap"><div class="demo-control"><h3>Proposed financing request</h3><p class="muted">Synthetic asset: $10M gross, $2M encumbered, 10% haircut.</p><div class="slider-row"><div class="slider-top"><label for="gateAmount">Requested amount</label><output id="gateAmountOut">$7.5M</output></div><input id="gateAmount" type="range" min="1000000" max="9000000" step="100000" value="7500000"></div><div class="actions"><button class="btn btn-primary" id="runGate" type="button">Evaluate with Keel ↗</button><button class="btn btn-ghost" id="gateStale" type="button" style="color:#172334;border-color:#cdd7dc">Simulate stale evidence</button></div><p class="disclaimer">Synthetic fixture only. The local service does not authenticate evidence or execute transactions.</p></div><div class="demo-output"><h3 id="gateDecision">Ready to evaluate</h3><p class="muted" id="gateSummary">Run a scenario to see the decision, reasons and fingerprint.</p><div class="evidence-list" id="gateEvidence"></div><pre id="gateRecord" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#101b2a;color:#d7e4ed;padding:14px;border-radius:10px;font-size:10px;max-height:280px;overflow:auto">No decision record yet.</pre></div></div></div></section>
+<section class="section section-white" id="how">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">Operating model</div><h2>From connected records to a bounded decision.</h2><p>Plumbline Keel should improve the evidence available to decision-makers, not silently become the decision-maker.</p></div>
+  <div class="steps">
+   <div class="step"><div class="step-num">01</div><h3>Connect</h3><p>Read from approved systems and declared data sources.</p></div>
+   <div class="step"><div class="step-num">02</div><h3>Reconcile</h3><p>Normalize entities, claims, timestamps and relationships.</p></div>
+   <div class="step"><div class="step-num">03</div><h3>Calculate</h3><p>Apply a named, versioned policy and explicit assumptions.</p></div>
+   <div class="step"><div class="step-num">04</div><h3>Prove</h3><p>Produce an evidence record with scope, freshness and limits.</p></div>
+   <div class="step"><div class="step-num">05</div><h3>Review</h3><p>Let authorized people accept, challenge or hold the result.</p></div>
+  </div>
+ </div>
+</section>
+<section class="section section-dark" id="trust">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">Trust boundaries</div><h2>Make uncertainty visible.</h2><p>A useful financial claim must say what supports it and what remains unknown. The platform must never turn missing data into a clean bill of health.</p></div>
+  <div class="trust-grid">
+   <article class="trust-item"><div class="symbol">◈</div><h3>Scoped claims</h3><p>Every claim names its issuer, subject, source, observation time, scope and freshness. “Not found in connected sources” is not the same as “does not exist.”</p></article>
+   <article class="trust-item"><div class="symbol">⌁</div><h3>Visible evidence classes</h3><p>Separate observed, derived, estimated, simulated and AI-inferred values. AI-inferred outputs remain advisory and cannot silently drive canonical capacity results.</p></article>
+   <article class="trust-item"><div class="symbol">⛨</div><h3>Controlled data access</h3><p>Read-only connections by default, purpose-bound access grants and auditable requests. Production privacy and federation controls must be validated before sensitive data is used.</p></article>
+   <article class="trust-item"><div class="symbol">✓</div><h3>Proofs with limitations</h3><p>Signatures protect integrity and identify the issuer. They do not substitute for source authority, legal title checks, reconciliation or independent review.</p></article>
+  </div>
+ </div>
+</section>
+<section class="section" id="research">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">Finance Lab</div><h2>Designed for scrutiny, not just presentation.</h2><p>The Finance Lab is where the methods, assumptions, test fixtures, known limitations and external feedback should be inspectable. It should become a research and partnership space—not a page of unsupported credibility claims.</p></div>
+  <div class="three-grid">
+   <article class="card"><div class="card-number">METHOD 01</div><h3>Collateral & capacity</h3><p>Document eligibility, encumbrance, haircut, concentration and timing rules. Show where institutional policy overrides the generic example.</p></article>
+   <article class="card"><div class="card-number">METHOD 02</div><h3>Stress & propagation</h3><p>Publish scenario definitions, graph boundaries, dependency assumptions and the distinction between modeled consequences and observed events.</p></article>
+   <article class="card"><div class="card-number">METHOD 03</div><h3>Coverage & uncertainty</h3><p>Report missing feeds, conflicting claims, stale evidence, test results and the cases the system cannot resolve.</p></article>
+  </div>
+  <div class="notice">Research note: public financial-stability work has repeatedly highlighted data gaps and interconnected exposures as analytical challenges. That context supports investigating this problem; it does not prove product-market fit or establish that Plumbline Keel is unique.</div>
+ </div>
+</section>
+<section class="section section-white" id="faq">
+ <div class="container">
+  <div class="section-head"><div class="eyebrow">Questions institutions should ask</div><h2>Clear answers, without inflated claims.</h2></div>
+  <div class="faq">
+   <details><summary>Does Plumbline Keel replace our collateral or risk systems?</summary><p>No. The intended role is an evidence and relationship layer that connects to existing systems. A pilot must define the exact sources, policy boundary and operational workflow before any integration claim is made.</p></details>
+   <details><summary>Can it prove an asset is not pledged elsewhere?</summary><p>Only within a declared, sufficiently authoritative and current source scope. If relevant custodians, facilities or counterparties are not connected, the result must say so. A universal uniqueness claim is not justified by partial visibility.</p></details>
+   <details><summary>Is the demo a live production engine?</summary><p>No. This local prototype sends synthetic scenarios to its local Node.js API. It demonstrates the intended transparency of the experience, not a deployed production financial calculation service or verified institutional integration.</p></details>
+   <details><summary>Does this require a blockchain or native token?</summary><p>No. The initial design does not require a native token. Cryptographic signatures and tamper-evident records can be evaluated independently; any distributed ledger would need a specific, validated operational reason.</p></details>
+   <details><summary>What would a pilot establish?</summary><p>A scoped pilot should test whether the system can reconcile real records, surface a meaningful conflict or blind spot, reproduce an institution-approved calculation, fit the security model and change a real workflow decision. Success criteria should be agreed before integration.</p></details>
+  </div>
+ </div>
+</section>
+<section class="section" id="contact">
+ <div class="container">
+  <div class="cta-band">
+   <div><h2>Start with one workflow. Prove the value.</h2><p>For lenders, private-credit teams, collateral operations, risk leaders and research partners.</p></div>
+   <a class="btn btn-dark" href="mailto:hello@plumblinekeel.com?subject=Plumbline%20Keel%20pilot%20discussion">Discuss a scoped pilot ↗</a>
+  </div>
+  <p class="disclaimer" style="margin-top:18px">The email address above is a proposed contact address and must be configured before public launch. Company, legal, security, compliance and trademark details require verification before publication.</p>
+ </div>
+</section>
+</main>
+<footer class="footer">
+ <div class="container">
+  <div class="footer-top">
+   <div><a class="brand" href="#top"><span class="mark"></span><span>Plumbline Keel<small>Financial state assurance</small></span></a><p>Evidence-linked collateral relationships, policy-specific capacity and inspectable stress scenarios across connected financial systems.</p></div>
+   <div class="footer-links"><a href="#platform">Platform</a><a href="#bench">Keel Bench</a><a href="#control-gate">Control Gate</a><a href="#trust">Trust model</a><a href="#research">Finance Lab</a><a href="#contact">Contact</a></div>
+  </div>
+  <div class="copyright"><span>© <span id="year"></span> Plumbline Keel. Concept website prototype.</span><span>Illustrative data only · No financial advice · No global verification claims</span></div>
+ </div>
+</footer>
+<script>
+const menu=document.getElementById('menu'), nav=document.getElementById('navlinks');
+menu.addEventListener('click',()=>{const open=nav.classList.toggle('open');menu.setAttribute('aria-expanded',String(open));menu.textContent=open?'Close':'Menu'});
+nav.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{nav.classList.remove('open');menu.setAttribute('aria-expanded','false');menu.textContent='Menu'}));
+document.getElementById('year').textContent=new Date().getFullYear();
+const gateAmount=document.getElementById('gateAmount'),gateAmountOut=document.getElementById('gateAmountOut');const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);gateAmount.addEventListener('input',()=>gateAmountOut.textContent=money(Number(gateAmount.value)/1e6)+'M');
+async function gateRun(stale=false){const now=new Date(),payload={synthetic:true,state:{currency:'USD',assets:[{id:'ASSET-SYN-001',grossValue:1e7,encumberedValue:2e6,evidence:[{id:'EVID-SYN-001',source:'Synthetic fixture',observedAt:new Date(now.getTime()-(stale?8*86400000:0)).toISOString(),class:'observed',encumbranceStatus:'known'}]}]},policy:{id:'POLICY-SYN-001',version:'1.0.0',haircutRate:.1,maxEvidenceAgeMs:86400000},action:{id:'ACTION-'+Date.now(),type:'financing_request',amount:Number(gateAmount.value),authorized:true}};try{const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await res.json();if(!res.ok)throw Error(data.message||'API request failed');const r=data.result,c=r.capacity;document.getElementById('gateDecision').textContent='Decision: '+r.decision;document.getElementById('gateSummary').textContent=r.reasons.join(' ')||'Declared prototype checks passed for this synthetic request.';const rows=[['Policy-adjusted capacity',c.totals.capacity===null?'Unavailable':money(c.totals.capacity)],['Requested amount',money(r.action.amount)],['Policy version',r.policy.id+' / '+r.policy.version],['Evidence issues',String(c.issues.length)],['Record fingerprint',r.recordFingerprint.slice(0,24)+'…']];const evidenceBox=document.getElementById('gateEvidence');evidenceBox.replaceChildren(...rows.map(([k,v])=>{const row=document.createElement('div');row.className='evidence';const label=document.createElement('span');label.textContent=k;const value=document.createElement('strong');value.textContent=v;row.append(label,value);return row}));document.getElementById('gateRecord').textContent=JSON.stringify(r,null,2)}catch(e){document.getElementById('gateDecision').textContent='Local API unavailable';document.getElementById('gateSummary').textContent='Start with npm start and reload. '+e.message}}document.getElementById('runGate').addEventListener('click',()=>gateRun(false));document.getElementById('gateStale').addEventListener('click',()=>gateRun(true));
+
+const ids=['haircut','liquidity','concentration','stress'];
+const base=73.248;
+function update(){
+ const vals={}; ids.forEach(id=>{vals[id]=Number(document.getElementById(id).value);document.getElementById(id+'Out').textContent=vals[id]+'%'});
+ const cap=90*(1-vals.haircut/100)*(1-vals.liquidity/100)*(1-vals.concentration/100)*(1-vals.stress/100);
+ document.getElementById('capacityResult').textContent=cap.toFixed(1);
+ document.getElementById('capacityBar').style.width=Math.max(0,Math.min(100,cap))+'%';
+ const delta=cap-base;
+ document.getElementById('capacityDelta').textContent=(delta>=0?'+':'')+delta.toFixed(1)+'M versus the initial example';
+ document.getElementById('capacityDelta').style.color=delta<-.05?'#b85b57':'#267b6e';
+ document.getElementById('heroCapacity').textContent='$'+cap.toFixed(1)+'M';
+ document.getElementById('heroHaircut').textContent='Haircut '+vals.haircut+'% · illustrative assumptions';
+}
+ids.forEach(id=>document.getElementById(id).addEventListener('input',update));
+update();
+</script>
+</body>
+</html>
