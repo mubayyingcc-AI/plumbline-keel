@@ -171,7 +171,8 @@ async function recordEvent(pool, tenant, type, subjectId, payload) {
   const client=await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT tenant_id FROM keel_tenants WHERE tenant_id=$1 FOR UPDATE',[tenant.tenant_id]);
+    const tenantLock=await client.query("SELECT tenant_id,status FROM keel_tenants WHERE tenant_id=$1 FOR UPDATE",[tenant.tenant_id]);
+    if(!tenantLock.rowCount || tenantLock.rows[0].status!=='active') throw Object.assign(new Error('tenant_not_active'),{status:403});
     const last=await client.query('SELECT tenant_sequence,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 ORDER BY tenant_sequence DESC LIMIT 1',[tenant.tenant_id]);
     const sequence=last.rowCount?Number(last.rows[0].tenant_sequence)+1:1;
     const previousFingerprint=last.rowCount?last.rows[0].event_fingerprint:null;
@@ -319,6 +320,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='GET' && route==='/api/assurance/chain/verify'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
       const pool=await dbPool();
+      if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
       const result=await pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND tenant_sequence IS NOT NULL ORDER BY tenant_sequence ASC',[tenant.tenant_id]);
       const verification=authorityChain.verifyChain(result.rows.map(row=>({tenantId:row.tenant_id,sequence:Number(row.tenant_sequence),previousFingerprint:row.previous_event_fingerprint,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,actorKeyId:row.actor_key_id,actorRole:row.actor_role,payload:row.payload,eventFingerprint:row.event_fingerprint})));
       return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},verification,checkedAt:new Date().toISOString(),note:'Verifies the stored tenant event sequence and fingerprints; it is not an independent external notarization.'});
