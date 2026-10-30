@@ -60,7 +60,8 @@ async function dbPool() {
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
-      await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner','admin','reviewer','analyst','integration')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
+      await pool.query("ALTER TABLE keel_tenant_keys ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_tenant_keys_tenant_idx ON keel_tenant_keys(tenant_id,status)');
       await pool.query('ALTER TABLE keel_model_census ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
       await pool.query('ALTER TABLE keel_proof_dockets ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
@@ -166,7 +167,7 @@ async function authenticateTenant(req) {
   if(!token) return null;
   const pool=await dbPool(); if(!pool) return null;
   const hash=tenantSecurity.hashPresentedKey(token);
-  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
   if(!result.rowCount) return null;
   await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
   return result.rows[0];
@@ -193,7 +194,7 @@ const apiDescription = {
     '/api/health':{get:{summary:'Service and database readiness'}},
     '/api/products':{get:{summary:'Current product catalogue'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
-    '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time API key'}},
+    '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
@@ -235,7 +236,7 @@ const server = http.createServer(async (req,res) => {
       const pool=await dbPool(); if(!pool) return send(res,503,{error:'tenant_storage_unavailable'});
       const tenant=tenantSecurity.normalizeTenant(await readBody(req));
       const issued=tenantSecurity.issueTenantKey(), tenantId=crypto.randomUUID(), client=await pool.connect();
-      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label) VALUES ($1,$2,$3,$4)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key']); await client.query('COMMIT'); }
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key','owner']); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,tenant:{id:tenantId,name:tenant.name,slug:tenant.slug},apiKey:issued.token,keyId:issued.keyId,warning:'This key is shown once; only its hash is stored.'});
     }
@@ -244,6 +245,8 @@ const server = http.createServer(async (req,res) => {
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
       const pool=await dbPool(); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
       const payload=await readBody(req);
+      const requiredRole=route==='/api/assurance/dockets'?'reviewer':'integration';
+      if(!['owner','admin',requiredRole].includes(tenant.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole});
       if(route==='/api/assurance/models'){
         const m=assurance.buildModelCensus(payload), scopedId=tenant.tenant_id+':'+m.modelId;
         await pool.query('INSERT INTO keel_model_census (model_id,tenant_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (model_id) DO UPDATE SET provider=EXCLUDED.provider,model_name=EXCLUDED.model_name,version=EXCLUDED.version,owner_ref=EXCLUDED.owner_ref,purpose=EXCLUDED.purpose,access_scope=EXCLUDED.access_scope,external=EXCLUDED.external,model_fingerprint=EXCLUDED.model_fingerprint,updated_at=NOW() WHERE keel_model_census.tenant_id=EXCLUDED.tenant_id',[scopedId,tenant.tenant_id,m.provider,m.modelName,m.version,m.owner,m.purpose,m.accessScope,m.external,m.modelFingerprint]);
