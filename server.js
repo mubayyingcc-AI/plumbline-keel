@@ -310,7 +310,7 @@ const server = http.createServer(async (req,res) => {
       const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=await dbPool(), docketId=decodeURIComponent(approvalMatch[1]);
       const docket=await pool.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
       if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
-      const client=await pool.connect(); let count=0;
+      const client=await pool.connect(); let count=0, rejected=false;
       try {
         await client.query('BEGIN');
         const locked=await client.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2 FOR UPDATE',[actor.tenant_id,docketId]);
@@ -322,11 +322,11 @@ const server = http.createServer(async (req,res) => {
         if(submitter && submitter===actor.key_id) { await client.query('ROLLBACK'); return send(res,403,{error:'submitter_cannot_approve_own_docket'}); }
         await client.query('INSERT INTO keel_docket_approvals(approval_id,tenant_id,docket_id,principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),actor.tenant_id,docketId,actor.principal_id,decision.decision,decision.rationale]);
         const q=await client.query("SELECT COUNT(DISTINCT principal_id)::int AS count, BOOL_OR(decision='reject') AS rejected FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2",[actor.tenant_id,docketId]);
-        count=q.rows[0].count;
+        count=q.rows[0].count; rejected=q.rows[0].rejected===true;
         await recordEventWithClient(client,actor,'WITNESS_RECORDED',docketId,{principalId:actor.principal_id,decision:decision.decision,rationale:decision.rationale,distinctApprovals:count,rejected:q.rows[0].rejected});
         await client.query('COMMIT');
       } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-      return send(res,201,{ok:true,docketId,recordedBy:actor.principal_id,distinctApprovals:count,threshold:2,approvalState:count>=2?'two_person_threshold_met':'awaiting_second_independent_principal',note:'Two distinct authenticated principals have acted; this does not authorize financial execution.'});
+      return send(res,201,{ok:true,docketId,recordedBy:actor.principal_id,distinctApprovals:count,threshold:2,rejected,approvalState:rejected?'rejected':(count>=2?'two_person_threshold_met':'awaiting_second_independent_principal'),note:'Two distinct authenticated principals have acted; this does not authorize financial execution.'});
     }
     if(req.method==='POST' && ['/api/tenants/keys','/api/tenants/keys/revoke'].includes(route)){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
