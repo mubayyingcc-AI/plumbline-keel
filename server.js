@@ -299,7 +299,11 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && approvalMatch){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      if(!actor.principal_id || !['owner','admin','reviewer'].includes(actor.role)) return send(res,403,{error:'named_reviewer_required'});
+      if(!actor.principal_id) return send(res,403,{error:'named_reviewer_required'});
+      if(!['owner','admin','reviewer'].includes(actor.role)) {
+        const delegated=await (await dbPool()).query("SELECT 1 FROM keel_delegations WHERE tenant_id=$1 AND grantee_principal_id=$2 AND status='active' AND expires_at>NOW() AND scopes ? 'docket:approve' LIMIT 1",[actor.tenant_id,actor.principal_id]);
+        if(!delegated.rowCount) return send(res,403,{error:'docket_approval_authority_required'});
+      }
       const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=await dbPool(), docketId=decodeURIComponent(approvalMatch[1]);
       const docket=await pool.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
       if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
