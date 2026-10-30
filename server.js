@@ -399,8 +399,11 @@ const server = http.createServer(async (req,res) => {
       ]);
       if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
       const chainVerification=authorityChain.verifyChain((await pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND tenant_sequence IS NOT NULL ORDER BY tenant_sequence ASC',[tenant.tenant_id])).rows.map(row=>({tenantId:row.tenant_id,sequence:Number(row.tenant_sequence),previousFingerprint:row.previous_event_fingerprint,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,actorKeyId:row.actor_key_id,actorRole:row.actor_role,payload:row.payload,eventFingerprint:row.event_fingerprint})));
+      const signingKey=process.env.KEEL_EXPORT_PRIVATE_KEY_PEM;
+      if(!signingKey) return send(res,503,{error:'evidence_export_signing_not_configured',message:'Configure KEEL_EXPORT_PRIVATE_KEY_PEM with an Ed25519 private key before issuing signed evidence exports.'});
       const manifest=authorityIdentity.exportManifest({tenantId:tenant.tenant_id,docket:{...docket.rows[0],approvals:approvals.rows,events:events.rows},chainVerification});
-      return send(res,200,manifest,'application/json; charset=utf-8',{'Content-Disposition':'attachment; filename="keel-evidence-'+docketId.replace(/[^a-zA-Z0-9_-]/g,'_')+'.json"'});
+      const signed=authorityIdentity.signManifest(manifest,signingKey,process.env.KEEL_EXPORT_KEY_ID);
+      return send(res,200,signed,'application/json; charset=utf-8',{'Content-Disposition':'attachment; filename="keel-evidence-'+docketId.replace(/[^a-zA-Z0-9_-]/g,'_')+'.json"'});
     }
     if(req.method==='GET' && route==='/api/assurance/chain/verify'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
