@@ -295,7 +295,7 @@ const server = http.createServer(async (req,res) => {
       const id=crypto.randomUUID(); await pool.query('INSERT INTO keel_delegations(delegation_id,tenant_id,grantor_principal_id,grantee_principal_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6)',[id,actor.tenant_id,actor.principal_id,delegation.granteePrincipalId,JSON.stringify(delegation.scopes),delegation.expiresAt]);
       return send(res,201,{ok:true,delegationId:id,...delegation});
     }
-    const approvalMatch=route.match(new RegExp('^/api/assurance/dockets/([^/]+)/approvals
+    const approvalMatch=route.match(/^\\/api\\/assurance\\/dockets\\/([^/]+)\\/approvals$/);
     if(req.method==='POST' && approvalMatch){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
