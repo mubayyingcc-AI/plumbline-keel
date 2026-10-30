@@ -1,1 +1,16 @@
-{"name":"plumbline-keel-local-alpha","version":"0.2.0","private":true,"type":"commonjs","scripts":{"start":"node server.js","test":"node --test"},"engines":{"node":">=18"}}
+{
+  "name": "plumbline-keel-platform",
+  "version": "0.3.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
