@@ -34,7 +34,7 @@ async function dbPool() {
         statement_timeout: 8000,
         query_timeout: 10000
       });
-      await pool.query(\`
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS keel_leads (
           id UUID PRIMARY KEY,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -49,7 +49,7 @@ async function dbPool() {
           consent BOOLEAN NOT NULL DEFAULT FALSE,
           source TEXT NOT NULL DEFAULT 'website'
         )
-      \`);
+      `);
       await pool.query('CREATE INDEX IF NOT EXISTS keel_leads_created_at_idx ON keel_leads (created_at DESC)');
       return pool;
     })().catch(err => { poolPromise = null; throw err; });
