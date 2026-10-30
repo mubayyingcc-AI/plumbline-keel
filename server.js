@@ -7,6 +7,7 @@ const { evaluateAction, fingerprint } = require('./src/core');
 const assurance = require('./src/assurance');
 const tenantSecurity = require('./src/tenant-security');
 const authorityChain = require('./src/authority-chain');
+const authorityIdentity = require('./src/evidence-authority');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -66,7 +67,7 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_tenant_keys_tenant_idx ON keel_tenant_keys(tenant_id,status)');
       await pool.query("ALTER TABLE keel_tenant_keys ADD COLUMN IF NOT EXISTS principal_id UUID");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_principals (principal_id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), display_name TEXT NOT NULL, email TEXT NOT NULL, external_subject TEXT, identity_assurance TEXT NOT NULL DEFAULT 'self_asserted' CHECK (identity_assurance IN ('self_asserted','externally_verified')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(tenant_id,email), UNIQUE(tenant_id,principal_id))");
-      await pool.query("ALTER TABLE keel_tenant_keys ADD CONSTRAINT keel_tenant_keys_principal_fk FOREIGN KEY (tenant_id,principal_id) REFERENCES keel_principals(tenant_id,principal_id)");
+      await pool.query("DO $keel$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_tenant_keys_principal_fk') THEN ALTER TABLE keel_tenant_keys ADD CONSTRAINT keel_tenant_keys_principal_fk FOREIGN KEY (tenant_id,principal_id) REFERENCES keel_principals(tenant_id,principal_id); END IF; END $keel$");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_delegations (delegation_id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), grantor_principal_id UUID NOT NULL, grantee_principal_id UUID NOT NULL, scopes JSONB NOT NULL, expires_at TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked','expired')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), FOREIGN KEY (tenant_id,grantor_principal_id) REFERENCES keel_principals(tenant_id,principal_id), FOREIGN KEY (tenant_id,grantee_principal_id) REFERENCES keel_principals(tenant_id,principal_id), CHECK (grantor_principal_id <> grantee_principal_id))");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_docket_approvals (approval_id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), docket_id TEXT NOT NULL, principal_id UUID NOT NULL, decision TEXT NOT NULL CHECK (decision IN ('approve','reject')), rationale TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), FOREIGN KEY (tenant_id,principal_id) REFERENCES keel_principals(tenant_id,principal_id), UNIQUE(tenant_id,docket_id,principal_id))");
       await pool.query("CREATE INDEX IF NOT EXISTS keel_principals_tenant_idx ON keel_principals(tenant_id,status)");
@@ -197,7 +198,7 @@ async function authenticateTenant(req) {
   if(!token) return null;
   const pool=await dbPool(); if(!pool) return null;
   const hash=tenantSecurity.hashPresentedKey(token);
-  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
   if(!result.rowCount) return null;
   await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
   return result.rows[0];
@@ -229,6 +230,8 @@ const apiDescription = {
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
+    '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
+    '/api/assurance/delegations':{post:{summary:'Grant expiring scoped authority'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
     '/api/assurance/drift':{post:{summary:'Record fingerprint drift (token restricted)'} },
@@ -272,6 +275,41 @@ const server = http.createServer(async (req,res) => {
       try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key','owner']); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,tenant:{id:tenantId,name:tenant.name,slug:tenant.slug},apiKey:issued.token,keyId:issued.keyId,warning:'This key is shown once; only its hash is stored.'});
+    }
+    if(req.method==='POST' && route==='/api/assurance/principals'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!['owner','admin'].includes(actor.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'admin'});
+      const body=await readBody(req), principal=authorityIdentity.normalizePrincipal(body), issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=await dbPool(), client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,'reviewer',$5)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,principalId]); await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role:'reviewer',apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
+    }
+    if(req.method==='POST' && route==='/api/assurance/delegations'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id || !['owner','admin'].includes(actor.role)) return send(res,403,{error:'named_admin_principal_required'});
+      const body=await readBody(req), delegation=authorityIdentity.normalizeDelegation(body,actor.principal_id), pool=await dbPool();
+      const grantee=await pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,delegation.granteePrincipalId]);
+      if(!grantee.rowCount) return send(res,404,{error:'active_grantee_not_found'});
+      const id=crypto.randomUUID(); await pool.query('INSERT INTO keel_delegations(delegation_id,tenant_id,grantor_principal_id,grantee_principal_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6)',[id,actor.tenant_id,actor.principal_id,delegation.granteePrincipalId,JSON.stringify(delegation.scopes),delegation.expiresAt]);
+      return send(res,201,{ok:true,delegationId:id,...delegation});
+    }
+    const approvalMatch=route.match(/^\\/api\\/assurance\\/dockets\\/([^/]+)\\/approvals$/);
+    if(req.method==='POST' && approvalMatch){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id || !['owner','admin','reviewer'].includes(actor.role)) return send(res,403,{error:'named_reviewer_required'});
+      const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=await dbPool(), docketId=decodeURIComponent(approvalMatch[1]);
+      const docket=await pool.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
+      if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
+      const prior=await pool.query('SELECT principal_id FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
+      if(prior.rows.some(x=>x.principal_id===actor.principal_id)) return send(res,409,{error:'principal_already_acted'});
+      const client=await pool.connect(); let count=0;
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_docket_approvals(approval_id,tenant_id,docket_id,principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),actor.tenant_id,docketId,actor.principal_id,decision.decision,decision.rationale]); const q=await client.query("SELECT COUNT(DISTINCT principal_id)::int AS count FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2",[actor.tenant_id,docketId]); count=q.rows[0].count; await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      await recordEvent(pool,actor,'WITNESS_RECORDED',docketId,{principalId:actor.principal_id,decision:decision.decision,rationale:decision.rationale,distinctApprovals:count});
+      return send(res,201,{ok:true,docketId,recordedBy:actor.principal_id,distinctApprovals:count,threshold:2,approvalState:count>=2?'two_person_threshold_met':'awaiting_second_independent_principal',note:'Two distinct authenticated principals have acted; this does not authorize financial execution.'});
     }
     if(req.method==='POST' && ['/api/tenants/keys','/api/tenants/keys/revoke'].includes(route)){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
