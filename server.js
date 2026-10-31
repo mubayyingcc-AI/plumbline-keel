@@ -233,6 +233,7 @@ const apiDescription = {
     '/api/assurance/dockets/{docketId}/export':{get:{summary:'Export tenant-scoped docket evidence manifest'}},
     '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
     '/api/assurance/delegations':{post:{summary:'Grant expiring scoped authority'}},
+    '/api/assurance/delegations/revoke':{post:{summary:'Revoke a delegation granted by the authenticated administrator'}},
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
     '/api/assurance/drift':{post:{summary:'Record fingerprint drift (token restricted)'} },
@@ -281,10 +282,23 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!['owner','admin'].includes(actor.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'admin'});
-      const body=await readBody(req), principal=authorityIdentity.normalizePrincipal(body), issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=await dbPool(), client=await pool.connect();
-      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,'reviewer',$5)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,principalId]); await client.query('COMMIT'); }
+      const body=await readBody(req), principal=authorityIdentity.normalizePrincipal(body);
+      const role=cleanString(body.role||'reviewer',30);
+      if(!['admin','reviewer','analyst','integration'].includes(role)) return send(res,400,{error:'invalid_principal_role',allowed:['admin','reviewer','analyst','integration']});
+      const issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=await dbPool(), client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-      return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role:'reviewer',apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
+      return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role,apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
+    }
+    if(req.method==='POST' && route==='/api/assurance/delegations/revoke'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id || !['owner','admin'].includes(actor.role)) return send(res,403,{error:'named_admin_principal_required'});
+      const body=await readBody(req), delegationId=cleanString(body.delegationId,80); if(!delegationId) return send(res,400,{error:'delegation_id_required'});
+      const pool=await dbPool();
+      const result=await pool.query("UPDATE keel_delegations SET status='revoked' WHERE tenant_id=$1 AND delegation_id=$2 AND grantor_principal_id=$3 AND status='active' RETURNING delegation_id",[actor.tenant_id,delegationId,actor.principal_id]);
+      if(!result.rowCount) return send(res,404,{error:'active_granted_delegation_not_found'});
+      return send(res,200,{ok:true,revokedDelegationId:delegationId});
     }
     if(req.method==='POST' && route==='/api/assurance/delegations'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
@@ -318,8 +332,9 @@ const server = http.createServer(async (req,res) => {
         const prior=await client.query('SELECT principal_id FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
         if(prior.rows.some(x=>x.principal_id===actor.principal_id)) { await client.query('ROLLBACK'); return send(res,409,{error:'principal_already_acted'}); }
         const docketPayload=await client.query('SELECT payload FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
-        const submitter=docketPayload.rows[0]?.payload?.decisionWitness?.reviewerId;
-        if(submitter && submitter===actor.key_id) { await client.query('ROLLBACK'); return send(res,403,{error:'submitter_cannot_approve_own_docket'}); }
+        const submitterPrincipal=docketPayload.rows[0]?.payload?.decisionWitness?.principalId;
+        const submitterKey=docketPayload.rows[0]?.payload?.decisionWitness?.reviewerId;
+        if((submitterPrincipal && submitterPrincipal===actor.principal_id) || (!submitterPrincipal && submitterKey===actor.key_id)) { await client.query('ROLLBACK'); return send(res,403,{error:'submitter_cannot_approve_own_docket'}); }
         await client.query('INSERT INTO keel_docket_approvals(approval_id,tenant_id,docket_id,principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),actor.tenant_id,docketId,actor.principal_id,decision.decision,decision.rationale]);
         const q=await client.query("SELECT COUNT(DISTINCT principal_id)::int AS count, BOOL_OR(decision='reject') AS rejected FROM keel_docket_approvals WHERE tenant_id=$1 AND docket_id=$2",[actor.tenant_id,docketId]);
         count=q.rows[0].count; rejected=q.rows[0].rejected===true;
@@ -360,7 +375,7 @@ const server = http.createServer(async (req,res) => {
         return send(res,201,{ok:true,modelId:m.modelId,modelFingerprint:m.modelFingerprint});
       }
       if(route==='/api/assurance/dockets'){
-        const docketInput={...payload,witness:{...(payload.witness||{}),reviewerId:tenant.key_id,role:tenant.role}};
+        const docketInput={...payload,witness:{...(payload.witness||{}),reviewerId:tenant.key_id,principalId:tenant.principal_id||null,role:tenant.role}};
         const d=assurance.buildProofDocket(docketInput);
         const client=await pool.connect();
         try {
