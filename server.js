@@ -60,6 +60,8 @@ async function dbPool() {
       await pool.query("CREATE TABLE IF NOT EXISTS keel_proof_dockets (docket_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), decision_id TEXT NOT NULL, decision TEXT NOT NULL CHECK (decision IN ('ALLOW','HOLD','REVIEW')), docket_fingerprint CHAR(64) NOT NULL UNIQUE, decision_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_created_idx ON keel_proof_dockets(created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
+      await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
+      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED'))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner','admin','reviewer','analyst','integration')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
@@ -286,7 +288,7 @@ const server = http.createServer(async (req,res) => {
       const role=cleanString(body.role||'reviewer',30);
       if(!['admin','reviewer','analyst','integration'].includes(role)) return send(res,400,{error:'invalid_principal_role',allowed:['admin','reviewer','analyst','integration']});
       const issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=await dbPool(), client=await pool.connect();
-      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await client.query('COMMIT'); }
+      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await recordEventWithClient(client,actor,'PRINCIPAL_CREATED',principalId,{displayName:principal.displayName,email:principal.email,role,identityAssurance:'self_asserted'}); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role,apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
     }
@@ -296,8 +298,9 @@ const server = http.createServer(async (req,res) => {
       if(!actor.principal_id || !['owner','admin'].includes(actor.role)) return send(res,403,{error:'named_admin_principal_required'});
       const body=await readBody(req), delegationId=cleanString(body.delegationId,80); if(!delegationId) return send(res,400,{error:'delegation_id_required'});
       const pool=await dbPool();
-      const result=await pool.query("UPDATE keel_delegations SET status='revoked' WHERE tenant_id=$1 AND delegation_id=$2 AND grantor_principal_id=$3 AND status='active' RETURNING delegation_id",[actor.tenant_id,delegationId,actor.principal_id]);
-      if(!result.rowCount) return send(res,404,{error:'active_granted_delegation_not_found'});
+      const client=await pool.connect();
+      try { await client.query('BEGIN'); const result=await client.query("UPDATE keel_delegations SET status='revoked' WHERE tenant_id=$1 AND delegation_id=$2 AND grantor_principal_id=$3 AND status='active' RETURNING delegation_id,grantee_principal_id,scopes"); if(!result.rowCount) { await client.query('ROLLBACK'); return send(res,404,{error:'active_granted_delegation_not_found'}); } await recordEventWithClient(client,actor,'DELEGATION_REVOKED',delegationId,{grantorPrincipalId:actor.principal_id,granteePrincipalId:result.rows[0].grantee_principal_id,scopes:result.rows[0].scopes}); await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,200,{ok:true,revokedDelegationId:delegationId});
     }
     if(req.method==='POST' && route==='/api/assurance/delegations'){
@@ -307,7 +310,9 @@ const server = http.createServer(async (req,res) => {
       const body=await readBody(req), delegation=authorityIdentity.normalizeDelegation(body,actor.principal_id), pool=await dbPool();
       const grantee=await pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,delegation.granteePrincipalId]);
       if(!grantee.rowCount) return send(res,404,{error:'active_grantee_not_found'});
-      const id=crypto.randomUUID(); await pool.query('INSERT INTO keel_delegations(delegation_id,tenant_id,grantor_principal_id,grantee_principal_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6)',[id,actor.tenant_id,actor.principal_id,delegation.granteePrincipalId,JSON.stringify(delegation.scopes),delegation.expiresAt]);
+      const id=crypto.randomUUID(), client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_delegations(delegation_id,tenant_id,grantor_principal_id,grantee_principal_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6)',[id,actor.tenant_id,actor.principal_id,delegation.granteePrincipalId,JSON.stringify(delegation.scopes),delegation.expiresAt]); await recordEventWithClient(client,actor,'DELEGATION_GRANTED',id,{grantorPrincipalId:actor.principal_id,granteePrincipalId:delegation.granteePrincipalId,scopes:delegation.scopes,expiresAt:delegation.expiresAt}); await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,delegationId:id,...delegation});
     }
     const approvalPrefix='/api/assurance/dockets/';
