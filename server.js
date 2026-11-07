@@ -9,6 +9,7 @@ const tenantSecurity = require('./src/tenant-security');
 const authorityChain = require('./src/authority-chain');
 const authorityIdentity = require('./src/evidence-authority');
 const fractureEngine = require('./src/fracture-engine');
+const currencyEngine = require('./src/currency-engine');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -62,7 +63,7 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_created_idx ON keel_proof_dockets(created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
-      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED'))");
+      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED','CURRENCY_ACCOUNT_CREATED','CURRENCY_TRANSFER_PREPARED'))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner','admin','reviewer','analyst','integration')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
@@ -84,6 +85,10 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_tenant_idx ON keel_proof_dockets(tenant_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_fracture_assessments (assessment_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), status TEXT NOT NULL CHECK (status IN ('watch','strained','fractured')), scenario_id TEXT NOT NULL, input_fingerprint CHAR(64) NOT NULL, result_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_fracture_assessments_tenant_idx ON keel_fracture_assessments(tenant_id,created_at DESC)');
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_currency_accounts (account_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), owner_ref TEXT NOT NULL, instrument_code TEXT NOT NULL, account_type TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(tenant_id,account_id))");
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_currency_accounts_tenant_idx ON keel_currency_accounts(tenant_id,created_at DESC)');
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_currency_transfer_intents (transfer_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), from_account_id TEXT NOT NULL, to_account_id TEXT NOT NULL, instrument_code TEXT NOT NULL, amount_units NUMERIC(78,0) NOT NULL CHECK(amount_units>0), idempotency_key TEXT NOT NULL, condition JSONB, status TEXT NOT NULL DEFAULT 'prepared' CHECK(status='prepared'), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(tenant_id,idempotency_key), FOREIGN KEY(tenant_id,from_account_id) REFERENCES keel_currency_accounts(tenant_id,account_id), FOREIGN KEY(tenant_id,to_account_id) REFERENCES keel_currency_accounts(tenant_id,account_id))");
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_currency_intents_tenant_idx ON keel_currency_transfer_intents(tenant_id,created_at DESC)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_tenant_idx ON keel_assurance_events(tenant_id,created_at DESC)');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_sequence BIGINT');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS previous_event_fingerprint CHAR(64)');
@@ -235,6 +240,10 @@ const apiDescription = {
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/fracture/assessments':{get:{summary:'List tenant-scoped fracture assessments'},post:{summary:'Run and persist a Financial Fracture assessment'}},
+    '/api/currency/instruments':{get:{summary:'List currency and service-credit instrument references'}},
+    '/api/currency/accounts':{get:{summary:'List tenant simulation accounts'},post:{summary:'Create tenant simulation account'}},
+    '/api/currency/transfers/prepare':{post:{summary:'Prepare non-settling conditional transfer intent'}},
+    '/api/currency/transfers':{get:{summary:'List prepared simulation transfer intents'}},
     '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
     '/api/assurance/dockets/{docketId}/export':{get:{summary:'Export tenant-scoped docket evidence manifest'}},
     '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
@@ -399,6 +408,48 @@ const server = http.createServer(async (req,res) => {
       }
       const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant,'DRIFT_DETECTED',drift.driftId,drift);
       return send(res,201,{ok:true,drift});
+    }
+    if(req.method==='GET' && route==='/api/currency/instruments'){
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      return send(res,200,{instruments:currencyEngine.INSTRUMENTS,notice:'Catalogue and service-credit simulation only; no money is issued, held or settled.'});
+    }
+    if(req.method==='POST' && route==='/api/currency/accounts'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const body=await readBody(req), account=currencyEngine.newAccount(body), pool=await dbPool();
+      if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_currency_accounts(account_id,tenant_id,owner_ref,instrument_code,account_type) VALUES($1,$2,$3,$4,$5)',[account.accountId,actor.tenant_id,account.ownerRef,account.instrumentCode,account.accountType]); await recordEventWithClient(client,actor,'CURRENCY_ACCOUNT_CREATED',account.accountId,{instrumentCode:account.instrumentCode,accountType:account.accountType,ledgerMode:account.ledgerMode}); await client.query('COMMIT'); }
+      catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
+      return send(res,201,{ok:true,account});
+    }
+    if(req.method==='GET' && route==='/api/currency/accounts'){
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const rows=await pool.query('SELECT account_id,owner_ref,instrument_code,account_type,created_at FROM keel_currency_accounts WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
+      return send(res,200,{count:rows.rowCount,accounts:rows.rows,notice:'These are simulation accounts, not bank or custodial accounts.'});
+    }
+    if(req.method==='POST' && route==='/api/currency/transfers/prepare'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const body=await readBody(req), intent=currencyEngine.prepareTransfer(body), pool=await dbPool();
+      if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const client=await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const accounts=await client.query('SELECT account_id FROM keel_currency_accounts WHERE tenant_id=$1 AND account_id=ANY($2::text[]) FOR UPDATE',[actor.tenant_id,[intent.fromAccountId,intent.toAccountId]]);
+        if(accounts.rowCount!==2) throw Object.assign(new Error('both_accounts_must_exist_in_same_tenant'),{status:404});
+        await client.query('INSERT INTO keel_currency_transfer_intents(transfer_id,tenant_id,from_account_id,to_account_id,instrument_code,amount_units,idempotency_key,condition) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[intent.transferId,actor.tenant_id,intent.fromAccountId,intent.toAccountId,intent.instrumentCode,intent.amountUnits,intent.idempotencyKey,intent.condition?JSON.stringify(intent.condition):null]);
+        await recordEventWithClient(client,actor,'CURRENCY_TRANSFER_PREPARED',intent.transferId,{instrumentCode:intent.instrumentCode,amountUnits:intent.amountUnits,fromAccountId:intent.fromAccountId,toAccountId:intent.toAccountId,status:'prepared',mode:'simulation_only'});
+        await client.query('COMMIT');
+      } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
+      return send(res,201,{ok:true,intent,notice:'Prepared simulation intent only. No balance is debited, no payment is sent and no asset is transferred.'});
+    }
+    if(req.method==='GET' && route==='/api/currency/transfers'){
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const rows=await pool.query('SELECT transfer_id,from_account_id,to_account_id,instrument_code,amount_units,idempotency_key,condition,status,created_at FROM keel_currency_transfer_intents WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
+      return send(res,200,{count:rows.rowCount,intents:rows.rows,notice:'Prepared simulation intents are not settled transactions.'});
     }
     if(req.method==='POST' && route==='/api/fracture/assessments'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
