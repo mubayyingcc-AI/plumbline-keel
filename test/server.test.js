@@ -121,6 +121,3 @@ test('Authority Chain verification is tenant-authenticated', async () => { const
 
 test('financial state object write requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
 test('financial state snapshot read requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects');assert.equal(r.status,401)});
-
-test('financial state object write requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
-test('financial state snapshot read requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects');assert.equal(r.status,401)});

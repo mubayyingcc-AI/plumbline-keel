@@ -11,7 +11,6 @@ const authorityIdentity = require('./src/evidence-authority');
 const fractureEngine = require('./src/fracture-engine');
 const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
-const financialState = require('./src/financial-state');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -93,11 +92,6 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_currency_intents_tenant_idx ON keel_currency_transfer_intents(tenant_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_financial_objects (object_id TEXT NOT NULL, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), object_type TEXT NOT NULL, currency_or_unit TEXT NOT NULL, gross_units NUMERIC(78,0) NOT NULL CHECK(gross_units>=0), encumbered_units NUMERIC(78,0), evidence_status TEXT NOT NULL, lifecycle_status TEXT NOT NULL, source_ref TEXT NOT NULL, external_object_ref TEXT NOT NULL, object_fingerprint CHAR(64) NOT NULL, observed_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,object_id), UNIQUE(tenant_id,source_ref,external_object_ref))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_financial_objects_tenant_idx ON keel_financial_objects(tenant_id,updated_at DESC)');
-      await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
-      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED','CURRENCY_ACCOUNT_CREATED','CURRENCY_TRANSFER_PREPARED','FINANCIAL_OBJECT_RECORDED'))");
-      await pool.query("CREATE TABLE IF NOT EXISTS keel_financial_objects (object_id TEXT NOT NULL, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), object_type TEXT NOT NULL, currency_or_unit TEXT NOT NULL, gross_units NUMERIC(78,0) NOT NULL CHECK(gross_units>=0), encumbered_units NUMERIC(78,0), evidence_status TEXT NOT NULL, lifecycle_status TEXT NOT NULL, source_ref TEXT NOT NULL, external_object_ref TEXT NOT NULL, object_fingerprint CHAR(64) NOT NULL, observed_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,object_id), UNIQUE(tenant_id,source_ref,external_object_ref))");
-      await pool.query('CREATE INDEX IF NOT EXISTS keel_financial_objects_tenant_idx ON keel_financial_objects(tenant_id,updated_at DESC)');
-      await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
       await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED','CURRENCY_ACCOUNT_CREATED','CURRENCY_TRANSFER_PREPARED','FINANCIAL_OBJECT_RECORDED'))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_tenant_idx ON keel_assurance_events(tenant_id,created_at DESC)');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_sequence BIGINT');
@@ -418,28 +412,6 @@ const server = http.createServer(async (req,res) => {
       }
       const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant,'DRIFT_DETECTED',drift.driftId,drift);
       return send(res,201,{ok:true,drift});
-    }
-    if(req.method==='POST' && route==='/api/financial-state/objects') {
-      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
-      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      if(!['owner','admin','integration'].includes(actor.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'integration'});
-      const object=financialState.normalizeFinancialObject(await readBody(req)), pool=await dbPool();
-      if(!pool) return send(res,503,{error:'financial_state_storage_unavailable'});
-      const client=await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query('INSERT INTO keel_financial_objects(object_id,tenant_id,object_type,currency_or_unit,gross_units,encumbered_units,evidence_status,lifecycle_status,source_ref,external_object_ref,object_fingerprint,observed_at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',[object.objectId,actor.tenant_id,object.objectType,object.currencyOrUnit,object.grossUnits,object.encumberedUnits,object.evidenceStatus,object.lifecycleStatus,object.sourceRef,object.externalObjectRef,object.objectFingerprint,object.observedAt,JSON.stringify(object)]);
-        await recordEventWithClient(client,actor,'FINANCIAL_OBJECT_RECORDED',object.objectId,{objectFingerprint:object.objectFingerprint,objectType:object.objectType,evidenceStatus:object.evidenceStatus,sourceRef:object.sourceRef});
-        await client.query('COMMIT');
-      } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-      return send(res,201,{ok:true,object,availability:financialState.assessAvailability(object)});
-    }
-    if(req.method==='GET' && route==='/api/financial-state/objects') {
-      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'financial_state_storage_unavailable'});
-      const rows=await pool.query('SELECT payload FROM keel_financial_objects WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT 250',[actor.tenant_id]);
-      const snapshot=financialState.buildStateSnapshot(rows.rows.map(x=>x.payload),{id:'keel-default-availability',version:'1',maxEvidenceAgeMs:86400000});
-      return send(res,200,{ok:true,snapshot});
     }
     if(req.method==='POST' && route==='/api/financial-state/objects') {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
