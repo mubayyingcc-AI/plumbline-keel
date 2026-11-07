@@ -102,4 +102,13 @@ test('docket approval requires tenant authentication', async () => {
   assert.equal(response.status,401);
 });
 
+test('fracture assessment write requires tenant authentication', async () => {
+  const response=await fetch(base+'/api/fracture/assessments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assessmentId:'FRA-TEST',currency:'USD',institutions:[]})});
+  assert.equal(response.status,401);
+});
+test('fracture assessment history requires tenant authentication', async () => {
+  const response=await fetch(base+'/api/fracture/assessments');
+  assert.equal(response.status,401);
+});
+
 test('Authority Chain verification is tenant-authenticated', async () => { const response=await fetch(base+'/api/assurance/chain/verify'); assert.equal(response.status,401); assert.equal((await response.json()).error,'valid_tenant_api_key_required'); });
