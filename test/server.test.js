@@ -111,4 +111,10 @@ test('fracture assessment history requires tenant authentication', async () => {
   assert.equal(response.status,401);
 });
 
+test('currency instrument catalogue requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/instruments');assert.equal(r.status,401)});
+test('currency account creation requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accountId:'agent-001',ownerRef:'agent',instrumentCode:'COMPUTE_CREDIT'})});assert.equal(r.status,401)});
+test('currency account history requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/accounts');assert.equal(r.status,401)});
+test('currency transfer preparation requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/transfers/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
+test('currency transfer history requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/transfers');assert.equal(r.status,401)});
+
 test('Authority Chain verification is tenant-authenticated', async () => { const response=await fetch(base+'/api/assurance/chain/verify'); assert.equal(response.status,401); assert.equal((await response.json()).error,'valid_tenant_api_key_required'); });
