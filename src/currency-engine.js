@@ -5,8 +5,8 @@ const INSTRUMENTS=Object.freeze([
 {code:'NGN',kind:'fiat_reference',unit:'NGN',scale:2,issuerType:'sovereign_or_bank',transferable:false,liveSettlement:false},
 {code:'TOKEN_DEPOSIT',kind:'tokenised_deposit_reference',unit:'issuer_defined',scale:6,issuerType:'regulated_deposit_taker',transferable:false,liveSettlement:false},
 {code:'STABLECOIN_REF',kind:'stablecoin_reference',unit:'issuer_defined',scale:6,issuerType:'third_party_issuer',transferable:false,liveSettlement:false},
-{code:'COMPUTE_CREDIT',kind:'service_credit',unit:'compute_second',scale:6,issuerType:'service_provider',transferable:false,liveSettlement:false},
-{code:'ENERGY_CREDIT',kind:'service_credit',unit:'kWh',scale:6,issuerType:'energy_provider',transferable:false,liveSettlement:false}
+{code:'COMPUTE_CREDIT',kind:'service_credit',unit:'compute_second',scale:6,issuerType:'service_provider',transferable:true,liveSettlement:false},
+{code:'ENERGY_CREDIT',kind:'service_credit',unit:'kWh',scale:6,issuerType:'energy_provider',transferable:true,liveSettlement:false}
 ]);
 function instrument(code){const x=INSTRUMENTS.find(i=>i.code===code);if(!x)throw Error('unsupported_instrument');return x;}
 function amountUnits(amount,scale){if(typeof amount!=='string'||!/^\d+(\.\d+)?$/.test(amount))throw Error('amount must be a positive decimal string');const [w,f='']=amount.split('.');if(f.length>scale)throw Error('amount exceeds instrument precision');const n=BigInt(w)*(10n**BigInt(scale))+BigInt((f+'0'.repeat(scale)).slice(0,scale)||'0');if(n<=0n)throw Error('amount must be greater than zero');return n.toString();}

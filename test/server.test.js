@@ -118,3 +118,6 @@ test('currency transfer preparation requires tenant authentication',async()=>{co
 test('currency transfer history requires tenant authentication',async()=>{const r=await fetch(base+'/api/currency/transfers');assert.equal(r.status,401)});
 
 test('Authority Chain verification is tenant-authenticated', async () => { const response=await fetch(base+'/api/assurance/chain/verify'); assert.equal(response.status,401); assert.equal((await response.json()).error,'valid_tenant_api_key_required'); });
+
+test('financial state object write requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
+test('financial state snapshot read requires tenant authentication',async()=>{const r=await fetch(base+'/api/financial-state/objects');assert.equal(r.status,401)});
