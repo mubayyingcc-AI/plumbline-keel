@@ -8,6 +8,7 @@ const assurance = require('./src/assurance');
 const tenantSecurity = require('./src/tenant-security');
 const authorityChain = require('./src/authority-chain');
 const authorityIdentity = require('./src/evidence-authority');
+const fractureEngine = require('./src/fracture-engine');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -61,7 +62,7 @@ async function dbPool() {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_created_idx ON keel_proof_dockets(created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
-      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED'))");
+      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED'))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner','admin','reviewer','analyst','integration')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
@@ -81,6 +82,8 @@ async function dbPool() {
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES keel_tenants(tenant_id)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_model_census_tenant_idx ON keel_model_census(tenant_id,model_id)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_tenant_idx ON keel_proof_dockets(tenant_id,created_at DESC)');
+      await pool.query("CREATE TABLE IF NOT EXISTS keel_fracture_assessments (assessment_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), status TEXT NOT NULL CHECK (status IN ('watch','strained','fractured')), scenario_id TEXT NOT NULL, input_fingerprint CHAR(64) NOT NULL, result_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
+      await pool.query('CREATE INDEX IF NOT EXISTS keel_fracture_assessments_tenant_idx ON keel_fracture_assessments(tenant_id,created_at DESC)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_tenant_idx ON keel_assurance_events(tenant_id,created_at DESC)');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS tenant_sequence BIGINT');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS previous_event_fingerprint CHAR(64)');
@@ -231,6 +234,7 @@ const apiDescription = {
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
+    '/api/fracture/assessments':{get:{summary:'List tenant-scoped fracture assessments'},post:{summary:'Run and persist a Financial Fracture assessment'}},
     '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
     '/api/assurance/dockets/{docketId}/export':{get:{summary:'Export tenant-scoped docket evidence manifest'}},
     '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
@@ -395,6 +399,23 @@ const server = http.createServer(async (req,res) => {
       }
       const drift=assurance.assessDrift(payload.previous,payload.current); await recordEvent(pool,tenant,'DRIFT_DETECTED',drift.driftId,drift);
       return send(res,201,{ok:true,drift});
+    }
+    if(req.method==='POST' && route==='/api/fracture/assessments'){
+      if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const input=await readBody(req), result=fractureEngine.assessFracture(input), pool=await dbPool();
+      if(!pool) return send(res,503,{error:'fracture_storage_unavailable'});
+      const client=await pool.connect();
+      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_fracture_assessments(assessment_id,tenant_id,status,scenario_id,input_fingerprint,result_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7)',[result.assessmentId,actor.tenant_id,result.status,result.scenarioId,result.inputFingerprint,result.resultFingerprint,JSON.stringify(result)]); await recordEventWithClient(client,actor,'FRACTURE_ASSESSED',result.assessmentId,{status:result.status,scenarioId:result.scenarioId,resultFingerprint:result.resultFingerprint,systemicFlags:result.systemicFlags}); await client.query('COMMIT'); }
+      catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      return send(res,201,{ok:true,assessment:result});
+    }
+    if(req.method==='GET' && route==='/api/fracture/assessments'){
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool(); if(!pool) return send(res,503,{error:'fracture_storage_unavailable'});
+      const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit')||25)));
+      const rows=await pool.query('SELECT assessment_id,created_at,status,scenario_id,input_fingerprint,result_fingerprint,payload FROM keel_fracture_assessments WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[actor.tenant_id,limit]);
+      return send(res,200,{ok:true,count:rows.rowCount,assessments:rows.rows});
     }
     if(req.method==='GET' && route==='/api/assurance/records'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
