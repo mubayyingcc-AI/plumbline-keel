@@ -4,7 +4,28 @@
 
 ALTER TABLE keel_ledger_accounts
   ADD COLUMN IF NOT EXISTS allow_negative_balance BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS is_reservable BOOLEAN NOT NULL DEFAULT FALSE;
+  ADD COLUMN IF NOT EXISTS is_reservable BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS currency_exponent SMALLINT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_ledger_account_currency_exponent_check') THEN
+    ALTER TABLE keel_ledger_accounts ADD CONSTRAINT keel_ledger_account_currency_exponent_check
+      CHECK(currency_exponent IS NULL OR currency_exponent BETWEEN 0 AND 6);
+  END IF;
+END $$;
+
+-- A legacy account may be configured once; after assignment its currency exponent is immutable.
+CREATE OR REPLACE FUNCTION keel_ledger_account_metadata_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (NEW.tenant_id,NEW.account_id,NEW.account_code,NEW.account_name,NEW.account_class,NEW.currency,NEW.normal_side)
+     IS DISTINCT FROM
+     (OLD.tenant_id,OLD.account_id,OLD.account_code,OLD.account_name,OLD.account_class,OLD.currency,OLD.normal_side)
+     OR (OLD.currency_exponent IS NOT NULL AND NEW.currency_exponent IS DISTINCT FROM OLD.currency_exponent) THEN
+    RAISE EXCEPTION 'ledger account identity, classification and currency exponent are immutable';
+  END IF;
+  RETURN NEW;
+END; $$;
 
 DO $$
 BEGIN
