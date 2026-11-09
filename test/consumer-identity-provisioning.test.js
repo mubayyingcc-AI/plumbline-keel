@@ -20,6 +20,7 @@ test('identity provider events require assurance, opaque references and evidence
  const event={provider:'test-idp',eventId:'evt-1',externalSubjectRef:'opaque-subject',externalReference:'case-1',status:'verified',assurance:'high',evidenceHash:'b'.repeat(64),verifiedAt:'2026-11-09T12:00:00.000Z',expiresAt:'2026-12-09T12:00:00.000Z'};
  assert.equal(identity.normalizeProviderIdentityResult(event).status,'verified');
  assert.throws(()=>identity.normalizeProviderIdentityResult({...event,assurance:'low'}),/identity_assurance_insufficient/);
+ assert.throws(()=>identity.normalizeProviderIdentityResult({...event,expiresAt:'not-a-date'}),/identity_expiry_invalid/);
  assert.throws(()=>identity.normalizeProviderIdentityResult({...event,evidenceHash:'not-a-hash'}),/identity_evidence_hash_invalid/);
  assert.throws(()=>identity.normalizeProviderIdentityResult({...event,externalSubjectRef:''}),/identity_provider_externalSubjectRef_invalid/);
 });
