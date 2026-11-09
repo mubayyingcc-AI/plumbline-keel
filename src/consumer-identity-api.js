@@ -43,9 +43,9 @@ async function handle({req,res,route,send,dbPool,crypto}){
   }
   await client.query('UPDATE keel_consumer_external_identities SET last_seen_at=NOW() WHERE provider_id=$1 AND subject_hmac=$2',[event.provider,subjectHmac]);
   await client.query('INSERT INTO keel_consumer_identity_events(provider_id,provider_event_id,consumer_id,event_status,assurance,evidence_hash,provider_reference,provider_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[event.provider,event.eventId,consumerId,event.status,event.assurance,event.evidenceHash,event.externalReference,providerTime.toISOString()]);
-  const mappedStatus=event.status==='verified'?'identity_verified':event.status==='review_required'?'review_required':event.status==='rejected'?'rejected':'identity_pending';
+  const mappedStatus=event.status==='verified'?'identity_verified':event.status==='review_required'?'review_required':event.status==='rejected'?'rejected':event.status==='expired'?'expired':'identity_pending';
   const assurance=event.status==='verified'?event.assurance:'none';
-  await client.query("UPDATE keel_consumer_accounts SET account_status=$2,identity_assurance=$3,identity_provider=$4,identity_evidence_hash=$5,identity_verified_at=CASE WHEN $2='identity_verified' THEN $6 ELSE NULL END,identity_expires_at=$7,updated_at=NOW() WHERE consumer_id=$1 AND (identity_verified_at IS NULL OR identity_verified_at<=$6 OR $2<>'identity_verified')",[consumerId,mappedStatus,assurance,event.provider,event.evidenceHash,event.verifiedAt||providerTime.toISOString(),event.expiresAt]);
+  await client.query("UPDATE keel_consumer_accounts SET account_status=$2,identity_assurance=$3,identity_provider=$4,identity_evidence_hash=$5,identity_verified_at=CASE WHEN $2='identity_verified' THEN $6 ELSE NULL END,identity_expires_at=$7,last_provider_event_at=$8,updated_at=NOW() WHERE consumer_id=$1 AND (last_provider_event_at IS NULL OR last_provider_event_at<=$8)",[consumerId,mappedStatus,assurance,event.provider,event.evidenceHash,event.verifiedAt||providerTime.toISOString(),event.expiresAt,providerTime.toISOString()]);
   await client.query('SELECT pg_advisory_xact_lock(74021011)');
   const last=await client.query('SELECT event_fingerprint FROM keel_consumer_event_chain ORDER BY sequence DESC LIMIT 1');
   const previous=last.rowCount?last.rows[0].event_fingerprint:null;
