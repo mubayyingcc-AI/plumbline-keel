@@ -359,7 +359,6 @@ const server = http.createServer(async (req,res) => {
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
-        const q=await client.query('SELECT c.*,d.device_public_key,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
 
         const q=await client.query('SELECT c.*,d.device_public_key,d.key_fingerprint,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
         if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'pairing_challenge_not_found'});}
