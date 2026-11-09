@@ -19,6 +19,7 @@ Open `http://127.0.0.1:3000`.
 - `GET /api/health`
 - `GET /api/demo`
 - `POST /api/evaluate`
+- `POST /api/sandbox/runs` — runs KFS-001 or KFS-002 against the current evaluator and returns an unsigned, stateless KFTR
 
 The public website uses synthetic fixtures. It is not connected to live banks, custodians, payment rails or government systems. Do not submit real customer data or use it to authorise live financial activity.
 
