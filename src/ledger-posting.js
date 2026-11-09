@@ -29,13 +29,13 @@ function key(value) {
 function normalBalance(account, debit, credit) {
   return account.normal_side === 'debit' ? debit - credit : credit - debit;
 }
-async function lockAccount(client, tenantId, accountId) {
+async function lockAccount(client, tenantId, accountId, includeSuspended = false) {
   const result = await client.query(
     'SELECT tenant_id,account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable FROM keel_ledger_accounts WHERE tenant_id=$1 AND account_id=$2 FOR UPDATE',
     [tenantId, accountId]
   );
   if (!result.rowCount) fail('ledger_account_not_found', 404);
-  if (result.rows[0].status !== 'active') fail('ledger_account_not_active', 409);
+  if (!includeSuspended && result.rows[0].status !== 'active') fail('ledger_account_not_active', 409);
   return result.rows[0];
 }
 async function readProjection(client, tenantId, account) {
@@ -67,7 +67,7 @@ async function applyJournalProjection(client, tenantId, account, lines) {
   if(balance<0n&&!account.allow_negative_balance)fail('ledger_account_insufficient_funds',409);
   return balance;
 }
-async function verifyAccountProjection(client,tenantId,account) {
+async function verifyAccountProjectionWithClient(client,tenantId,account) {
   const projection=await readProjection(client,tenantId,account);
   const totals=await client.query(
     `SELECT COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0)::text AS debit_total,
@@ -88,6 +88,15 @@ async function appendLedgerEvent(client, tenantId, eventType, subjectId, payload
   const body={tenantId,eventId,eventType,subjectId,payload};
   const fingerprint=crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
   await client.query('INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6)',[tenantId,eventId,eventType,subjectId,fingerprint,JSON.stringify(payload)]);
+}
+async function verifyAccountProjection(pool,tenantIdInput,accountId) {
+  requirePool(pool);
+  const tenantId=actorTenant(tenantIdInput);
+  if(typeof accountId!=='string'||!accountId.trim())fail('ledger_account_id_required');
+  return withTransaction(pool,async client=>{
+    const account=await lockAccount(client,tenantId,accountId.trim(),true);
+    return verifyAccountProjectionWithClient(client,tenantId,account);
+  },tenantId);
 }
 async function activeReservations(client, tenantId, accountId) {
   const r = await client.query(
@@ -230,7 +239,7 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
   const tenantId = actorTenant(tenantIdInput);
   if (typeof accountId !== 'string' || !accountId.trim()) fail('ledger_account_id_required');
   return withTransaction(pool, async client => {
-    const account = await lockAccount(client, tenantId, accountId.trim());
+    const account = await lockAccount(client, tenantId, accountId.trim(), true);
     const projection = await readProjection(client, tenantId, account);
     const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId.trim());
