@@ -5,8 +5,8 @@ const CHANNELS=new Set(['bank_api','card','agent_protocol','supplier_api','walle
 const FIELDS=['amountMinor','currency','purpose','payeeId','merchantId','channel','fundingSourceId'];
 function fail(m){throw new Error(m)}
 function obj(x){return x!==null&&typeof x==='object'&&!Array.isArray(x)}
-function integer(v,k){if(typeof v!=='string'||!/^\\d+$/.test(v))fail(k+'_must_be_integer_string');const n=BigInt(v);if(n<=0n)fail(k+'_must_be_positive');return n}
-function canonicalIntent(x){if(!obj(x))fail('intent_required');const o={};for(const k of FIELDS){if(typeof x[k]!=='string'||!x[k].trim())fail('intent_'+k+'_required');o[k]=k==='amountMinor'?integer(x[k],k).toString():x[k].trim()}if(!CHANNELS.has(o.channel))fail('unsupported_payment_channel');if(!/^[A-Z]{3}$/.test(o.currency))fail('currency_must_be_iso_4217_code');if(typeof x.id!=='string'||!x.id.trim())fail('intent_id_required');o.id=x.id.trim();if(typeof x.agentId==='string')o.agentId=x.agentId;if(typeof x.principalId==='string')o.principalId=x.principalId;if(typeof x.periodCommittedMinor==='string'){if(!/^\\d+$/.test(x.periodCommittedMinor))fail('periodCommittedMinor_must_be_integer_string');o.periodCommittedMinor=x.periodCommittedMinor}if(x.borrowing===true)o.borrowing=true;if(x.creditRequested===true)o.creditRequested=true;if(Array.isArray(x.riskFlags))o.riskFlags=[...x.riskFlags].sort();return o}
+function integer(v,k){if(typeof v!=='string'||!/^\d+$/.test(v))fail(k+'_must_be_integer_string');const n=BigInt(v);if(n<=0n)fail(k+'_must_be_positive');return n}
+function canonicalIntent(x){if(!obj(x))fail('intent_required');const o={};for(const k of FIELDS){if(typeof x[k]!=='string'||!x[k].trim())fail('intent_'+k+'_required');o[k]=k==='amountMinor'?integer(x[k],k).toString():x[k].trim()}if(!CHANNELS.has(o.channel))fail('unsupported_payment_channel');if(!/^[A-Z]{3}$/.test(o.currency))fail('currency_must_be_iso_4217_code');if(typeof x.id!=='string'||!x.id.trim())fail('intent_id_required');o.id=x.id.trim();if(typeof x.agentId==='string')o.agentId=x.agentId;if(typeof x.principalId==='string')o.principalId=x.principalId;if(typeof x.periodCommittedMinor==='string'){if(!/^\d+$/.test(x.periodCommittedMinor))fail('periodCommittedMinor_must_be_integer_string');o.periodCommittedMinor=x.periodCommittedMinor}if(x.borrowing===true)o.borrowing=true;if(x.creditRequested===true)o.creditRequested=true;if(Array.isArray(x.riskFlags))o.riskFlags=[...x.riskFlags].sort();return o}
 function hash(v){return require('node:crypto').createHash('sha256').update(JSON.stringify(v)).digest('hex')}
 function evaluatePayment({tenantId,mandate,intent,availability,policy,now=new Date().toISOString()}) {
  if(typeof tenantId!=='string'||!tenantId.trim())fail('tenant_id_required');
@@ -26,11 +26,11 @@ function evaluatePayment({tenantId,mandate,intent,availability,policy,now=new Da
  if(amount>single)return deny('single_transaction_limit_exceeded');
  if(availability.currency!==request.currency||availability.status!=='reconciled'||availability.fresh!==true||availability.restricted!==false)return {decision:DECISIONS.HOLD,reasons:['availability_not_fresh_unrestricted_and_reconciled']};
  const keys=['eligibleBalanceMinor','restrictedMinor','obligationsReserveMinor','policyReserveMinor','activeReservationsMinor','providerHoldsMinor'];
- for(const k of keys)if(typeof availability[k]!=='string'||!/^\\d+$/.test(availability[k]))return {decision:DECISIONS.HOLD,reasons:['availability_component_missing_or_invalid:'+k]};
+ for(const k of keys)if(typeof availability[k]!=='string'||!/^\d+$/.test(availability[k]))return {decision:DECISIONS.HOLD,reasons:['availability_component_missing_or_invalid:'+k]};
  const gross=BigInt(availability.eligibleBalanceMinor),deduct=keys.slice(1).reduce((s,k)=>s+BigInt(availability[k]),0n),available=gross>deduct?gross-deduct:0n;
  if(amount>available)return {decision:DECISIONS.DENY,reasons:['insufficient_verified_available_capacity'],availableMinor:available.toString()};
- if(typeof mandate.periodLimitMinor!=='string'||!/^\\d+$/.test(mandate.periodLimitMinor))return {decision:DECISIONS.HOLD,reasons:['aggregate_limit_not_configured']};
- if(typeof intent.periodCommittedMinor!=='string'||!/^\\d+$/.test(intent.periodCommittedMinor))return {decision:DECISIONS.HOLD,reasons:['aggregate_usage_not_verified']};
+ if(typeof mandate.periodLimitMinor!=='string'||!/^\d+$/.test(mandate.periodLimitMinor))return {decision:DECISIONS.HOLD,reasons:['aggregate_limit_not_configured']};
+ if(typeof intent.periodCommittedMinor!=='string'||!/^\d+$/.test(intent.periodCommittedMinor))return {decision:DECISIONS.HOLD,reasons:['aggregate_usage_not_verified']};
  const committed=BigInt(intent.periodCommittedMinor),limit=BigInt(mandate.periodLimitMinor);
  if(committed+amount>limit)return deny('aggregate_period_limit_exceeded');
  if(typeof policy.policyId!=='string'||typeof policy.version!=='string')fail('policy_version_required');
