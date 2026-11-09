@@ -274,4 +274,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation};
+module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation,normalBalance,amount};
