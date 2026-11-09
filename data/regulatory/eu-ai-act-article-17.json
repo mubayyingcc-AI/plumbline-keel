@@ -1,0 +1,156 @@
+{
+  "profileId": "EU-AI-ACT-ARTICLE-17",
+  "profileVersion": "2026-07-27+2026-10-19",
+  "jurisdiction": "EU",
+  "legalInstrument": "Regulation (EU) 2024/1689",
+  "consolidatedTextDate": "2026-07-27",
+  "harmonisedStandard": {
+    "id": "EN 18286:2026",
+    "commissionDecision": "Commission Implementing Decision (EU) 2026/2274",
+    "publishedDate": "2026-10-14",
+    "commissionAnnouncementDate": "2026-10-19",
+    "licensedTextRequired": true
+  },
+  "obligations": [
+    {
+      "locator": "Article 17(1)(a)",
+      "subject": "regulatory_compliance_and_modification_management",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(b)",
+      "subject": "design_control_and_verification",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(c)",
+      "subject": "development_quality_control_and_assurance",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(d)",
+      "subject": "examination_testing_validation_and_frequency",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(e)",
+      "subject": "technical_specifications_and_standards",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(f)",
+      "subject": "data_management",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(g)",
+      "subject": "article_9_risk_management",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(h)",
+      "subject": "article_72_post_market_monitoring",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(i)",
+      "subject": "article_73_serious_incident_reporting",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(j)",
+      "subject": "communications",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(k)",
+      "subject": "record_keeping",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(l)",
+      "subject": "resource_management_and_security_of_supply",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    },
+    {
+      "locator": "Article 17(1)(m)",
+      "subject": "accountability_framework",
+      "sourceType": "law",
+      "sourceVersion": "2026-07-27",
+      "reviewRequired": true,
+      "evidenceExpectations": []
+    }
+  ],
+  "linkedArticles": [
+    "6",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "18",
+    "19",
+    "20",
+    "26",
+    "43",
+    "72",
+    "73",
+    "Annex IV",
+    "Annex VII"
+  ],
+  "article17Paragraph4": {
+    "appliesOnlyTo": "providers that are financial institutions subject to internal-governance requirements under Union financial-services law",
+    "deemedFulfilmentExcept": [
+      "17(1)(g)",
+      "17(1)(h)",
+      "17(1)(i)"
+    ],
+    "legalReviewRequired": true,
+    "automaticInference": false
+  },
+  "standardsRelationship": {
+    "iso42001": "organisation-level AI management-system framework",
+    "en18286": "provider QMS for EU AI Act regulatory purposes",
+    "interchangeable": false,
+    "licensedClauseCrosswalkRequired": true
+  },
+  "status": "reference_profile_requires_legal_approval"
+}
