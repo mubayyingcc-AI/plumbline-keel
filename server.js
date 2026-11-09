@@ -323,6 +323,7 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
       const body=await readBody(req),cardId=cleanString(body.cardId,100);
       if(!cardId) return send(res,400,{error:'card_id_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
@@ -347,6 +348,7 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
       const body=await readBody(req),challengeId=cleanString(body.challengeId,64),nonce=cleanString(body.nonce,128),signature=cleanString(body.signature,256);
       if(!challengeId||!nonce||!signature)return send(res,400,{error:'challenge_id_nonce_and_signature_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
