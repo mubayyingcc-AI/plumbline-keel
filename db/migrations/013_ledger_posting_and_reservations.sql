@@ -1,6 +1,6 @@
--- Keel ledger posting, projections, reservations and tenant isolation.
--- Requires migration 012. Apply only with a reviewed migration runner after disposable-PostgreSQL tests.
--- Do not apply automatically at application startup.
+-- Keel ledger posting, projections, reservations, hash-linked evidence and tenant isolation.
+-- Requires migration 012. Apply only through a reviewed migration runner after disposable-PostgreSQL tests.
+-- Never apply automatically at application startup.
 
 ALTER TABLE keel_ledger_accounts
   ADD COLUMN IF NOT EXISTS allow_negative_balance BOOLEAN NOT NULL DEFAULT FALSE,
@@ -10,11 +10,9 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_ledger_account_normal_side_class_check') THEN
     ALTER TABLE keel_ledger_accounts ADD CONSTRAINT keel_ledger_account_normal_side_class_check
-      CHECK (
-        account_class='memorandum'
+      CHECK (account_class='memorandum'
         OR (account_class IN ('asset','expense') AND normal_side='debit')
-        OR (account_class IN ('liability','equity','income') AND normal_side='credit')
-      );
+        OR (account_class IN ('liability','equity','income') AND normal_side='credit'));
   END IF;
 END $$;
 
@@ -37,7 +35,7 @@ CREATE OR REPLACE FUNCTION keel_ledger_balance_currency_guard() RETURNS trigger 
 DECLARE account_currency CHAR(3);
 BEGIN
   SELECT currency INTO account_currency FROM keel_ledger_accounts
-    WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
+   WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
   IF account_currency IS NULL OR account_currency<>NEW.currency THEN
     RAISE EXCEPTION 'ledger balance currency must match account currency';
   END IF;
@@ -97,7 +95,7 @@ CREATE OR REPLACE FUNCTION keel_ledger_reservation_guard() RETURNS trigger LANGU
 DECLARE account_currency CHAR(3);
 BEGIN
   SELECT currency INTO account_currency FROM keel_ledger_accounts
-    WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
+   WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
   IF account_currency IS NULL OR account_currency<>NEW.currency THEN
     RAISE EXCEPTION 'reservation currency must match account currency';
   END IF;
@@ -118,7 +116,15 @@ CREATE TRIGGER keel_ledger_reservation_guard_trigger
   BEFORE INSERT OR UPDATE ON keel_ledger_reservations
   FOR EACH ROW EXECUTE FUNCTION keel_ledger_reservation_guard();
 
--- Append-only audit events are committed in the same transaction as the financial state change.
+-- A per-tenant sequence head serialises event appends and detects deletion/reordering.
+CREATE TABLE IF NOT EXISTS keel_ledger_event_heads (
+  tenant_id UUID PRIMARY KEY REFERENCES keel_tenants(tenant_id),
+  last_sequence BIGINT NOT NULL DEFAULT 0 CHECK(last_sequence>=0),
+  last_fingerprint CHAR(64),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK((last_sequence=0 AND last_fingerprint IS NULL)
+    OR (last_sequence>0 AND last_fingerprint ~ '^[0-9a-f]{64}$'))
+);
 CREATE TABLE IF NOT EXISTS keel_ledger_events (
   tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
   event_id UUID NOT NULL,
@@ -126,35 +132,6 @@ CREATE TABLE IF NOT EXISTS keel_ledger_events (
     'ACCOUNT_CREATED','JOURNAL_POSTED','RESERVATION_CREATED',
     'RESERVATION_RELEASED','RESERVATION_CONSUMED','PROJECTION_REBUILT'
   )),
-  subject_id TEXT NOT NULL,
-  event_fingerprint CHAR(64) NOT NULL CHECK(event_fingerprint ~ '^[0-9a-f]{64}$'),
-  payload JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY(tenant_id,event_id)
-);
-CREATE INDEX IF NOT EXISTS keel_ledger_events_subject_idx
-  ON keel_ledger_events(tenant_id,subject_id,created_at DESC);
-CREATE OR REPLACE FUNCTION keel_ledger_events_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  RAISE EXCEPTION 'Keel ledger events are append-only';
-END; $$;
-DROP TRIGGER IF EXISTS keel_ledger_events_no_mutation ON keel_ledger_events;
-CREATE TRIGGER keel_ledger_events_no_mutation
-  BEFORE UPDATE OR DELETE ON keel_ledger_events
-  FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
-
--- Append-only, per-tenant hash-linked ledger event stream.
-CREATE TABLE IF NOT EXISTS keel_ledger_event_heads (
-  tenant_id UUID PRIMARY KEY REFERENCES keel_tenants(tenant_id),
-  last_sequence BIGINT NOT NULL DEFAULT 0 CHECK(last_sequence>=0),
-  last_fingerprint CHAR(64),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK((last_sequence=0 AND last_fingerprint IS NULL) OR (last_sequence>0 AND last_fingerprint ~ '^[0-9a-f]{64}$'))
-);
-CREATE TABLE IF NOT EXISTS keel_ledger_events (
-  tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
-  event_id UUID NOT NULL,
-  event_type TEXT NOT NULL,
   subject_id TEXT NOT NULL,
   tenant_sequence BIGINT NOT NULL CHECK(tenant_sequence>0),
   previous_event_fingerprint CHAR(64),
@@ -183,7 +160,8 @@ DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
-    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events'
+    'keel_ledger_account_balances','keel_ledger_reservations',
+    'keel_ledger_event_heads','keel_ledger_events'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
