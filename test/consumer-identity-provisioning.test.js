@@ -9,7 +9,7 @@ function signed(body,ts=Math.floor(Date.now()/1000)){
  return {raw,timestamp:String(ts),signature};
 }
 test('signed identity provider webhook validates HMAC, freshness and raw body binding',()=>{
- const body={provider:'test-idp',eventId:'evt-1',externalSubjectRef:'opaque-subject',externalReference:'case-1',status:'verified',assurance:'high',evidenceHash:'a'.repeat(64),verifiedAt:new Date().toISOString()};
+ const body={provider:'test-idp',eventId:'evt-1',externalSubjectRef:'opaque-subject',externalReference:'case-1',status:'verified',assurance:'high',evidenceHash:'a'.repeat(64),verifiedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+86400000).toISOString()};
  const s=signed(body);
  const result=identity.verifyProviderWebhook({rawBody:s.raw,timestamp:s.timestamp,signature:s.signature,secret});
  assert.equal(result.bodyHash,crypto.createHash('sha256').update(s.raw).digest('hex'));
