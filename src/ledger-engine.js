@@ -47,7 +47,9 @@ function validateJournal(journal){
  }
  const lineAccounts=new Set(lines.map(x=>x.accountId));
  if(lineAccounts.size<2)throw new Error('journal_requires_distinct_accounts');
- const normalised={tenantId,journalId,idempotencyKey,description,sourceRef,effectiveAt:new Date(Date.parse(effectiveAt)).toISOString(),lines};
+ const reversalOfJournalId=journal.reversalOfJournalId==null?null:required(journal.reversalOfJournalId,'reversal_of_journal_id');
+ if(reversalOfJournalId===journalId)throw new Error('journal_cannot_reverse_itself');
+ const normalised={tenantId,journalId,idempotencyKey,description,sourceRef,effectiveAt:new Date(Date.parse(effectiveAt)).toISOString(),reversalOfJournalId,lines};
  const fingerprint=crypto.createHash('sha256').update(canonical(normalised)).digest('hex');
  return Object.freeze({...normalised,totalsByCurrency:Object.fromEntries(Object.entries(byCurrency).map(([k,v])=>[k,v.debit.toString()])),lineCount:lines.length,fingerprint,status:'validated_not_posted'});
 }
@@ -57,7 +59,7 @@ function buildReversal({original,tenantId,journalId,idempotencyKey,description,e
  if(source.tenantId!==tenantId)throw new Error('reversal_tenant_mismatch');
  return validateJournal({
   tenantId,journalId,idempotencyKey,description:description||('Reversal of '+source.journalId),
-  sourceRef:'reversal:'+source.journalId,effectiveAt,
+  sourceRef:'reversal:'+source.journalId,effectiveAt,reversalOfJournalId:source.journalId,
   lines:source.lines.map(line=>({accountId:line.accountId,side:line.side==='debit'?'credit':'debit',currency:line.currency,amountMinor:line.amountMinor}))
  });
 }
