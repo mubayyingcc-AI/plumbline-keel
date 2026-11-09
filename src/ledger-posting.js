@@ -107,6 +107,32 @@ async function appendLedgerEvent(client, tenantId, eventType, subjectId, payload
     [tenantId,sequence.toString(),fingerprint]
   );
 }
+async function verifyLedgerEventChain(pool,tenantIdInput) {
+  requirePool(pool);
+  const tenantId=actorTenant(tenantIdInput);
+  return withTransaction(pool,async client=>{
+    const rows=await client.query(
+      'SELECT event_id,event_type,subject_id,tenant_sequence::text,previous_event_fingerprint,event_fingerprint,payload FROM keel_ledger_events WHERE tenant_id=$1 ORDER BY tenant_sequence',
+      [tenantId]
+    );
+    let previous=null,expected=1n;
+    for(const row of rows.rows){
+      const sequence=BigInt(row.tenant_sequence);
+      if(sequence!==expected||row.previous_event_fingerprint!==previous){
+        return {valid:false,verifiedEvents:Number(expected-1n),failure:'sequence_or_link_mismatch',eventId:row.event_id};
+      }
+      const body={tenantId,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,payload:row.payload,sequence:sequence.toString(),previousFingerprint:row.previous_event_fingerprint};
+      const computed=crypto.createHash('sha256').update(canonical(body)).digest('hex');
+      if(computed!==row.event_fingerprint)return {valid:false,verifiedEvents:Number(expected-1n),failure:'fingerprint_mismatch',eventId:row.event_id};
+      previous=row.event_fingerprint;expected++;
+    }
+    const head=await client.query('SELECT last_sequence::text,last_fingerprint FROM keel_ledger_event_heads WHERE tenant_id=$1',[tenantId]);
+    const last=expected-1n;
+    const headMatches=last===0n?!head.rowCount||(head.rows[0].last_sequence==='0'&&head.rows[0].last_fingerprint===null):
+      head.rowCount&&BigInt(head.rows[0].last_sequence)===last&&head.rows[0].last_fingerprint===previous;
+    return {valid:Boolean(headMatches),verifiedEvents:Number(last),headFingerprint:previous,failure:headMatches?null:'event_head_mismatch'};
+  },tenantId);
+}
 async function verifyAccountProjection(pool,tenantIdInput,accountId) {
   requirePool(pool);
   const tenantId=actorTenant(tenantIdInput);
@@ -410,4 +436,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount,withTransaction};
+module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,verifyLedgerEventChain,normalBalance,amount,withTransaction};
