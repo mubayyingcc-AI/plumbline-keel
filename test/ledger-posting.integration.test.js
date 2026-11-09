@@ -62,7 +62,7 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     assert.equal((await posting.verifyAccountProjection(pool,tenantId,liability)).matches,true);
 
     const reversalCash='reversal-cash-'+suffix, reversalEquity='reversal-equity-'+suffix;
-    await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',normalSide:'debit'});
+    await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
     await posting.createAccount(pool,tenantId,{accountId:reversalEquity,accountCode:'4000-'+suffix,accountName:'Reversal test equity',accountClass:'equity',currency:'USD',currencyExponent:2,normalSide:'credit'});
     const original={tenantId,journalId:'original-'+suffix,idempotencyKey:'original-key-'+suffix+'-000000',description:'Original journal for reversal',sourceRef:'test:reversal:'+suffix,effectiveAt:new Date().toISOString(),lines:[
       {accountId:reversalCash,side:'debit',currency:'USD',amountMinor:'50'},
