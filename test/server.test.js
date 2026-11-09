@@ -126,3 +126,6 @@ test('regulatory obligation registration requires tenant authentication',async()
 test('regulatory evidence registration requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/evidence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
 test('regulatory gap evaluation requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/gaps/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
 test('regulatory docket export requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/dockets/demo/export');assert.equal(r.status,401)});
+
+test('regulatory corrective action creation requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/actions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
+test('regulatory corrective action transition requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/actions/transition',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
