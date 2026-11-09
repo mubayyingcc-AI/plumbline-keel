@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS keel_ledger_account_balances (
   version BIGINT NOT NULL DEFAULT 0 CHECK(version>=0),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY(tenant_id,account_id),
-  FOREIGN KEY(tenant_id,account_id) REFERENCES keel_ledger_accounts(tenant_id,account_id),
+  FOREIGN KEY(tenant_id,account_id) REFERENCES keel_ledger_accounts(tenant_id,account_id)
 );
 CREATE INDEX IF NOT EXISTS keel_ledger_balances_currency_idx
   ON keel_ledger_account_balances(tenant_id,currency,account_id);
@@ -134,6 +134,44 @@ DROP TRIGGER IF EXISTS keel_ledger_full_reversal_line_check ON keel_ledger_lines
 CREATE CONSTRAINT TRIGGER keel_ledger_full_reversal_line_check
   AFTER INSERT OR UPDATE OR DELETE ON keel_ledger_lines DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION keel_ledger_assert_full_reversal();
+
+
+-- Append-only ledger event evidence is committed in the same transaction as the financial state change.
+CREATE TABLE IF NOT EXISTS keel_ledger_events (
+  tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
+  event_id UUID NOT NULL,
+  event_type TEXT NOT NULL CHECK(event_type IN ('ACCOUNT_CREATED','JOURNAL_POSTED','RESERVATION_CREATED','RESERVATION_RELEASED','RESERVATION_CONSUMED','PROJECTION_REBUILT')),
+  subject_id TEXT NOT NULL,
+  event_fingerprint CHAR(64) NOT NULL CHECK(event_fingerprint ~ '^[0-9a-f]{64}
+-- The runtime database role must not own these tables and must not have BYPASSRLS.
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
+    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_events'
+  ] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I',t||'_tenant_isolation',t);
+    EXECUTE format(
+      'CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid)',
+      t||'_tenant_isolation',t
+    );
+  END LOOP;
+END $$;
+
+-- RLS context is intentionally transaction-local. This query should return no rows
+-- outside a tenant-scoped transaction when executed as the runtime role.
+),
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(tenant_id,event_id)
+);
+CREATE INDEX IF NOT EXISTS keel_ledger_events_subject_idx ON keel_ledger_events(tenant_id,subject_id,created_at DESC);
+CREATE OR REPLACE FUNCTION keel_ledger_events_immutable() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RAISE EXCEPTION 'Keel ledger events are append-only'; END; $;
+DROP TRIGGER IF EXISTS keel_ledger_events_no_mutation ON keel_ledger_events;
+CREATE TRIGGER keel_ledger_events_no_mutation BEFORE UPDATE OR DELETE ON keel_ledger_events FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
 
 -- Tenant isolation. The application must set keel.tenant_id transaction-locally.
 -- The runtime database role must not own these tables and must not have BYPASSRLS.
