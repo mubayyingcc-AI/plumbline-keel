@@ -12,14 +12,12 @@ test('only a valid Ed25519 signature verifies',()=>{
  const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519');
  const challenge=p.createPairingChallenge({tenantId:'t',principalId:'p',cardId:'card-12345',counter:7});
  const signature=crypto.sign(null,Buffer.from(challenge.message),privateKey).toString('base64url');
- feature/human-card-cryptographic-pairing
- assert.equal(p.verifyPairingSignature({publicKeyPem:publicKey.export({type:'spki',format:'pem'}),message:challenge.message,signatureBase64url:signature}),true);
+
 
  const publicKeyPem=publicKey.export({type:'spki',format:'pem'});
  assert.equal(p.verifyPairingSignature({publicKeyPem,message:challenge.message,signatureBase64url:signature}),true);
  assert.match(p.fingerprintPublicKey(publicKeyPem),/^[a-f0-9]{64}$/);
  assert.equal(p.fingerprintPublicKey(publicKeyPem),crypto.createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex'));
- main
  assert.equal(p.verifyPairingSignature({publicKeyPem:publicKey.export({type:'spki',format:'pem'}),message:challenge.message+'tampered',signatureBase64url:signature}),false);
 });
 test('wrong key, malformed signature and non-Ed25519 key fail closed',()=>{
