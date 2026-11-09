@@ -280,7 +280,7 @@ const apiDescription = {
     '/api/partners/card-attestation/events':{post:{summary:'Receive signed independent hardware attestation events'}},
     '/api/partners/card-delivery/events':{post:{summary:'Receive signed independent card delivery events'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
-    '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
+    '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts and explicit currency exponents'},post:{summary:'Create a tenant ledger account with configured ISO currency minor-unit exponent'}},
     '/api/ledger/events/verify':{get:{summary:'Verify the tenant append-only ledger event hash chain'}},
     '/api/ledger/journals':{post:{summary:'Atomically post an immutable balanced journal'}},
     '/api/ledger/accounts/{accountId}/balance':{get:{summary:'Read ledger, reserved and available balances'}},
