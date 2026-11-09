@@ -76,7 +76,7 @@ async function handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser}){
  }
  if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
  let actor;try{actor=await actorFor(req,{pool});}catch(e){return send(res,401,{error:e.message});}
- if(mine){const r=await pool.query('SELECT card_id,card_state,hardware_model,paired_at,locked_at,lock_reason,attestation_expires_at,created_at FROM keel_consumer_cards WHERE consumer_id=$1 ORDER BY created_at DESC',[actor.consumer_id]);return send(res,200,{cards:r.rows.map(x=>({...x,usable:sec.isCardUsable(x.card_state)&&x.attestation_expires_at>new Date()}))});}
+ if(mine){const r=await pool.query('SELECT card_id,card_state,hardware_model,paired_at,locked_at,lock_reason,attestation_expires_at,created_at FROM keel_consumer_cards WHERE consumer_id=$1 ORDER BY created_at DESC',[actor.consumer_id]);return send(res,200,{cards:r.rows.map(x=>({...x,physicalCredentialPaired:sec.isCardPaired(x.card_state)&&x.attestation_expires_at>new Date()}))});}
  if(challenge||verify){
   const body=await readBody(req),cardId=String(body.cardId||'');const client=await pool.connect();
   try{await client.query('BEGIN');const q=await client.query('SELECT * FROM keel_consumer_cards WHERE consumer_id=$1 AND card_id=$2 FOR UPDATE',[actor.consumer_id,cardId]);if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'consumer_card_not_found'});}const c=q.rows[0];
