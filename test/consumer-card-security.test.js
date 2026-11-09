@@ -49,4 +49,4 @@ test('only independent trustee approvals count; rejection blocks recovery',()=>{
  assert.equal(s.evaluateRecovery({status:'pending',decision:'reject',alreadyResponded:false,ownerId:owner,trusteeId:trustee,approvals:0,threshold:2}).status,'rejected');
  assert.equal(s.evaluateRecovery({status:'pending',decision:'approve',alreadyResponded:false,ownerId:owner,trusteeId:trustee,approvals:1,threshold:2,now:0}).status,'approved_waiting_period');
 });
-test('only paired card is usable; lost-card state fails closed',()=>{assert.equal(s.isCardUsable('paired'),true);for(const x of ['locked','recovery_pending','revoked','delivered_pending_pairing'])assert.equal(s.isCardUsable(x),false);});
+test('only a paired physical credential passes pairing state; this is not payment usability',()=>{assert.equal(s.isCardPaired('paired'),true);for(const x of ['locked','recovery_pending','revoked','delivered_pending_pairing'])assert.equal(s.isCardPaired(x),false);});
