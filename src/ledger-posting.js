@@ -234,6 +234,39 @@ async function postJournal(pool, tenantIdInput, journal) {
   const tenantId = actorTenant(tenantIdInput);
   return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal), tenantId);
 }
+async function listAccounts(pool,tenantIdInput) {
+  requirePool(pool);
+  const tenantId=actorTenant(tenantIdInput);
+  return withTransaction(pool,async client=>{
+    const result=await client.query(
+      `SELECT a.account_id,a.account_code,a.account_name,a.account_class,a.currency,
+              a.normal_side,a.status,a.allow_negative_balance,a.is_reservable,
+              COALESCE(b.debit_total,0)::text AS debit_total_minor,
+              COALESCE(b.credit_total,0)::text AS credit_total_minor,
+              COALESCE(b.normal_balance_minor,0)::text AS ledger_balance_minor,
+              COALESCE(r.reserved_minor,0)::text AS reserved_minor
+         FROM keel_ledger_accounts a
+         LEFT JOIN keel_ledger_account_balances b
+           ON b.tenant_id=a.tenant_id AND b.account_id=a.account_id
+         LEFT JOIN (
+           SELECT tenant_id,account_id,SUM(amount_minor) AS reserved_minor
+             FROM keel_ledger_reservations
+            WHERE status='active' AND (expires_at IS NULL OR expires_at>NOW())
+            GROUP BY tenant_id,account_id
+         ) r ON r.tenant_id=a.tenant_id AND r.account_id=a.account_id
+        WHERE a.tenant_id=$1 ORDER BY a.account_code,a.currency,a.account_id`,
+      [tenantId]
+    );
+    return result.rows.map(row=>({
+      accountId:row.account_id,accountCode:row.account_code,accountName:row.account_name,
+      accountClass:row.account_class,currency:row.currency,normalSide:row.normal_side,
+      status:row.status,allowNegativeBalance:row.allow_negative_balance,isReservable:row.is_reservable,
+      debitTotalMinor:row.debit_total_minor,creditTotalMinor:row.credit_total_minor,
+      ledgerBalanceMinor:row.ledger_balance_minor,reservedMinor:row.reserved_minor,
+      availableMinor:(BigInt(row.ledger_balance_minor)-BigInt(row.reserved_minor)).toString()
+    }));
+  },tenantId);
+}
 async function getAccountBalance(pool, tenantIdInput, accountId) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
