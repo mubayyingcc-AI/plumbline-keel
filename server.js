@@ -819,8 +819,8 @@ const server = http.createServer(async (req,res) => {
         return send(res,201,{ok:true,account});
       }
       if(req.method==='GET'&&route==='/api/ledger/accounts'){
-        const rows=await pool.query('SELECT account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable,created_at FROM keel_ledger_accounts WHERE tenant_id=$1 ORDER BY account_code,currency',[actor.tenant_id]);
-        return send(res,200,{count:rows.rowCount,accounts:rows.rows});
+        const accounts=await ledgerPosting.listAccounts(pool,actor.tenant_id);
+        return send(res,200,{count:accounts.length,accounts});
       }
       if(req.method==='POST'&&route==='/api/ledger/journals'){
         const result=await ledgerPosting.postJournal(pool,actor.tenant_id,await readBody(req));
