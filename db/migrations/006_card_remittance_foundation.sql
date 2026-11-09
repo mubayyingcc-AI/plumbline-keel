@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS keel_payment_ledger_postings (
 CREATE INDEX IF NOT EXISTS keel_payment_ledger_postings_tx_idx ON keel_payment_ledger_postings(tenant_id,transaction_id);
 CREATE OR REPLACE FUNCTION keel_assert_posted_ledger_balanced() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE tx keel_payment_ledger_transactions%ROWTYPE;
-DECLARE deb NUMERIC(78,0); DECLARE cred NUMERIC(78,0); DECLARE cnt INTEGER; DECLARE wrong_currency INTEGER;
+DECLARE deb NUMERIC(78,0); DECLARE cred NUMERIC(78,0); DECLARE cnt INTEGER; DECLARE wrong_currency INTEGER; DECLARE wrong_currency INTEGER;
 BEGIN
  SELECT * INTO tx FROM keel_payment_ledger_transactions WHERE tenant_id=COALESCE(NEW.tenant_id,OLD.tenant_id) AND transaction_id=COALESCE(NEW.transaction_id,OLD.transaction_id);
  IF NOT FOUND OR tx.status<>'posted' THEN RETURN NULL; END IF;
@@ -214,9 +214,9 @@ DECLARE deb NUMERIC(78,0); DECLARE cred NUMERIC(78,0); DECLARE cnt INTEGER;
 BEGIN
  SELECT * INTO tx FROM keel_payment_ledger_transactions WHERE tenant_id=COALESCE(NEW.tenant_id,OLD.tenant_id) AND transaction_id=COALESCE(NEW.transaction_id,OLD.transaction_id);
  IF NOT FOUND OR tx.status<>'posted' THEN RETURN NULL; END IF;
- SELECT COUNT(*),COALESCE(SUM(amount_minor) FILTER(WHERE side='debit'),0),COALESCE(SUM(amount_minor) FILTER(WHERE side='credit'),0)
- INTO cnt,deb,cred FROM keel_payment_ledger_postings WHERE tenant_id=tx.tenant_id AND transaction_id=tx.transaction_id AND currency=tx.currency;
- IF cnt<2 OR deb<>cred THEN RAISE EXCEPTION 'posted_ledger_transaction_must_balance'; END IF;
+ SELECT COUNT(*),COALESCE(SUM(amount_minor) FILTER(WHERE side='debit'),0),COALESCE(SUM(amount_minor) FILTER(WHERE side='credit'),0),COUNT(*) FILTER(WHERE currency<>tx.currency)
+ INTO cnt,deb,cred,wrong_currency FROM keel_payment_ledger_postings WHERE tenant_id=tx.tenant_id AND transaction_id=tx.transaction_id;
+ IF cnt<2 OR deb<>cred OR wrong_currency<>0 THEN RAISE EXCEPTION 'posted_ledger_transaction_must_balance_in_single_currency'; END IF;
  RETURN NULL;
 END; $$;
 DROP TRIGGER IF EXISTS keel_ledger_balance_check ON keel_payment_ledger_postings;
@@ -263,3 +263,22 @@ END; $$;
 DROP TRIGGER IF EXISTS keel_ledger_transactions_immutable ON keel_payment_ledger_transactions;
 CREATE TRIGGER keel_ledger_transactions_immutable BEFORE UPDATE OR DELETE ON keel_payment_ledger_transactions
  FOR EACH ROW EXECUTE FUNCTION keel_reject_posted_transaction_mutation();
+
+CREATE OR REPLACE FUNCTION keel_reject_posted_ledger_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE tx_status TEXT;
+BEGIN
+ SELECT status INTO tx_status FROM keel_payment_ledger_transactions WHERE tenant_id=OLD.tenant_id AND transaction_id=OLD.transaction_id;
+ IF tx_status IN ('posted','reversed') THEN RAISE EXCEPTION 'posted_ledger_is_append_only_use_reversal_transaction'; END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_postings_immutable ON keel_payment_ledger_postings;
+CREATE TRIGGER keel_ledger_postings_immutable BEFORE UPDATE OR DELETE ON keel_payment_ledger_postings FOR EACH ROW EXECUTE FUNCTION keel_reject_posted_ledger_mutation();
+CREATE OR REPLACE FUNCTION keel_reject_posted_transaction_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.status IN ('posted','reversed') THEN RAISE EXCEPTION 'posted_ledger_transaction_is_append_only_use_reversal_transaction'; END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_transactions_immutable ON keel_payment_ledger_transactions;
+CREATE TRIGGER keel_ledger_transactions_immutable BEFORE UPDATE OR DELETE ON keel_payment_ledger_transactions FOR EACH ROW EXECUTE FUNCTION keel_reject_posted_transaction_mutation();
