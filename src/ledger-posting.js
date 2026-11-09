@@ -112,7 +112,7 @@ async function verifyLedgerEventChain(pool,tenantIdInput) {
   const tenantId=actorTenant(tenantIdInput);
   return withTransaction(pool,async client=>{
     const rows=await client.query(
-      'SELECT event_id,event_type,subject_id,tenant_sequence,RTRIM(previous_event_fingerprint) AS previous_event_fingerprint,RTRIM(event_fingerprint) AS event_fingerprint,payload FROM keel_ledger_events WHERE tenant_id=$1 ORDER BY tenant_sequence',
+      'SELECT event_id,event_type,subject_id,tenant_sequence,RTRIM(previous_event_fingerprint) AS previous_event_fingerprint,RTRIM(event_fingerprint) AS event_fingerprint,payload FROM keel_ledger_events WHERE tenant_id=$1 ORDER BY tenant_sequence::numeric',
       [tenantId]
     );
     let previous=null,expected=1n;
