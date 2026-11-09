@@ -845,7 +845,7 @@ const server = http.createServer(async (req,res) => {
       if(req.method==='POST'&&consumeMatch){
         const b=await readBody(req);
         const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,decodeURIComponent(consumeMatch[1]),b.journal);
-        return send(res,result.replay?200:201,{ok:true,...result});
+        return send(res,result.status==='expired'?409:(result.replay?200:201),{ok:result.status!=='expired',...result});
       }
       return send(res,404,{error:'ledger_route_not_found'});
     }
