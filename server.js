@@ -12,6 +12,7 @@ const fractureEngine = require('./src/fracture-engine');
 const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
 const regulatoryAssurance = require('./src/regulatory-assurance');
+const humanCardPairing = require('./src/human-card-pairing');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -255,6 +256,8 @@ const apiDescription = {
     '/api/health':{get:{summary:'Service and database readiness'}},
     '/api/products':{get:{summary:'Current product catalogue'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
+    '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
+    '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -308,6 +311,64 @@ const server = http.createServer(async (req,res) => {
         api:'available', leadPersistence:ok ? 'available' : 'unavailable',
         integrations:'customer-configured; no external registries connected'
       });
+    }
+    if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);
+      if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      const body=await readBody(req),cardId=cleanString(body.cardId,100);
+      if(!cardId) return send(res,400,{error:'card_id_required'});
+      const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
+      const client=await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const device=await client.query('SELECT * FROM keel_human_card_devices WHERE tenant_id=$1 AND card_id=$2 AND principal_id=$3 FOR UPDATE',[actor.tenant_id,cardId,actor.principal_id]);
+        if(!device.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'human_card_not_found'});}
+        const d=device.rows[0];
+        if(d.device_status!=='delivered_pending_pairing'||d.lifecycle_state!=='physical_card_delivered_pending_pairing'||!d.delivery_verified_at){await client.query('ROLLBACK');return send(res,409,{error:'physical_card_delivery_not_verified_or_card_not_pairable'});}
+        if(d.hardware_attestation_verified!==true||!d.hardware_attestation_verifier_id||!d.hardware_attested_at||!d.attestation_reference){await client.query('ROLLBACK');return send(res,409,{error:'independent_hardware_attestation_required'});}
+        if(!d.device_public_key||!d.key_fingerprint){await client.query('ROLLBACK');return send(res,409,{error:'device_public_key_not_provisioned'});}
+        const challenge=humanCardPairing.createPairingChallenge({tenantId:actor.tenant_id,principalId:actor.principal_id,cardId,counter:Number(d.last_challenge_counter)+1});
+        await client.query('INSERT INTO keel_human_card_pairing_challenges(tenant_id,challenge_id,card_id,principal_id,nonce_hash,expected_counter,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,challenge.challengeId,cardId,actor.principal_id,challenge.nonceHash,challenge.counter,challenge.expiresAt]);
+        await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRING_CHALLENGE_ISSUED',cardId,{challengeId:challenge.challengeId,counter:challenge.counter,expiresAt:challenge.expiresAt});
+        await client.query('COMMIT');
+        return send(res,201,{ok:true,challenge:{challengeId:challenge.challengeId,nonce:challenge.nonce,counter:challenge.counter,expiresAt:challenge.expiresAt,message:challenge.message,algorithm:'Ed25519',hardwareAttestation:'independently_verified'}});
+      } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
+    }
+    if (req.method === 'POST' && route === '/api/human-card/pairing/verify') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);
+      if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      const body=await readBody(req),challengeId=cleanString(body.challengeId,64),nonce=cleanString(body.nonce,128),signature=cleanString(body.signature,256);
+      if(!challengeId||!nonce||!signature)return send(res,400,{error:'challenge_id_nonce_and_signature_required'});
+      const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
+      const client=await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const q=await client.query('SELECT c.*,d.device_public_key,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
+        if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'pairing_challenge_not_found'});}
+        const c=q.rows[0];
+        if(c.consumed_at){await client.query('ROLLBACK');return send(res,409,{error:'pairing_challenge_already_consumed'});}
+        await client.query('UPDATE keel_human_card_pairing_challenges SET consumed_at=NOW() WHERE tenant_id=$1 AND challenge_id=$2',[actor.tenant_id,challengeId]);
+        const nonceValid=humanCardPairing.hashNonce(nonce)===c.nonce_hash;
+        const expiryIso=c.expires_at instanceof Date?c.expires_at.toISOString():new Date(c.expires_at).toISOString();
+        const expired=humanCardPairing.isExpired(expiryIso);
+        const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
+        const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
+        const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\n');
+        const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
+        if(!signatureValid){
+          await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRING_FAILED',c.card_id,{challengeId,expired,nonceValid,deviceEligible,counterValid});
+          await client.query('COMMIT');
+          return send(res,401,{error:'physical_card_pairing_proof_invalid_or_expired'});
+        }
+        await client.query("UPDATE keel_human_card_devices SET device_status='paired',lifecycle_state='physical_card_paired',paired_at=NOW(),last_challenge_counter=$3,updated_at=NOW() WHERE tenant_id=$1 AND card_id=$2",[actor.tenant_id,c.card_id,c.expected_counter]);
+        await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRED',c.card_id,{challengeId,counter:Number(c.expected_counter)});
+        await client.query('COMMIT');
+        return send(res,200,{ok:true,card:{cardId:c.card_id,status:'paired',lifecycleState:'physical_card_paired',counter:Number(c.expected_counter)},nextRequirement:'independent_recovery_setup_and_test',virtualChannel:'LOCKED'});
+      } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
     }
     if (req.method === 'GET' && route === '/api/assurance/status') {
       return send(res,200,{fabric:'Keel Assurance Fabric',version:'1.0',availability:'available',tenantIsolation:'credential-scoped',boundary:'Advisory evidence records only; no external registry verification or financial execution.'});
