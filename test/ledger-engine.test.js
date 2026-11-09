@@ -32,5 +32,5 @@ test('prevents cross-tenant reversal',()=>{
 });
 test('idempotent replay must match the exact journal fingerprint',()=>{
  const j=base();assert.equal(ledger.assertSameJournal(j,structuredClone(j)),true);
- const changed=base();changed.lines[0].amountMinor='12501';assert.equal(ledger.assertSameJournal(j,changed),false);
+ const changed=base();changed.lines[0].amountMinor='12501';changed.lines[1].amountMinor='12501';assert.equal(ledger.assertSameJournal(j,changed),false);
 });
