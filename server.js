@@ -265,6 +265,8 @@ const apiDescription = {
     '/api/human-card/recovery/requests/{requestId}/finalise':{post:{summary:'Finalise delayed recovery into replacement-card pending state'}},
     '/api/consumer/identity/provider-events':{post:{summary:'Receive signed identity-verification provider events'}},
     '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
+    '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}},
+    '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
     '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}} ,
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
