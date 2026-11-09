@@ -62,5 +62,5 @@ function evaluateRecovery({status,decision,alreadyResponded,ownerId,trusteeId,ap
  const count=approvals+1;
  return {accepted:true,status:count>=threshold?'approved_waiting_period':'pending',approvalCount:count,eligibleAt:count>=threshold?new Date(now+24*60*60*1000).toISOString():null};
 }
-function isCardUsable(state){return state==='paired';}
-module.exports={CARD_STATES,RECOVERY_MIN_DELAY_HOURS,RECOVERY_MAX_DELAY_HOURS,verifySignedEvent,validatePartnerPersonalisation,validateAttestation,validateDelivery,challenge,verifyProof,validateRecoveryGroup,evaluateRecovery,isCardUsable,normaliseCardKey,validHash};
+function isCardPaired(state){return state==='paired';}
+module.exports={CARD_STATES,RECOVERY_MIN_DELAY_HOURS,RECOVERY_MAX_DELAY_HOURS,verifySignedEvent,validatePartnerPersonalisation,validateAttestation,validateDelivery,challenge,verifyProof,validateRecoveryGroup,evaluateRecovery,isCardPaired,normaliseCardKey,validHash};
