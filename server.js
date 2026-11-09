@@ -12,12 +12,13 @@ const fractureEngine = require('./src/fracture-engine');
 const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
 const regulatoryAssurance = require('./src/regulatory-assurance');
+const paymentAuthority = require('./src/payment-authority');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/payment-authority/intents/evaluate': 30 };
 const rateBuckets = new Map();
 
 const products = [
@@ -25,7 +26,8 @@ const products = [
   { id:'capacity', name:'Keel Capacity', category:'Policy-adjusted capacity', stage:'POC', description:'Calculate capacity against versioned eligibility, encumbrance, haircut and evidence-freshness rules.', outputs:['Gross and net values','Policy adjustments','Unknowns and holds'], integration:'REST API / structured CSV' },
   { id:'scenario', name:'Keel Scenario', category:'Stress propagation', stage:'Design partner', description:'Replay declared shocks through a defined dependency graph and inspect modeled downstream effects.', outputs:['Scenario assumptions','Dependency impact','Before-and-after state'], integration:'API / partner mapping' },
   { id:'evidence', name:'Keel Evidence', category:'Evidence and audit', stage:'POC', description:'Package source references, timestamps, evidence classes, policy versions and record fingerprints.', outputs:['Evidence manifest','Decision fingerprint','Scope and limitation record'], integration:'REST API / structured CSV' },
-  { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' }
+  { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' },
+  { id:'payment-authority', name:'Keel Payment Authority & Agent Control', category:'Mandates and payment lifecycle', stage:'Foundation · non-executing', description:'Evaluate human-issued mandates, purpose and payee scope, spend limits and evidence-backed availability before any authorised provider workflow.', outputs:['Versioned mandates','Spend envelopes','Human approval boundary','Availability-aware decision','Lifecycle and recovery model'], integration:'Tenant-authenticated evaluation API; provider adapters disabled' }
 ];
 
 let poolPromise;
@@ -261,6 +263,7 @@ const apiDescription = {
     '/api/currency/accounts':{get:{summary:'List tenant simulation accounts'},post:{summary:'Create tenant simulation account'}},
     '/api/currency/transfers/prepare':{post:{summary:'Prepare non-settling conditional transfer intent'}},
     '/api/currency/transfers':{get:{summary:'List prepared simulation transfer intents'}},
+    '/api/payment-authority/intents/evaluate':{post:{summary:'Evaluate a proposed payment against tenant mandate and evidence-backed availability; non-executing'}},
     '/api/assurance/chain/verify':{get:{summary:'Verify tenant event sequence and hash chain'}},
     '/api/assurance/dockets/{docketId}/export':{get:{summary:'Export tenant-scoped docket evidence manifest'}},
     '/api/assurance/principals':{post:{summary:'Create named principal and reviewer credential'}},
@@ -704,6 +707,16 @@ const server = http.createServer(async (req,res) => {
       const [oq,mq,cq]=await Promise.all([pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT obligation_id,control_id FROM keel_regulatory_mappings WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT payload FROM keel_regulatory_controls WHERE tenant_id=$1',[actor.tenant_id])]);
       const impact=regulatoryAssurance.assessRegulatoryChange({oldVersion:b.oldVersion,newVersion:b.newVersion,obligations:oq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id})),controls:cq.rows.map(x=>x.payload)});
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
+    }
+    if (req.method === 'POST' && route === '/api/payment-authority/intents/evaluate') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded',message:'Please wait before submitting another request.'},undefined,{'Retry-After':'60'});
+      const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
+      try {
+        const body=await readBody(req);
+        const result=paymentAuthority.evaluatePayment({tenantId:actor.tenant_id,mandate:body.mandate,intent:body.intent,availability:body.availability,policy:body.policy,now:body.now});
+        return send(res,200,{ok:true,tenantScoped:true,execution:'DISABLED',result});
+      } catch(error) { return send(res,400,{error:'payment_evaluation_invalid',message:error.message}); }
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
