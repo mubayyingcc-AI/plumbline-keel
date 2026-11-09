@@ -216,6 +216,15 @@ async function createReservation(pool, tenantIdInput, input) {
   return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId);
     if (!account.is_reservable) fail('ledger_account_not_reservable', 409);
+    const replay=await client.query(
+      'SELECT reservation_id,account_id,currency,amount_minor::text,purpose,status FROM keel_ledger_reservations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
+      [tenantId,idem]
+    );
+    if(replay.rowCount){
+      const p=replay.rows[0];
+      if(p.reservation_id!==reservationId||p.account_id!==accountId||p.currency!==account.currency||p.amount_minor!==value.toString()||p.purpose!==purpose)fail('reservation_idempotency_conflict',409);
+      return {reservationId:p.reservation_id,status:p.status,replay:true};
+    }
     const balance = await refreshProjection(client, tenantId, account);
     const reserved = await activeReservations(client, tenantId, accountId);
     if (balance - reserved < value && !account.allow_negative_balance) fail('ledger_insufficient_available_balance', 409);
