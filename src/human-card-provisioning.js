@@ -59,7 +59,7 @@ function evaluateVirtualEligibility(facts){
  ['mandateAndSpendPolicyReady',facts.mandateAndSpendPolicyReady===true]
  ];
  const failed=checks.filter(([,ok])=>!ok).map(([name])=>name);
- return Object.freeze({eligible:failed.length===0,failedChecks:failed,decision:'HOLD',note:'Eligibility is a prerequisite assessment only; an authorised issuer must independently approve and provision the virtual credential.'});
+ return Object.freeze({eligible:failed.length===0,failedChecks:failed,decision:failed.length===0?'ELIGIBLE_FOR_ISSUER_REVIEW':'HOLD',note:'Eligibility is a prerequisite assessment only; an authorised issuer must independently approve and provision the virtual credential.'});
 }
 function normalizeOrderRequest(input){
  const region=String(input&&input.deliveryRegion||'').trim().toUpperCase();
