@@ -52,9 +52,16 @@ async function handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBro
   const client=await pool.connect();
   try{
    await client.query('BEGIN');
+   const locked=await client.query('SELECT account_status,identity_expires_at FROM keel_consumer_accounts WHERE consumer_id=$1 FOR UPDATE',[account.consumer_id]);
+   if(!locked.rowCount||locked.rows[0].account_status!=='identity_verified'||!locked.rows[0].identity_expires_at||new Date(locked.rows[0].identity_expires_at)<=new Date()){
+    await client.query('ROLLBACK');return send(res,403,{error:'current_verified_identity_required'});
+   }
    const inserted=await client.query("INSERT INTO keel_human_card_orders(order_id,idempotency_key,consumer_id,card_product,delivery_country,status) VALUES($1,$2,$3,$4,$5,'submitted') ON CONFLICT(consumer_id,idempotency_key) DO NOTHING RETURNING order_id",[crypto.randomUUID(),idempotency,account.consumer_id,request.cardProduct,request.deliveryRegion]);
    const saved=await client.query('SELECT order_id,card_product,delivery_country,status,created_at FROM keel_human_card_orders WHERE consumer_id=$1 AND idempotency_key=$2',[account.consumer_id,idempotency]);
    if(!saved.rowCount)throw new Error('card_order_request_persistence_failed');
+   if(saved.rows[0].card_product!==request.cardProduct||saved.rows[0].delivery_country!==request.deliveryRegion){
+    await client.query('ROLLBACK');return send(res,409,{error:'idempotency_key_reused_with_different_card_order'});
+   }
    if(inserted.rowCount)await appendConsumerEvent(client,crypto,{eventType:'HUMAN_CARD_ORDER_REQUESTED',subjectId:account.consumer_id,payload:{orderId:saved.rows[0].order_id,cardProduct:request.cardProduct,deliveryCountry:request.deliveryRegion}});
    await client.query('COMMIT');
    return send(res,inserted.rowCount?202:200,{ok:true,duplicate:!inserted.rowCount,order:saved.rows[0],physicalCardOrdered:false,nextStep:'card_partner_acceptance',notice:'This is a Keel order request only. No card has been manufactured, dispatched or charged for. A verified card partner must accept it before fulfilment.'});
