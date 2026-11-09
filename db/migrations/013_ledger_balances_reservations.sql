@@ -72,16 +72,19 @@ CREATE TRIGGER keel_ledger_events_no_mutation
 INSERT INTO keel_ledger_account_balances
   (tenant_id,account_id,currency,debit_total,credit_total,normal_balance_minor,version)
 SELECT a.tenant_id,a.account_id,a.currency,
-       COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0),
-       COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='credit'),0),
+       COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='debit'),0),
+       COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='credit'),0),
        CASE WHEN a.normal_side='debit'
-            THEN COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0)-COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='credit'),0)
-            ELSE COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='credit'),0)-COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0)
+            THEN COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='debit'),0)-COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='credit'),0)
+            ELSE COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='credit'),0)-COALESCE(SUM(p.amount_minor) FILTER(WHERE p.side='debit'),0)
        END,1
 FROM keel_ledger_accounts a
-LEFT JOIN keel_ledger_lines l ON l.tenant_id=a.tenant_id AND l.account_id=a.account_id
-LEFT JOIN keel_ledger_journals j ON j.tenant_id=l.tenant_id AND j.journal_id=l.journal_id AND j.status='posted'
-WHERE l.journal_id IS NULL OR j.status='posted'
+LEFT JOIN (
+  SELECT l.tenant_id,l.account_id,l.side,l.amount_minor
+  FROM keel_ledger_lines l
+  JOIN keel_ledger_journals j ON j.tenant_id=l.tenant_id AND j.journal_id=l.journal_id
+  WHERE j.status='posted'
+) p ON p.tenant_id=a.tenant_id AND p.account_id=a.account_id
 GROUP BY a.tenant_id,a.account_id,a.currency,a.normal_side
 ON CONFLICT(tenant_id,account_id) DO NOTHING;
 
@@ -95,6 +98,7 @@ BEGIN
     'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_events'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I',t||'_tenant_isolation',t);
     EXECUTE format(
       'CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid)',
