@@ -212,17 +212,21 @@ async function createReservation(pool, tenantIdInput, input) {
   const purpose = typeof input.purpose === 'string' ? input.purpose.trim() : '';
   if (!purpose || purpose.length > 300) fail('reservation_purpose_required');
   const expiresAt = input.expiresAt || null;
-  if (expiresAt !== null && !Number.isFinite(Date.parse(expiresAt))) fail('reservation_expiry_invalid');
+  if (expiresAt !== null && (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt)<=Date.now())) fail('reservation_expiry_invalid');
   return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId);
     if (!account.is_reservable) fail('ledger_account_not_reservable', 409);
     const replay=await client.query(
-      'SELECT reservation_id,account_id,currency,amount_minor::text,purpose,status FROM keel_ledger_reservations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
+      'SELECT reservation_id,account_id,currency,amount_minor::text,purpose,status,expires_at FROM keel_ledger_reservations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
       [tenantId,idem]
     );
     if(replay.rowCount){
       const p=replay.rows[0];
       if(p.reservation_id!==reservationId||p.account_id!==accountId||p.currency!==account.currency||p.amount_minor!==value.toString()||p.purpose!==purpose)fail('reservation_idempotency_conflict',409);
+      if(p.status==='active'&&p.expires_at&&new Date(p.expires_at).getTime()<=Date.now()){
+        await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,p.reservation_id]);
+        return {reservationId:p.reservation_id,status:'expired',replay:true};
+      }
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
     const balance = await refreshProjection(client, tenantId, account);
@@ -265,18 +269,19 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
 async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
   requirePool(pool);
   const tenantId=actorTenant(tenantIdInput);
+  const validatedJournal=validateJournal({...journal,tenantId});
   if(typeof reservationId!=='string'||!reservationId.trim())fail('reservation_id_required');
   return withTransaction(pool,async client=>{
     const r=await client.query('SELECT * FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
     if(!r.rowCount)fail('reservation_not_found',404);
     const reservation=r.rows[0];
     if(reservation.status==='consumed') {
-      const existing=await client.query('SELECT journal_id,fingerprint FROM keel_ledger_journals WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,journal.idempotencyKey]);
-      if(existing.rowCount&&existing.rows[0].journal_id===journal.journalId)return {reservationId,status:'consumed',journalId:journal.journalId,replay:true};
+      const existing=await client.query('SELECT journal_id,fingerprint FROM keel_ledger_journals WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,validatedJournal.idempotencyKey]);
+      if(existing.rowCount&&existing.rows[0].journal_id===validatedJournal.journalId&&existing.rows[0].fingerprint===validatedJournal.fingerprint)return {reservationId,status:'consumed',journalId:validatedJournal.journalId,replay:true};
       fail('reservation_already_consumed',409);
     }
     if(reservation.status!=='active'||(reservation.expires_at&&new Date(reservation.expires_at).getTime()<=Date.now()))fail('reservation_not_active',409);
-    const checked=validateJournal({...journal,tenantId});
+    const checked=validatedJournal;
     const account=await lockAccount(client,tenantId,reservation.account_id);
     let reduction=0n;
     for(const line of checked.lines){
