@@ -14,7 +14,7 @@ test('personalisation only accepts Ed25519 secure-element public keys and hashes
  const e=s.validatePartnerPersonalisation({partnerId:'p',eventId:'event-123456',orderId:'o',cardReference:'private-ref',status:'personalised',devicePublicKey:key},{partnerId:'p'});
  assert.match(e.keyFingerprint,/^[a-f0-9]{64}$/);assert.notEqual(e.cardReferenceHash,'private-ref');
  const rsa=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'pem'});
- assert.throws(()=>s.validatePartnerPersonalisation({partnerId:'p',eventId:'event-123456',orderId:'o',cardReference:'ref',status:'personalised',devicePublicKey:rsa},{partnerId:'p'}),/ed25519/);
+ assert.throws(()=>s.validatePartnerPersonalisation({partnerId:'p',eventId:'event-123456',orderId:'o',cardReference:'private-ref',status:'personalised',devicePublicKey:rsa},{partnerId:'p'}),/ed25519/);
 });
 test('hardware attestation requires independent verifier, matching key fingerprint, evidence hash and expiry',()=>{
  const key=crypto.generateKeyPairSync('ed25519').publicKey.export({type:'spki',format:'pem'}),finger=s.normaliseCardKey(key).fingerprint;
