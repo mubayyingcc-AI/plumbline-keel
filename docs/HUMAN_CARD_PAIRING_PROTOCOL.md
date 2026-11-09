@@ -71,3 +71,5 @@ Keel stores public keys and references only. It must never store private keys, s
 - Hardware personalisation, card secure-element applet, secure boot, certificate authority, attestation verifier, trusted delivery integration and partner provisioning adapter are not implemented.
 - Migrations 007 and 008 are not applied to Railway; no production deployment is made.
 - No live physical or virtual payment credential can be activated by these routes.
+
+Before accepting a signature, Keel recomputes SHA-256 over the registered Ed25519 SubjectPublicKeyInfo DER and compares it with the stored device key fingerprint. A mismatch fails closed. This is a key-identity consistency check, not proof that hardware is genuine; hardware attestation remains a separate trusted-provisioning requirement.
