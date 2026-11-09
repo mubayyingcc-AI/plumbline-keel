@@ -12,7 +12,10 @@ test('only a valid Ed25519 signature verifies',()=>{
  const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519');
  const challenge=p.createPairingChallenge({tenantId:'t',principalId:'p',cardId:'card-12345',counter:7});
  const signature=crypto.sign(null,Buffer.from(challenge.message),privateKey).toString('base64url');
- const publicKeyPem=publicKey.export({type:'spki',format:'pem'});\n assert.equal(p.verifyPairingSignature({publicKeyPem,message:challenge.message,signatureBase64url:signature}),true);\n assert.match(p.fingerprintPublicKey(publicKeyPem),/^[a-f0-9]{64}$/);\n assert.equal(p.fingerprintPublicKey(publicKeyPem),crypto.createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex'));
+ const publicKeyPem=publicKey.export({type:'spki',format:'pem'});
+ assert.equal(p.verifyPairingSignature({publicKeyPem,message:challenge.message,signatureBase64url:signature}),true);
+ assert.match(p.fingerprintPublicKey(publicKeyPem),/^[a-f0-9]{64}$/);
+ assert.equal(p.fingerprintPublicKey(publicKeyPem),crypto.createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex'));
  assert.equal(p.verifyPairingSignature({publicKeyPem:publicKey.export({type:'spki',format:'pem'}),message:challenge.message+'tampered',signatureBase64url:signature}),false);
 });
 test('wrong key, malformed signature and non-Ed25519 key fail closed',()=>{
@@ -32,6 +35,7 @@ test('nonce validation and expiry fail closed',()=>{
  assert.equal(p.isExpired('not-a-date',1000),true);
 });
 test('challenge inputs reject malformed identity and counter',()=>{
- assert.throws(()=>p.createPairingChallenge({tenantId:'bad\ntenant',principalId:'p',cardId:'c',counter:1}),/pairing_tenant_id_invalid/);
+ assert.throws(()=>p.createPairingChallenge({tenantId:'bad
+tenant',principalId:'p',cardId:'c',counter:1}),/pairing_tenant_id_invalid/);
  assert.throws(()=>p.createPairingChallenge({tenantId:'t',principalId:'p',cardId:'c',counter:0}),/pairing_counter_invalid/);
 });
