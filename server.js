@@ -285,7 +285,7 @@ const apiDescription = {
     '/api/ledger/accounts/{accountId}/balance':{get:{summary:'Read ledger, reserved and available balances'}},
     '/api/ledger/reservations':{post:{summary:'Reserve available ledger funds'}},
     '/api/ledger/reservations/{reservationId}/release':{post:{summary:'Release an active funds reservation'}},
-    '/api/ledger/reservations/{reservationId}/consume':{post:{summary:'Atomically consume a reservation with a journal'}}
+    '/api/ledger/reservations/{reservationId}/consume':{post:{summary:'Atomically consume a reservation with a journal'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
