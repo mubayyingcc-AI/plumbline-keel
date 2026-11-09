@@ -13,8 +13,8 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
   const suffix=crypto.randomUUID().replace(/-/g,'').slice(0,12);
   try {
     await pool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,'Keel ledger integration '+suffix,'ledger-test-'+suffix]);
-    await posting.createAccount(pool,tenantId,{accountId:'cash-'+suffix,accountCode:'1000-'+suffix,accountName:'Cash asset',accountClass:'asset',currency:'USD',normalSide:'debit'});
-    await posting.createAccount(pool,tenantId,{accountId:'customer-liability-'+suffix,accountCode:'2000-'+suffix,accountName:'Customer funds liability',accountClass:'liability',currency:'USD',normalSide:'credit',isReservable:true});
+    await posting.createAccount(pool,tenantId,{accountId:'cash-'+suffix,accountCode:'1000-'+suffix,accountName:'Cash asset',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
+    await posting.createAccount(pool,tenantId,{accountId:'customer-liability-'+suffix,accountCode:'2000-'+suffix,accountName:'Customer funds liability',accountClass:'liability',currency:'USD',currencyExponent:2,normalSide:'credit',isReservable:true});
     const cash='cash-'+suffix,liability='customer-liability-'+suffix;
     const funding={journalId:'fund-'+suffix,idempotencyKey:'funding-key-'+suffix+'-000000',description:'Integration funding',sourceRef:'test:funding:'+suffix,effectiveAt:new Date().toISOString(),lines:[
       {accountId:cash,side:'debit',currency:'USD',amountMinor:'1000'},
@@ -61,7 +61,7 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
 
     const reversalCash='reversal-cash-'+suffix, reversalEquity='reversal-equity-'+suffix;
     await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',normalSide:'debit'});
-    await posting.createAccount(pool,tenantId,{accountId:reversalEquity,accountCode:'4000-'+suffix,accountName:'Reversal test equity',accountClass:'equity',currency:'USD',normalSide:'credit'});
+    await posting.createAccount(pool,tenantId,{accountId:reversalEquity,accountCode:'4000-'+suffix,accountName:'Reversal test equity',accountClass:'equity',currency:'USD',currencyExponent:2,normalSide:'credit'});
     const original={tenantId,journalId:'original-'+suffix,idempotencyKey:'original-key-'+suffix+'-000000',description:'Original journal for reversal',sourceRef:'test:reversal:'+suffix,effectiveAt:new Date().toISOString(),lines:[
       {accountId:reversalCash,side:'debit',currency:'USD',amountMinor:'50'},
       {accountId:reversalEquity,side:'credit',currency:'USD',amountMinor:'50'}
