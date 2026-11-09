@@ -281,6 +281,7 @@ const apiDescription = {
     '/api/partners/card-delivery/events':{post:{summary:'Receive signed independent card delivery events'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
+    '/api/ledger/events/verify':{get:{summary:'Verify the tenant append-only ledger event hash chain'}},
     '/api/ledger/journals':{post:{summary:'Atomically post an immutable balanced journal'}},
     '/api/ledger/accounts/{accountId}/balance':{get:{summary:'Read ledger, reserved and available balances'}},
     '/api/ledger/reservations':{post:{summary:'Reserve available ledger funds'}},
@@ -817,6 +818,10 @@ const server = http.createServer(async (req,res) => {
         if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'ledger_account_admin_required'});
         const account=await ledgerPosting.createAccount(pool,actor.tenant_id,await readBody(req));
         return send(res,201,{ok:true,account});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/events/verify'){
+        const verification=await ledgerPosting.verifyLedgerEventChain(pool,actor.tenant_id);
+        return send(res,verification.valid?200:409,{ok:verification.valid,verification});
       }
       if(req.method==='GET'&&route==='/api/ledger/accounts'){
         const accounts=await ledgerPosting.listAccounts(pool,actor.tenant_id);
