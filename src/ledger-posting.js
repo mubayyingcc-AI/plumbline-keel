@@ -73,6 +73,8 @@ async function activeReservations(client, tenantId, accountId) {
 }
 async function postJournalWithClient(client, tenantId, input) {
   const journal = validateJournal({ ...input, tenantId });
+  const existing = await client.query('SELECT journal_id,fingerprint,status FROM keel_ledger_journals WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',[tenantId,journal.idempotencyKey]);
+  if (existing.rowCount) { const prior=existing.rows[0]; if(prior.fingerprint!==journal.fingerprint||prior.journal_id!==journal.journalId)fail('ledger_idempotency_conflict',409); if(prior.status!=='posted')fail('ledger_idempotency_incomplete',409); return {journalId:prior.journal_id,fingerprint:journal.fingerprint,status:'posted',replay:true}; }
   // Lock accounts in stable lexical order to reduce deadlock risk.
   const ids = [...new Set(journal.lines.map(line => line.accountId))].sort();
   const accounts = new Map();
@@ -111,6 +113,8 @@ async function postJournalWithClient(client, tenantId, input) {
     );
   }
 
+  // Post inside this transaction before refreshing projections; deferred SQL constraints independently verify balance at COMMIT.
+  await client.query("UPDATE keel_ledger_journals SET status='posted',posted_at=NOW() WHERE tenant_id=$1 AND journal_id=$2 AND status='draft'",[tenantId,journal.journalId]);
   // Refresh each account projection under the account row lock and protect active reservations.
   for (const id of ids) {
     const account = accounts.get(id);
@@ -118,17 +122,14 @@ async function postJournalWithClient(client, tenantId, input) {
     const reserved = await activeReservations(client, tenantId, id);
     if (!account.allow_negative_balance && balance < reserved) fail('ledger_posting_would_breach_active_reservations', 409);
   }
-  await client.query(
-    "UPDATE keel_ledger_journals SET status='posted',posted_at=NOW() WHERE tenant_id=$1 AND journal_id=$2 AND status='draft'",
-    [tenantId,journal.journalId]
-  );
   return { journalId: journal.journalId, fingerprint: journal.fingerprint, status: 'posted', replay: false };
 }
-async function withTransaction(pool, work) {
+async function withTransaction(pool, work, tenantId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+    if (tenantId) await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
     const result = await work(client);
     await client.query('COMMIT');
     return result;
@@ -167,12 +168,12 @@ async function createAccount(pool, tenantIdInput, account) {
       [tenantId,accountId,code,name,accountClass,currency,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
     );
     return { accountId, currency, accountClass, normalSide, status: 'active' };
-  });
+  }, tenantId);
 }
 async function postJournal(pool, tenantIdInput, journal) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
-  return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal));
+  return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal), tenantId);
 }
 async function getAccountBalance(pool, tenantIdInput, accountId) {
   requirePool(pool);
@@ -230,7 +231,7 @@ async function createReservation(pool, tenantIdInput, input) {
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
     return {reservationId,status:'active',replay:false};
-  });
+  }, tenantId);
 }
 async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
   requirePool(pool);
@@ -244,7 +245,7 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
     if(row.rows[0].status!=='active')fail('reservation_not_active',409);
     await client.query("UPDATE keel_ledger_reservations SET status='released',closed_at=NOW(),close_reason=$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),reason.trim()]);
     return {reservationId,status:'released',replay:false};
-  });
+  }, tenantId);
 }
 async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
   requirePool(pool);
@@ -269,9 +270,9 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
       reduction += line.side===account.normal_side ? -n : n;
     }
     if(reduction!==-BigInt(reservation.amount_minor))fail('reservation_journal_amount_mismatch',409);
+    await client.query("UPDATE keel_ledger_reservations SET status='consumed',closed_at=NOW(),close_reason='consumed_by_journal:'||$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),checked.journalId]);
     const posted=await postJournalWithClient(client,tenantId,journal);
-    await client.query("UPDATE keel_ledger_reservations SET status='consumed',closed_at=NOW(),close_reason='consumed_by_journal:'||$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),posted.journalId]);
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
-  });
+  }, tenantId);
 }
 module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation};
