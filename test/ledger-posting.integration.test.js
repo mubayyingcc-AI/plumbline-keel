@@ -15,6 +15,8 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     await pool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,'Keel ledger integration '+suffix,'ledger-test-'+suffix]);
     await posting.createAccount(pool,tenantId,{accountId:'cash-'+suffix,accountCode:'1000-'+suffix,accountName:'Cash asset',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
     await posting.createAccount(pool,tenantId,{accountId:'customer-liability-'+suffix,accountCode:'2000-'+suffix,accountName:'Customer funds liability',accountClass:'liability',currency:'USD',currencyExponent:2,normalSide:'credit',isReservable:true});
+    await assert.rejects(()=>posting.createAccount(pool,tenantId,{accountId:'bad-scale-'+suffix,accountCode:'9000-'+suffix,accountName:'Invalid scale',accountClass:'asset',currency:'USD',currencyExponent:7,normalSide:'debit'}),/ledger_account_currency_exponent_invalid/);
+    assert.equal((await posting.listAccounts(pool,tenantId)).every(a=>a.currencyExponent===2),true);
     const cash='cash-'+suffix,liability='customer-liability-'+suffix;
     const funding={journalId:'fund-'+suffix,idempotencyKey:'funding-key-'+suffix+'-000000',description:'Integration funding',sourceRef:'test:funding:'+suffix,effectiveAt:new Date().toISOString(),lines:[
       {accountId:cash,side:'debit',currency:'USD',amountMinor:'1000'},
