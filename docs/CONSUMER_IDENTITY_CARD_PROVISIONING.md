@@ -58,6 +58,7 @@ Migration 010 creates consumer account, external identity mapping, identity-prov
 
 ## 7. Configuration required before a provider sandbox can be connected
 - `KEEL_IDENTITY_PROVIDER_ID`
+- `KEEL_IDENTITY_PROVIDER_ISSUER` (must exactly match the consumer session issuer)
 - `KEEL_IDENTITY_WEBHOOK_SECRET` (32+ random bytes)
 - `KEEL_CONSUMER_SUBJECT_HMAC_KEY` (32+ random bytes; stable/versioned)
 - `KEEL_CONSUMER_SESSION_PUBLIC_KEY_PEM`
