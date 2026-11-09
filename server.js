@@ -230,7 +230,7 @@ async function authenticateTenant(req) {
   if(!token) return null;
   const pool=await dbPool(); if(!pool) return null;
   const hash=tenantSecurity.hashPresentedKey(token);
-  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email,p.identity_assurance FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
   if(!result.rowCount) return null;
   await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
   return result.rows[0];
