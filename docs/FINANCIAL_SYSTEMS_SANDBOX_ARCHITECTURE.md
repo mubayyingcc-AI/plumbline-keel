@@ -140,4 +140,4 @@ C. Keel Connect: OpenAPI, ISO 20022 adapters, secure file/webhook contracts and 
 D. Institutional workspace: onboarding, permissions, run history, defect workflow and evidence export.  
 E. Execute Keel's own adversarial test suite before external design-partner onboarding.
 
-The current website's synthetic collateral evaluator is not yet a full financial-systems sandbox. Ledger, treasury, payment, collateral and DH-ATM tests must remain Not tested until connected to their real engine implementations.
+The current public runner exposes KFS-001 and KFS-002 through POST /api/sandbox/runs and calls the existing collateral evaluator. It returns a stateless, unsigned KFTR fingerprint; public runs are not persisted and do not create an institutional audit history. Ledger, treasury, payment, collateral and DH-ATM tests must remain Not tested until connected to their real engine implementations.
