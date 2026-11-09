@@ -37,30 +37,50 @@ async function lockAccount(client, tenantId, accountId) {
   if (result.rows[0].status !== 'active') fail('ledger_account_not_active', 409);
   return result.rows[0];
 }
-async function refreshProjection(client, tenantId, account) {
-  const result = await client.query(
-    `SELECT
-       COALESCE(SUM(l.amount_minor) FILTER (WHERE l.side='debit'),0)::text AS debit_total,
-       COALESCE(SUM(l.amount_minor) FILTER (WHERE l.side='credit'),0)::text AS credit_total
-     FROM keel_ledger_lines l
-     JOIN keel_ledger_journals j ON j.tenant_id=l.tenant_id AND j.journal_id=l.journal_id
-     WHERE l.tenant_id=$1 AND l.account_id=$2 AND j.status='posted'`,
-    [tenantId, account.account_id]
+async function readProjection(client, tenantId, account) {
+  const result=await client.query(
+    'SELECT debit_total::text,credit_total::text,normal_balance_minor::text,version FROM keel_ledger_account_balances WHERE tenant_id=$1 AND account_id=$2',
+    [tenantId,account.account_id]
   );
-  const debit = BigInt(result.rows[0].debit_total);
-  const credit = BigInt(result.rows[0].credit_total);
-  const balance = normalBalance(account, debit, credit);
-  if (balance < 0n && !account.allow_negative_balance) fail('ledger_account_insufficient_funds', 409);
-  await client.query(
-    `INSERT INTO keel_ledger_account_balances(tenant_id,account_id,currency,debit_total,credit_total,normal_balance_minor,version,updated_at)
-     VALUES($1,$2,$3,$4,$5,$6,1,NOW())
-     ON CONFLICT(tenant_id,account_id) DO UPDATE SET
-       debit_total=EXCLUDED.debit_total,credit_total=EXCLUDED.credit_total,
-       normal_balance_minor=EXCLUDED.normal_balance_minor,
-       version=keel_ledger_account_balances.version+1,updated_at=NOW()`,
-    [tenantId, account.account_id, account.currency, debit.toString(), credit.toString(), balance.toString()]
+  if(!result.rowCount)fail('ledger_balance_projection_missing',503);
+  const row=result.rows[0];
+  return {debit:BigInt(row.debit_total),credit:BigInt(row.credit_total),balance:BigInt(row.normal_balance_minor),version:Number(row.version)};
+}
+async function applyJournalProjection(client, tenantId, account, lines) {
+  let debit=0n,credit=0n;
+  for(const line of lines){
+    if(line.accountId!==account.account_id)continue;
+    if(line.side==='debit')debit+=BigInt(line.amountMinor);else credit+=BigInt(line.amountMinor);
+  }
+  const delta=account.normal_side==='debit'?debit-credit:credit-debit;
+  const result=await client.query(
+    `UPDATE keel_ledger_account_balances SET
+       debit_total=debit_total+$3,credit_total=credit_total+$4,
+       normal_balance_minor=normal_balance_minor+$5,version=version+1,updated_at=NOW()
+     WHERE tenant_id=$1 AND account_id=$2
+     RETURNING normal_balance_minor::text`,
+    [tenantId,account.account_id,debit.toString(),credit.toString(),delta.toString()]
   );
+  if(!result.rowCount)fail('ledger_balance_projection_missing',503);
+  const balance=BigInt(result.rows[0].normal_balance_minor);
+  if(balance<0n&&!account.allow_negative_balance)fail('ledger_account_insufficient_funds',409);
   return balance;
+}
+async function verifyAccountProjection(client,tenantId,account) {
+  const projection=await readProjection(client,tenantId,account);
+  const totals=await client.query(
+    `SELECT COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0)::text AS debit_total,
+            COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='credit'),0)::text AS credit_total
+       FROM keel_ledger_lines l JOIN keel_ledger_journals j
+         ON j.tenant_id=l.tenant_id AND j.journal_id=l.journal_id
+      WHERE l.tenant_id=$1 AND l.account_id=$2 AND j.status='posted'`,
+    [tenantId,account.account_id]
+  );
+  const debit=BigInt(totals.rows[0].debit_total),credit=BigInt(totals.rows[0].credit_total);
+  const computed=normalBalance(account,debit,credit);
+  return {matches:projection.debit===debit&&projection.credit===credit&&projection.balance===computed,
+    projection:{debitTotalMinor:projection.debit.toString(),creditTotalMinor:projection.credit.toString(),balanceMinor:projection.balance.toString(),version:projection.version},
+    computed:{debitTotalMinor:debit.toString(),creditTotalMinor:credit.toString(),balanceMinor:computed.toString()}};
 }
 async function activeReservations(client, tenantId, accountId) {
   const r = await client.query(
@@ -131,7 +151,7 @@ async function postJournalWithClient(client, tenantId, input) {
   // Refresh each account projection under the account row lock and protect active reservations.
   for (const id of ids) {
     const account = accounts.get(id);
-    const balance = await refreshProjection(client, tenantId, account);
+    const balance = await applyJournalProjection(client, tenantId, account, journal.lines);
     const reserved = await activeReservations(client, tenantId, id);
     if (!account.allow_negative_balance && balance < reserved) fail('ledger_posting_would_breach_active_reservations', 409);
   }
@@ -187,6 +207,7 @@ async function createAccount(pool, tenantIdInput, account) {
        VALUES($1,$2,$3,$4,$5,$6,$7,'active',$8,$9)`,
       [tenantId,accountId,code,name,accountClass,currency,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
     );
+    await client.query('INSERT INTO keel_ledger_account_balances(tenant_id,account_id,currency) VALUES($1,$2,$3)',[tenantId,accountId,currency]);
     return { accountId, currency, accountClass, normalSide, status: 'active' };
   }, tenantId);
 }
@@ -201,12 +222,12 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
   if (typeof accountId !== 'string' || !accountId.trim()) fail('ledger_account_id_required');
   return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId.trim());
-    const balance = await refreshProjection(client, tenantId, account);
+    const projection = await readProjection(client, tenantId, account);
+    const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId.trim());
-    const totals = await client.query('SELECT debit_total::text,credit_total::text FROM keel_ledger_account_balances WHERE tenant_id=$1 AND account_id=$2',[tenantId,accountId.trim()]);
     return {
       accountId: account.account_id, currency: account.currency, normalSide: account.normal_side,
-      debitTotalMinor: totals.rows[0].debit_total, creditTotalMinor: totals.rows[0].credit_total,
+      debitTotalMinor: projection.debit.toString(), creditTotalMinor: projection.credit.toString(),
       ledgerBalanceMinor: balance.toString(), reservedMinor: reserved.toString(),
       availableMinor: (balance-reserved).toString()
     };
@@ -242,7 +263,8 @@ async function createReservation(pool, tenantIdInput, input) {
       }
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
-    const balance = await refreshProjection(client, tenantId, account);
+    const projection = await readProjection(client, tenantId, account);
+    const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId);
     if (balance - reserved < value && !account.allow_negative_balance) fail('ledger_insufficient_available_balance', 409);
     const inserted = await client.query(
@@ -308,4 +330,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation,normalBalance,amount};
+module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount};
