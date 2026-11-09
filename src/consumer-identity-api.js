@@ -1,5 +1,7 @@
 'use strict';
 const identity=require('./consumer-identity');
+const sessionVerifier=require('./consumer-session');
+const cardProvisioning=require('./human-card-provisioning');
 async function readRaw(req,max=262144){
  return new Promise((resolve,reject)=>{
   const chunks=[];let size=0,done=false;
@@ -8,8 +10,56 @@ async function readRaw(req,max=262144){
   req.on('error',e=>{if(!done)reject(e);});
  });
 }
-async function handle({req,res,route,send,dbPool,crypto}){
- if(req.method!=='POST'||route!=='/api/consumer/identity/provider-events')return false;
+async function appendConsumerEvent(client,crypto,{eventType,subjectId,payload}){
+ await client.query('SELECT pg_advisory_xact_lock(74021011)');
+ const last=await client.query('SELECT event_fingerprint FROM keel_consumer_event_chain ORDER BY sequence DESC LIMIT 1');
+ const previous=last.rowCount?last.rows[0].event_fingerprint:null,eventId=crypto.randomUUID();
+ const canonical=JSON.stringify({eventId,eventType,subjectId,previous,payload});
+ const fingerprint=crypto.createHash('sha256').update(canonical).digest('hex');
+ await client.query('INSERT INTO keel_consumer_event_chain(event_id,event_type,subject_id,previous_fingerprint,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6)',[eventId,eventType,subjectId,previous,fingerprint,JSON.stringify(payload)]);
+}
+async function consumerActor(req,{crypto}){
+ const token=String(req.headers.authorization||'').match(/^Bearer ([A-Za-z0-9_.-]+)$/)?.[1];
+ if(!token)throw new Error('consumer_session_required');
+ const cfg={publicKeyPem:process.env.KEEL_CONSUMER_SESSION_PUBLIC_KEY_PEM,issuer:process.env.KEEL_CONSUMER_SESSION_ISSUER,audience:process.env.KEEL_CONSUMER_SESSION_AUDIENCE,keyId:process.env.KEEL_CONSUMER_SESSION_KEY_ID};
+ if(!cfg.publicKeyPem||!cfg.issuer||!cfg.audience||!cfg.keyId)throw new Error('consumer_session_verification_not_configured');
+ const verified=sessionVerifier.verifyConsumerSession(token,cfg);
+ const secret=process.env.KEEL_IDENTITY_WEBHOOK_SECRET,provider=process.env.KEEL_IDENTITY_PROVIDER_ID;
+ if(!secret||!provider)throw new Error('identity_provider_integration_not_configured');
+ const subjectHmac=crypto.createHmac('sha256',secret).update(provider).update(':').update(verified.subject).digest('hex');
+ return {provider,subjectHmac,tokenId:verified.tokenId};
+}
+async function handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBrowser}){
+ const identityWebhook=req.method==='POST'&&route==='/api/consumer/identity/provider-events';
+ const profile=req.method==='GET'&&route==='/api/consumer/me';
+ const order=req.method==='POST'&&route==='/api/consumer/card-orders';
+ if(!identityWebhook&&!profile&&!order)return false;
+ if(!identityWebhook){
+  if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+  let actor;try{actor=await consumerActor(req,{crypto});}catch(e){return send(res,401,{error:e.message});}
+  const pool=await dbPool();if(!pool)return send(res,503,{error:'consumer_identity_storage_unavailable'});
+  const q=await pool.query("SELECT a.consumer_id,a.account_status,a.identity_assurance,a.identity_expires_at FROM keel_consumer_external_identities i JOIN keel_consumer_accounts a ON a.consumer_id=i.consumer_id WHERE i.provider_id=$1 AND i.subject_hmac=$2",[actor.provider,actor.subjectHmac]);
+  if(!q.rowCount)return send(res,404,{error:'consumer_account_not_found'});
+  const account=q.rows[0];
+  if(profile){
+   const orders=await pool.query('SELECT order_id,card_product,delivery_country,status,created_at,updated_at FROM keel_human_card_orders WHERE consumer_id=$1 ORDER BY created_at DESC LIMIT 20',[account.consumer_id]);
+   return send(res,200,{consumer:{consumerId:account.consumer_id,accountStatus:account.account_status,identityAssurance:account.identity_assurance,identityExpiresAt:account.identity_expires_at},cardOrders:orders.rows,notice:'No identity documents, home address or card credentials are returned.'});
+  }
+  if(account.account_status!=='identity_verified'||!account.identity_expires_at||new Date(account.identity_expires_at)<=new Date())return send(res,403,{error:'current_verified_identity_required'});
+  let request;try{request=cardProvisioning.normalizeOrderRequest(await readBody(req));}catch(e){return send(res,400,{error:e.message});}
+  const idempotency=String(req.headers['idempotency-key']||'');
+  if(!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotency))return send(res,400,{error:'valid_idempotency_key_required'});
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   const inserted=await client.query("INSERT INTO keel_human_card_orders(order_id,idempotency_key,consumer_id,card_product,delivery_country,status) VALUES($1,$2,$3,$4,$5,'submitted') ON CONFLICT(consumer_id,idempotency_key) DO NOTHING RETURNING order_id",[crypto.randomUUID(),idempotency,account.consumer_id,request.cardProduct,request.deliveryRegion]);
+   const saved=await client.query('SELECT order_id,card_product,delivery_country,status,created_at FROM keel_human_card_orders WHERE consumer_id=$1 AND idempotency_key=$2',[account.consumer_id,idempotency]);
+   if(!saved.rowCount)throw new Error('card_order_request_persistence_failed');
+   if(inserted.rowCount)await appendConsumerEvent(client,crypto,{eventType:'HUMAN_CARD_ORDER_REQUESTED',subjectId:account.consumer_id,payload:{orderId:saved.rows[0].order_id,cardProduct:request.cardProduct,deliveryCountry:request.deliveryRegion}});
+   await client.query('COMMIT');
+   return send(res,inserted.rowCount?202:200,{ok:true,duplicate:!inserted.rowCount,order:saved.rows[0],physicalCardOrdered:false,nextStep:'card_partner_acceptance',notice:'This is a Keel order request only. No card has been manufactured, dispatched or charged for. A verified card partner must accept it before fulfilment.'});
+  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+ }
  const secret=process.env.KEEL_IDENTITY_WEBHOOK_SECRET,expectedProvider=process.env.KEEL_IDENTITY_PROVIDER_ID;
  if(!secret||secret.length<32||!expectedProvider)return send(res,503,{error:'identity_provider_integration_not_configured'});
  const raw=await readRaw(req);
@@ -46,16 +96,10 @@ async function handle({req,res,route,send,dbPool,crypto}){
   const mappedStatus=event.status==='verified'?'identity_verified':event.status==='review_required'?'review_required':event.status==='rejected'?'rejected':event.status==='expired'?'expired':'identity_pending';
   const assurance=event.status==='verified'?event.assurance:'none';
   await client.query("UPDATE keel_consumer_accounts SET account_status=$2,identity_assurance=$3,identity_provider=$4,identity_evidence_hash=$5,identity_verified_at=CASE WHEN $2='identity_verified' THEN $6 ELSE NULL END,identity_expires_at=$7,last_provider_event_at=$8,updated_at=NOW() WHERE consumer_id=$1 AND (last_provider_event_at IS NULL OR last_provider_event_at<=$8)",[consumerId,mappedStatus,assurance,event.provider,event.evidenceHash,event.verifiedAt||providerTime.toISOString(),event.expiresAt,providerTime.toISOString()]);
-  await client.query('SELECT pg_advisory_xact_lock(74021011)');
-  const last=await client.query('SELECT event_fingerprint FROM keel_consumer_event_chain ORDER BY sequence DESC LIMIT 1');
-  const previous=last.rowCount?last.rows[0].event_fingerprint:null;
-  const eventId=crypto.randomUUID();
   const payload={provider:event.provider,providerEventId:event.eventId,consumerId,status:event.status,assurance,eventEvidenceHash:event.evidenceHash,providerTimestamp:providerTime.toISOString(),signedBodyHash:signed.bodyHash};
-  const canonical=JSON.stringify({eventId,eventType:'CONSUMER_IDENTITY_PROVIDER_EVENT',subjectId:consumerId,previous,payload});
-  const fingerprint=crypto.createHash('sha256').update(canonical).digest('hex');
-  await client.query("INSERT INTO keel_consumer_event_chain(event_id,event_type,subject_id,previous_fingerprint,event_fingerprint,payload) VALUES($1,'CONSUMER_IDENTITY_PROVIDER_EVENT',$2,$3,$4,$5)",[eventId,consumerId,previous,fingerprint,JSON.stringify(payload)]);
+  await appendConsumerEvent(client,crypto,{eventType:'CONSUMER_IDENTITY_PROVIDER_EVENT',subjectId:consumerId,payload});
   await client.query('COMMIT');
-  return send(res,202,{ok:true,consumerId,identityStatus:mappedStatus,assurance,notice:'Identity documents and raw identity claims are not stored. Card ordering remains unavailable until a separate consumer authentication and provisioning channel is enabled.'});
+  return send(res,202,{ok:true,consumerId,identityStatus:mappedStatus,assurance,notice:'Identity documents and raw identity claims are not stored. Consumer card-order requests require a separate short-lived signed session and do not represent card issuance.'});
  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 }
 module.exports={handle};
