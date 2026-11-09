@@ -17,7 +17,7 @@ test('signed identity provider webhook validates HMAC, freshness and raw body bi
  assert.throws(()=>identity.verifyProviderWebhook({rawBody:s.raw,timestamp:String(Number(s.timestamp)-1000),signature:s.signature,secret}),/webhook_timestamp_out_of_range/);
 });
 test('identity provider events require assurance, opaque references and evidence hashes',()=>{
- const event={provider:'test-idp',eventId:'evt-1',externalSubjectRef:'opaque-subject',externalReference:'case-1',status:'verified',assurance:'high',evidenceHash:'b'.repeat(64),verifiedAt:'2026-11-09T12:00:00.000Z'};
+ const event={provider:'test-idp',eventId:'evt-1',externalSubjectRef:'opaque-subject',externalReference:'case-1',status:'verified',assurance:'high',evidenceHash:'b'.repeat(64),verifiedAt:'2026-11-09T12:00:00.000Z',expiresAt:'2026-12-09T12:00:00.000Z'};
  assert.equal(identity.normalizeProviderIdentityResult(event).status,'verified');
  assert.throws(()=>identity.normalizeProviderIdentityResult({...event,assurance:'low'}),/identity_assurance_insufficient/);
  assert.throws(()=>identity.normalizeProviderIdentityResult({...event,evidenceHash:'not-a-hash'}),/identity_evidence_hash_invalid/);
@@ -43,4 +43,16 @@ test('physical-first lifecycle rejects skipping delivery, pairing or recovery',(
 test('card lifecycle requires external proof references at every privileged transition',()=>{
  assert.throws(()=>card.transition({current:'identity_pending',event:'identity_verified',proof:{}}),/proof_required/);
  assert.throws(()=>card.transition({current:'issuer_provisioning',event:'issuer_virtual_credential_confirmed',proof:{issuerProgramId:'p'}}),/proof_required/);
+});
+
+test('consumer session accepts only a short-lived RS256 token from the configured issuer and audience',()=>{
+ const {publicKey,privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
+ const b64=x=>Buffer.from(JSON.stringify(x)).toString('base64url');
+ const now=Math.floor(Date.now()/1000),header=b64({alg:'RS256',typ:'JWT',kid:'consumer-key-1'}),claims=b64({iss:'https://identity.example',aud:'keel-consumer',sub:'subject-123',iat:now,exp:now+600,jti:'session-token-123'});
+ const signing=header+'.'+claims,signature=crypto.sign('RSA-SHA256',Buffer.from(signing),privateKey).toString('base64url');
+ const token=signing+'.'+signature;
+ const cfg={publicKeyPem:publicKey.export({type:'spki',format:'pem'}),issuer:'https://identity.example',audience:'keel-consumer',keyId:'consumer-key-1'};
+ const verifier=require('../src/consumer-session');
+ assert.equal(verifier.verifyConsumerSession(token,cfg).subject,'subject-123');
+ assert.throws(()=>verifier.verifyConsumerSession(token,{...cfg,audience:'other'}),/audience_invalid/);
 });
