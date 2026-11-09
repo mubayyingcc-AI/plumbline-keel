@@ -116,3 +116,19 @@ END; $$;
 DROP TRIGGER IF EXISTS keel_ledger_line_currency_check ON keel_ledger_lines;
 CREATE TRIGGER keel_ledger_line_currency_check BEFORE INSERT OR UPDATE ON keel_ledger_lines
 FOR EACH ROW EXECUTE FUNCTION keel_ledger_account_currency_guard();
+
+CREATE OR REPLACE FUNCTION keel_ledger_account_metadata_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (NEW.currency,NEW.account_class,NEW.normal_side,NEW.account_code) IS DISTINCT FROM
+    (OLD.currency,OLD.account_class,OLD.normal_side,OLD.account_code)
+    AND EXISTS (SELECT 1 FROM keel_ledger_lines WHERE tenant_id=OLD.tenant_id AND account_id=OLD.account_id) THEN
+  RAISE EXCEPTION 'ledger account classification and currency are immutable after first posting';
+ END IF;
+ IF NEW.tenant_id<>OLD.tenant_id OR NEW.account_id<>OLD.account_id THEN
+  RAISE EXCEPTION 'ledger account identity is immutable';
+ END IF;
+ RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_account_metadata_immutable ON keel_ledger_accounts;
+CREATE TRIGGER keel_ledger_account_metadata_immutable BEFORE UPDATE ON keel_ledger_accounts
+FOR EACH ROW EXECUTE FUNCTION keel_ledger_account_metadata_guard();
