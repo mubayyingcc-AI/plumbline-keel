@@ -14,6 +14,16 @@ function createPairingChallenge({tenantId,principalId,cardId,counter,now=Date.no
  const message=[VERSION,tenant,principal,card,challengeId,nonce,String(counter),expiresAt].join('\n');
  return {challengeId,nonce,nonceHash:crypto.createHash('sha256').update(nonce).digest('hex'),counter,expiresAt,message};
 }
+ feature/human-card-cryptographic-pairing
+
+function fingerprintPublicKey(publicKeyPem){
+ if(typeof publicKeyPem!=='string'||publicKeyPem.length>4096)throw new Error('pairing_public_key_invalid');
+ const key=crypto.createPublicKey(publicKeyPem);
+ if(key.asymmetricKeyType!=='ed25519')throw new Error('pairing_public_key_must_be_ed25519');
+ const der=key.export({type:'spki',format:'der'});
+ return crypto.createHash('sha256').update(der).digest('hex');
+}
+  main
 function verifyPairingSignature({publicKeyPem,message,signatureBase64url}){
  if(typeof publicKeyPem!=='string'||publicKeyPem.length>4096)throw new Error('pairing_public_key_invalid');
  if(typeof message!=='string'||message.length>2048)throw new Error('pairing_message_invalid');
@@ -31,4 +41,8 @@ function isExpired(expiresAt,now=Date.now()){
  const expiry=Date.parse(expiresAt);
  return !Number.isFinite(expiry)||expiry<=now;
 }
+  feature/human-card-cryptographic-pairing
 module.exports={VERSION,DEFAULT_TTL_MS,createPairingChallenge,verifyPairingSignature,hashNonce,isExpired};
+
+module.exports={VERSION,DEFAULT_TTL_MS,createPairingChallenge,fingerprintPublicKey,verifyPairingSignature,hashNonce,isExpired};
+ main

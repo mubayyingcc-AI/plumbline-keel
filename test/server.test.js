@@ -88,6 +88,25 @@ test('tenant API key management rejects missing credentials', async () => {
 });
 
 
+ feature/human-card-cryptographic-pairing
+
+test('Human Card recovery group creation requires a tenant principal',async()=>{
+ const r=await fetch(base+'/api/human-card/recovery/groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trusteePrincipalIds:[],threshold:2,delayHours:24})});
+ assert.equal(r.status,401);assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+});
+test('Human Card lost-card recovery request requires a tenant principal',async()=>{
+ const r=await fetch(base+'/api/human-card/recovery/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cardId:'card-001',reasonCode:'card_lost'})});
+ assert.equal(r.status,401);assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+});
+test('Human Card recovery approval requires a tenant principal',async()=>{
+ const r=await fetch(base+'/api/human-card/recovery/requests/00000000-0000-4000-8000-000000000001/approvals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:'approve',rationaleCode:'verified'})});
+ assert.equal(r.status,401);assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+});
+test('Human Card recovery finalisation requires a tenant principal',async()=>{
+ const r=await fetch(base+'/api/human-card/recovery/requests/00000000-0000-4000-8000-000000000001/finalise',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+ assert.equal(r.status,401);assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+});
+ main
 test('physical Human Card pairing challenge requires a tenant principal', async () => {
   const response=await fetch(base+'/api/human-card/pairing/challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cardId:'card-001'})});
   assert.equal(response.status,401);

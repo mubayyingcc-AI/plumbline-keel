@@ -13,6 +13,10 @@ const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
 const regulatoryAssurance = require('./src/regulatory-assurance');
 const humanCardPairing = require('./src/human-card-pairing');
+      feature/human-card-cryptographic-pairing
+
+const humanCardRecoveryApi = require('./src/human-card-recovery-api');
+ main
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -229,7 +233,7 @@ async function authenticateTenant(req) {
   if(!token) return null;
   const pool=await dbPool(); if(!pool) return null;
   const hash=tenantSecurity.hashPresentedKey(token);
-  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email,p.identity_assurance FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
   if(!result.rowCount) return null;
   await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
   return result.rows[0];
@@ -258,6 +262,13 @@ const apiDescription = {
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
+      feature/human-card-cryptographic-pairing
+
+    '/api/human-card/recovery/groups':{post:{summary:'Create recovery group with independently verified trustees'}},
+    '/api/human-card/recovery/requests':{post:{summary:'Lock a lost or compromised physical card and open trustee recovery'}},
+    '/api/human-card/recovery/requests/{requestId}/approvals':{post:{summary:'Record independent trustee recovery decision'}},
+    '/api/human-card/recovery/requests/{requestId}/finalise':{post:{summary:'Finalise delayed recovery into replacement-card pending state'}},
+       main
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -312,11 +323,19 @@ const server = http.createServer(async (req,res) => {
         integrations:'customer-configured; no external registries connected'
       });
     }
+    feature/human-card-cryptographic-pairing
+
+    if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
+     main
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      feature/human-card-cryptographic-pairing
+
+      if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
+       main
       const body=await readBody(req),cardId=cleanString(body.cardId,100);
       if(!cardId) return send(res,400,{error:'card_id_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
@@ -341,13 +360,21 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
+      feature/human-card-cryptographic-pairing
+
+      if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
+       main
       const body=await readBody(req),challengeId=cleanString(body.challengeId,64),nonce=cleanString(body.nonce,128),signature=cleanString(body.signature,256);
       if(!challengeId||!nonce||!signature)return send(res,400,{error:'challenge_id_nonce_and_signature_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
+       feature/human-card-cryptographic-pairing
         const q=await client.query('SELECT c.*,d.device_public_key,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
+
+        const q=await client.query('SELECT c.*,d.device_public_key,d.key_fingerprint,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
+         main
         if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'pairing_challenge_not_found'});}
         const c=q.rows[0];
         if(c.consumed_at){await client.query('ROLLBACK');return send(res,409,{error:'pairing_challenge_already_consumed'});}
@@ -358,7 +385,12 @@ const server = http.createServer(async (req,res) => {
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
         const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
         const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\n');
+         feature/human-card-cryptographic-pairing
         const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
+
+        let fingerprintValid=false;try{fingerprintValid=humanCardPairing.fingerprintPublicKey(c.device_public_key)===String(c.key_fingerprint||'').trim();}catch{fingerprintValid=false;}
+        const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&fingerprintValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
+         main
         if(!signatureValid){
           await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRING_FAILED',c.card_id,{challengeId,expired,nonceValid,deviceEligible,counterValid});
           await client.query('COMMIT');
