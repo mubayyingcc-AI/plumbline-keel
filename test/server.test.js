@@ -88,6 +88,16 @@ test('tenant API key management rejects missing credentials', async () => {
 });
 
 
+test('physical Human Card pairing challenge requires a tenant principal', async () => {
+  const response=await fetch(base+'/api/human-card/pairing/challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cardId:'card-001'})});
+  assert.equal(response.status,401);
+  assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
+test('physical Human Card pairing verification requires a tenant principal', async () => {
+  const response=await fetch(base+'/api/human-card/pairing/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:'00000000-0000-4000-8000-000000000001',nonce:'invalid',signature:'invalid'})});
+  assert.equal(response.status,401);
+  assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
 test('named principal creation requires tenant authentication', async () => {
   const response=await fetch(base+'/api/assurance/principals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName:'Reviewer',email:'reviewer@example.org'})});
   assert.equal(response.status,401);
