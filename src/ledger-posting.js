@@ -427,7 +427,7 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     for(const line of checked.lines){
       if(line.accountId!==reservation.account_id||line.currency!==reservation.currency)continue;
       const n=BigInt(line.amountMinor);
-      reduction += line.side===account.normal_side ? -n : n;
+      reduction += line.side===account.normal_side ? n : -n;
     }
     if(reduction!==-BigInt(reservation.amount_minor))fail('reservation_journal_amount_mismatch',409);
     await client.query("UPDATE keel_ledger_reservations SET status='consumed',closed_at=NOW(),close_reason='consumed_by_journal:'||$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),checked.journalId]);
