@@ -86,11 +86,11 @@ async function postJournalWithClient(client, tenantId, input) {
 
   const inserted = await client.query(
     `INSERT INTO keel_ledger_journals
-       (tenant_id,journal_id,idempotency_key,description,source_ref,effective_at,status,fingerprint)
-     VALUES($1,$2,$3,$4,$5,$6,'draft',$7)
+       (tenant_id,journal_id,idempotency_key,description,source_ref,effective_at,status,fingerprint,reversal_of_journal_id)
+     VALUES($1,$2,$3,$4,$5,$6,'draft',$7,$8)
      ON CONFLICT(tenant_id,idempotency_key) DO NOTHING
      RETURNING journal_id`,
-    [tenantId,journal.journalId,journal.idempotencyKey,journal.description,journal.sourceRef,journal.effectiveAt,journal.fingerprint]
+    [tenantId,journal.journalId,journal.idempotencyKey,journal.description,journal.sourceRef,journal.effectiveAt,journal.fingerprint,journal.reversalOfJournalId]
   );
   if (!inserted.rowCount) {
     const prior = await client.query(
