@@ -27,8 +27,6 @@ CREATE TABLE IF NOT EXISTS keel_ledger_account_balances (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY(tenant_id,account_id),
   FOREIGN KEY(tenant_id,account_id) REFERENCES keel_ledger_accounts(tenant_id,account_id),
-  CHECK(debit_total<=99999999999999999999999999999999999999999999999999999999999999999999999999999999),
-  CHECK(credit_total<=99999999999999999999999999999999999999999999999999999999999999999999999999999)
 );
 CREATE INDEX IF NOT EXISTS keel_ledger_balances_currency_idx
   ON keel_ledger_account_balances(tenant_id,currency,account_id);
@@ -75,6 +73,45 @@ DROP TRIGGER IF EXISTS keel_ledger_reversal_guard_trigger ON keel_ledger_journal
 CREATE TRIGGER keel_ledger_reversal_guard_trigger
   BEFORE INSERT OR UPDATE OF reversal_of_journal_id ON keel_ledger_journals
   FOR EACH ROW EXECUTE FUNCTION keel_ledger_reversal_guard();
+
+-- Database-level defence: a reversal must be an exact line-for-line inverse.
+CREATE OR REPLACE FUNCTION keel_ledger_assert_full_reversal() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_tenant UUID; v_journal TEXT; v_status TEXT; v_original TEXT;
+BEGIN
+  v_tenant := COALESCE(NEW.tenant_id,OLD.tenant_id);
+  v_journal := COALESCE(NEW.journal_id,OLD.journal_id);
+  SELECT status,reversal_of_journal_id INTO v_status,v_original
+    FROM keel_ledger_journals WHERE tenant_id=v_tenant AND journal_id=v_journal;
+  IF v_status='posted' AND v_original IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM keel_ledger_journals WHERE tenant_id=v_tenant AND journal_id=v_original AND status='posted') THEN
+      RAISE EXCEPTION 'reversal original journal must be posted';
+    END IF;
+    IF EXISTS (
+      SELECT account_id,CASE side WHEN 'debit' THEN 'credit' ELSE 'debit' END,currency,amount_minor
+        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_original
+      EXCEPT ALL
+      SELECT account_id,side,currency,amount_minor
+        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_journal
+    ) OR EXISTS (
+      SELECT account_id,side,currency,amount_minor
+        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_journal
+      EXCEPT ALL
+      SELECT account_id,CASE side WHEN 'debit' THEN 'credit' ELSE 'debit' END,currency,amount_minor
+        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_original
+    ) THEN
+      RAISE EXCEPTION 'reversal journal must exactly invert every original line';
+    END IF;
+  END IF;
+  RETURN NULL;
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_full_reversal_header_check ON keel_ledger_journals;
+CREATE CONSTRAINT TRIGGER keel_ledger_full_reversal_header_check
+  AFTER INSERT OR UPDATE ON keel_ledger_journals DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_assert_full_reversal();
+DROP TRIGGER IF EXISTS keel_ledger_full_reversal_line_check ON keel_ledger_lines;
+CREATE CONSTRAINT TRIGGER keel_ledger_full_reversal_line_check
+  AFTER INSERT OR UPDATE OR DELETE ON keel_ledger_lines DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_assert_full_reversal();
 
 -- Tenant isolation. The application must set keel.tenant_id transaction-locally.
 -- The runtime database role must not own these tables and must not have BYPASSRLS.
