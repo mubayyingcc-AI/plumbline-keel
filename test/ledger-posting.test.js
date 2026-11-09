@@ -17,3 +17,22 @@ test('minor-unit parser rejects floats, exponent notation, signs, zero and overp
     assert.throws(()=>posting.amount(v));
   }
 });
+
+test('serializable transaction retries only PostgreSQL serialization and deadlock failures',async()=>{
+  let connects=0,releases=0,work=0;
+  const pool={async connect(){connects++;let failed=false;return{
+    async query(sql){if(sql==='SELECT work'){work++;if(!failed&&connects<3){failed=true;const e=new Error('serialization');e.code='40001';throw e;}}return{rows:[],rowCount:0};},
+    release(){releases++;}
+  };}};
+  const result=await posting.withTransaction(pool,async client=>{await client.query('SELECT work');return 'committed';},'00000000-0000-4000-8000-000000000001');
+  assert.equal(result,'committed');assert.equal(connects,3);assert.equal(releases,3);assert.equal(work,3);
+});
+test('serializable transaction does not retry business errors',async()=>{
+  let connects=0,releases=0;
+  const pool={async connect(){connects++;return{async query(sql){if(sql==='SELECT work'){const e=new Error('insufficient funds');e.code='P0001';throw e;}return{rows:[],rowCount:0};},release(){releases++;}};}};
+  await assert.rejects(()=>posting.withTransaction(pool,client=>client.query('SELECT work'),'00000000-0000-4000-8000-000000000001'),/insufficient funds/);
+  assert.equal(connects,1);assert.equal(releases,1);
+});
+test('account listing is exposed through the tenant transaction wrapper',()=>{
+  assert.equal(typeof posting.listAccounts,'function');
+});
