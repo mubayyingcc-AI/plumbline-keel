@@ -112,6 +112,7 @@ async function dbPool() {
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_actions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), action_id TEXT NOT NULL, finding_id TEXT NOT NULL, owner_principal_id UUID, due_at TIMESTAMPTZ, status TEXT NOT NULL CHECK(status IN ('open','in_progress','implemented','verified','rejected')), payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,action_id), FOREIGN KEY(tenant_id,finding_id) REFERENCES keel_regulatory_findings(tenant_id,finding_id))`);
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_conformity_dockets (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), docket_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('DRAFT','IN_REVIEW','ACCEPTED_WITH_GAPS','READY_FOR_EXTERNAL_REVIEW','SUPERSEDED')), manifest_fingerprint CHAR(64) NOT NULL, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,docket_id), UNIQUE(tenant_id,manifest_fingerprint))`);
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_assessments (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), assessment_id TEXT NOT NULL, assessment_fingerprint CHAR(64) NOT NULL, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,assessment_id), UNIQUE(tenant_id,assessment_fingerprint))`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_applicability_decisions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), decision_id UUID NOT NULL, obligation_id TEXT NOT NULL, obligation_version TEXT NOT NULL, applicable BOOLEAN NOT NULL, rationale JSONB NOT NULL, reviewer_principal_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,decision_id), FOREIGN KEY(tenant_id,obligation_id,obligation_version) REFERENCES keel_regulatory_obligations(tenant_id,obligation_id,source_version), FOREIGN KEY(tenant_id,reviewer_principal_id) REFERENCES keel_principals(tenant_id,principal_id))`);
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_findings_tenant_idx ON keel_regulatory_findings(tenant_id,status,severity)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
       return pool;
@@ -268,6 +269,19 @@ const apiDescription = {
     '/api/assurance/models':{post:{summary:'Register model (token restricted)'}},
     '/api/assurance/dockets':{post:{summary:'Create ProofDocket (token restricted)'}},
     '/api/assurance/drift':{post:{summary:'Record fingerprint drift (token restricted)'} },
+    '/api/regulatory/sources':{get:{summary:'List tenant regulatory sources'},post:{summary:'Register a regulatory source'}},
+    '/api/regulatory/obligations':{get:{summary:'List obligation versions'},post:{summary:'Register immutable obligation version'}},
+    '/api/regulatory/applicability/evaluate':{post:{summary:'Evaluate obligation applicability for a scoped entity/system'}},
+    '/api/regulatory/controls':{get:{summary:'List tenant controls'},post:{summary:'Register a versioned control'}},
+    '/api/regulatory/evidence':{post:{summary:'Register self-asserted evidence; trusted verification requires connector'}},
+    '/api/regulatory/mappings':{post:{summary:'Map obligation version to control and evidence'}},
+    '/api/regulatory/gaps/evaluate':{post:{summary:'Evaluate evidence-linked control coverage'}},
+    '/api/regulatory/findings':{get:{summary:'List regulatory findings'}},
+    '/api/regulatory/assessments':{get:{summary:'List immutable regulatory coverage snapshots'}},
+    '/api/regulatory/dockets':{get:{summary:'List regulatory evidence dockets'},post:{summary:'Create docket from server-generated assessment'}},
+    '/api/regulatory/dockets/{docketId}/export':{get:{summary:'Export tenant regulatory evidence docket'}},
+    '/api/regulatory/actions':{post:{summary:'Create corrective action against a finding'}},
+    '/api/regulatory/changes/impact-assessments':{post:{summary:'Assess impact of a regulatory source version change'}},
     '/api/demo':{get:{summary:'Evaluate synthetic demonstration portfolio'}},
     '/api/evaluate':{post:{summary:'Evaluate caller-supplied state against a versioned policy'}},
     '/api/leads':{post:{summary:'Persist partnership, integration or pilot enquiry'}}
@@ -544,6 +558,24 @@ const server = http.createServer(async (req,res) => {
       return send(res,200,{tenant:{id:tenant.tenant_id,name:tenant.tenant_name},verification,checkedAt:new Date().toISOString(),note:'Verifies the stored tenant event sequence and fingerprints; it is not an independent external notarization.'});
     }
 
+
+    if(req.method==='GET' && ['/api/regulatory/sources','/api/regulatory/obligations','/api/regulatory/controls','/api/regulatory/dockets','/api/regulatory/assessments'].includes(route)){
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool();if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
+      const table=route.endsWith('/sources')?'keel_regulatory_sources':route.endsWith('/obligations')?'keel_regulatory_obligations':route.endsWith('/controls')?'keel_regulatory_controls':route.endsWith('/dockets')?'keel_conformity_dockets':'keel_regulatory_assessments';
+      const rows=await pool.query('SELECT * FROM '+table+' WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,records:rows.rows});
+    }
+    if(req.method==='POST' && route==='/api/regulatory/applicability/evaluate'){
+      if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const b=await readBody(req),pool=await dbPool();
+      const q=await pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1 AND obligation_id=$2 AND source_version=$3',[actor.tenant_id,b.obligationId,b.obligationVersion]);
+      if(!q.rowCount)return send(res,404,{error:'tenant_obligation_version_not_found'});
+      const decision=regulatoryAssurance.evaluateApplicability(q.rows[0].payload,b.context,b.asOf||new Date());
+      const id=crypto.randomUUID(),client=await pool.connect();
+      try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_applicability_decisions(tenant_id,decision_id,obligation_id,obligation_version,applicable,rationale,reviewer_principal_id) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,b.obligationId,b.obligationVersion,decision.applicable,JSON.stringify(decision),actor.principal_id||null]);await recordEventWithClient(client,actor,'REGULATORY_APPLICABILITY_EVALUATED',id,{obligationId:b.obligationId,obligationVersion:b.obligationVersion,applicable:decision.applicable,decisionFingerprint:decision.decisionFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      return send(res,200,{ok:true,decisionId:id,decision});
+    }
     // Regulatory Assurance Fabric: tenant-authenticated evidence and control workflows.
     if(req.method==='POST' && route==='/api/regulatory/sources'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
