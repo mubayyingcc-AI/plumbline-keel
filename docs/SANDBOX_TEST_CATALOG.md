@@ -4,8 +4,8 @@ All fixtures are synthetic unless a private institution workspace explicitly dec
 
 | ID | Test family | Scenario | Required assertions | Current status |
 |---|---|---|---|---|
-| KFS-001 | Current collateral evaluator | Fresh synthetic evidence and in-scope policy evaluation | Decision, capacity and fingerprint returned by existing evaluator | Executable via existing /api/evaluate endpoint |
-| KFS-002 | Evidence freshness | Stale evidence supplied to evaluator | Conservative hold / issue visible; no silent acceptance | Executable via existing evaluator fixture |
+| KFS-001 | Current collateral evaluator | Fresh synthetic evidence and in-scope policy evaluation | Decision, capacity and fingerprint returned by existing evaluator | Executable via POST /api/sandbox/runs; KFTR returned statelessly |
+| KFS-002 | Evidence freshness | Stale evidence supplied to evaluator | Conservative hold / issue visible; no silent acceptance | Executable via POST /api/sandbox/runs; stale-evidence assertion and KFTR returned statelessly |
 | KFS-003 | Currency registry | Zero-, two- and three-decimal currencies; effective-date and redenomination fixture | Exact exponent; no float arithmetic; version pinned | Not tested — registry not yet integrated |
 | KFS-004 | Ledger balancing | Multi-line journal with balanced debits/credits per currency | Balanced journal posts atomically; imbalance rejected | Not tested — ledger PR #22 is open draft |
 | KFS-005 | Ledger idempotency | Replay same request/idempotency key | Exactly one logical posting | Not tested — runner adapter pending |
