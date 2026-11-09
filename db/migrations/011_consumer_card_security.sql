@@ -99,3 +99,16 @@ CREATE TABLE IF NOT EXISTS keel_consumer_card_security_outbox (
  delivered_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS keel_consumer_card_outbox_pending_idx ON keel_consumer_card_security_outbox(status,created_at) WHERE status='pending';
+
+CREATE TABLE IF NOT EXISTS keel_consumer_card_security_events (
+ event_id UUID PRIMARY KEY,
+ consumer_id UUID NOT NULL REFERENCES keel_consumer_accounts(consumer_id),
+ card_id UUID NOT NULL REFERENCES keel_consumer_cards(card_id),
+ event_type TEXT NOT NULL,
+ payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS keel_consumer_card_security_events_owner_idx ON keel_consumer_card_security_events(consumer_id,created_at DESC);
+CREATE OR REPLACE FUNCTION keel_reject_consumer_card_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Keel consumer card security events are append-only'; END; $$;
+DROP TRIGGER IF EXISTS keel_consumer_card_security_events_immutable ON keel_consumer_card_security_events;
+CREATE TRIGGER keel_consumer_card_security_events_immutable BEFORE UPDATE OR DELETE ON keel_consumer_card_security_events FOR EACH ROW EXECUTE FUNCTION keel_reject_consumer_card_event_mutation();
