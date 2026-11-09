@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { evaluateAction, fingerprint } = require('./src/core');
+const sandboxRunner = require('./src/sandbox-runner');
 const assurance = require('./src/assurance');
 const tenantSecurity = require('./src/tenant-security');
 const authorityChain = require('./src/authority-chain');
@@ -20,7 +21,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30 };
 const rateBuckets = new Map();
 
 const products = [
@@ -806,6 +807,17 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && route === '/api/demo') {
       const payload = demoPayload();
       return send(res,200,{synthetic:true,result:evaluateAction(payload)});
+    }
+    if (req.method === 'POST' && route === '/api/sandbox/runs') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded',message:'Please wait before running another sandbox scenario.'},undefined,{'Retry-After':'60'});
+      const payload = await readBody(req);
+      try {
+        const record = sandboxRunner.runPublicScenario(payload.scenarioId, evaluateAction);
+        return send(res,200,{ok:true,record,notice:'Synthetic public test evidence only. This record is not signed, persisted, independently audited or a regulatory certification.'});
+      } catch (error) {
+        return send(res,400,{error:'sandbox_scenario_invalid',message:error.message});
+      }
     }
     if (req.method === 'POST' && ['/api/evaluate','/api/leads'].includes(route)) {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
