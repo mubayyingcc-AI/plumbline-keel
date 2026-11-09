@@ -13,11 +13,8 @@ const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
 const regulatoryAssurance = require('./src/regulatory-assurance');
 const humanCardPairing = require('./src/human-card-pairing');
-      feature/human-card-cryptographic-pairing
-
 const humanCardRecoveryApi = require('./src/human-card-recovery-api');
- main
-
+const consumerIdentityApi = require('./src/consumer-identity-api');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
@@ -32,7 +29,7 @@ const products = [
   { id:'evidence', name:'Keel Evidence', category:'Evidence and audit', stage:'POC', description:'Package source references, timestamps, evidence classes, policy versions and record fingerprints.', outputs:['Evidence manifest','Decision fingerprint','Scope and limitation record'], integration:'REST API / structured CSV' },
   { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' },
   { id:'payment-authority', name:'Keel Payment Authority & Agent Control', category:'Mandates and payment lifecycle', stage:'Foundation · non-executing', description:'Evaluate human-issued mandates, purpose and payee scope, spend limits and evidence-backed availability before any authorised provider workflow.', outputs:['Versioned mandates','Spend envelopes','Human approval boundary','Availability-aware decision','Lifecycle and recovery model'], integration:'Internal deterministic evaluator; persistent API integration pending' },
-  { id:'card-control', name:'Keel Virtual & Institutional Card Control', category:'Card authority and spend control', stage:'Sandbox foundation · partner issuance pending', description:'Provide sandbox virtual-card profiles and a shared mandate, verified-availability, reservation and evidence control plane for partner-issued virtual and physical card programmes.', outputs:['Sandbox virtual profiles','Partner virtual/physical programme model','Mandate-linked spend controls','Funding reservation foundation'], integration:'PostgreSQL schema foundation; issuer integration not connected' },
+  { id:'card-control', name:'Keel Human Card & Institutional Card Control', category:'Consumer identity, card authority and spend control', stage:'Consumer identity foundation · partner issuance pending', description:'Build a physical-first human card journey with verified consumer identity, partner card-order requests, delivery proof, secure-element pairing, independent recovery and issuer-gated virtual activation.', outputs:['Consumer identity and short-lived session foundation','Physical card order request lifecycle','Delivery and hardware pairing gates','Recovery and issuer-eligibility controls'], integration:'PostgreSQL schema and signed provider-event API; no identity provider, manufacturer or issuer connected' },
   { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'Architecture + schema foundation', description:'Trace remittance origin, funding, FX, payout, wallet credit and card spend as distinct provider events, with reconciliation and recovery evidence.', outputs:['Canonical transfer identity','Provider event ingestion model','Wallet availability controls','Discrepancy and recovery model'], integration:'Provider-neutral schema foundation; no MTO or wallet adapter connected' }
 ];
 
@@ -262,13 +259,13 @@ const apiDescription = {
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
-      feature/human-card-cryptographic-pairing
-
     '/api/human-card/recovery/groups':{post:{summary:'Create recovery group with independently verified trustees'}},
     '/api/human-card/recovery/requests':{post:{summary:'Lock a lost or compromised physical card and open trustee recovery'}},
     '/api/human-card/recovery/requests/{requestId}/approvals':{post:{summary:'Record independent trustee recovery decision'}},
     '/api/human-card/recovery/requests/{requestId}/finalise':{post:{summary:'Finalise delayed recovery into replacement-card pending state'}},
-       main
+    '/api/consumer/identity/provider-events':{post:{summary:'Receive signed identity-verification provider events'}},
+    '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
+    '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -323,19 +320,14 @@ const server = http.createServer(async (req,res) => {
         integrations:'customer-configured; no external registries connected'
       });
     }
-    feature/human-card-cryptographic-pairing
-
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
-     main
+    if (await consumerIdentityApi.handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBrowser})) return;
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
-      feature/human-card-cryptographic-pairing
-
       if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
-       main
       const body=await readBody(req),cardId=cleanString(body.cardId,100);
       if(!cardId) return send(res,400,{error:'card_id_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
@@ -360,21 +352,15 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);
       if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_principal_required'});
-      feature/human-card-cryptographic-pairing
-
       if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
-       main
       const body=await readBody(req),challengeId=cleanString(body.challengeId,64),nonce=cleanString(body.nonce,128),signature=cleanString(body.signature,256);
       if(!challengeId||!nonce||!signature)return send(res,400,{error:'challenge_id_nonce_and_signature_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
-       feature/human-card-cryptographic-pairing
-        const q=await client.query('SELECT c.*,d.device_public_key,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
 
         const q=await client.query('SELECT c.*,d.device_public_key,d.key_fingerprint,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
-         main
         if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'pairing_challenge_not_found'});}
         const c=q.rows[0];
         if(c.consumed_at){await client.query('ROLLBACK');return send(res,409,{error:'pairing_challenge_already_consumed'});}
@@ -385,12 +371,9 @@ const server = http.createServer(async (req,res) => {
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
         const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
         const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\n');
-         feature/human-card-cryptographic-pairing
-        const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
 
         let fingerprintValid=false;try{fingerprintValid=humanCardPairing.fingerprintPublicKey(c.device_public_key)===String(c.key_fingerprint||'').trim();}catch{fingerprintValid=false;}
         const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&fingerprintValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
-         main
         if(!signatureValid){
           await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRING_FAILED',c.card_id,{challengeId,expired,nonceValid,deviceEligible,counterValid});
           await client.query('COMMIT');

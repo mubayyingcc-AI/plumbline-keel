@@ -22,6 +22,9 @@ function normalizeProviderIdentityResult(input){
  if(input.status==='verified'&&!['substantial','high'].includes(assurance))throw new Error('identity_assurance_insufficient');
  const verifiedAt=input.verifiedAt?new Date(input.verifiedAt):null;
  if(input.status==='verified'&&(!verifiedAt||!Number.isFinite(verifiedAt.getTime())))throw new Error('identity_verification_timestamp_required');
- return Object.freeze({provider:input.provider,externalSubjectRef:input.externalSubjectRef.trim(),externalReference:input.externalReference.trim(),eventId:input.eventId.trim(),status:input.status,assurance,evidenceHash:input.evidenceHash.toLowerCase(),verifiedAt:verifiedAt?verifiedAt.toISOString():null,expiresAt:input.expiresAt?new Date(input.expiresAt).toISOString():null});
+ const expiresAt=input.expiresAt?new Date(input.expiresAt):null;
+ if(input.expiresAt&&(!expiresAt||!Number.isFinite(expiresAt.getTime())))throw new Error('identity_expiry_invalid');
+ if(input.status==='verified'&&(!expiresAt||expiresAt<=verifiedAt))throw new Error('identity_expiry_required');
+ return Object.freeze({provider:input.provider,externalSubjectRef:input.externalSubjectRef.trim(),externalReference:input.externalReference.trim(),eventId:input.eventId.trim(),status:input.status,assurance,evidenceHash:input.evidenceHash.toLowerCase(),verifiedAt:verifiedAt?verifiedAt.toISOString():null,expiresAt:expiresAt?expiresAt.toISOString():null});
 }
 module.exports={verifyProviderWebhook,normalizeProviderIdentityResult};
