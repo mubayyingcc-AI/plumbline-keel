@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS keel_consumer_identity_events (
 CREATE INDEX IF NOT EXISTS keel_consumer_identity_events_consumer_idx ON keel_consumer_identity_events(consumer_id,received_at DESC);
 CREATE TABLE IF NOT EXISTS keel_human_card_orders (
  order_id UUID PRIMARY KEY,
+ idempotency_key TEXT NOT NULL,
  consumer_id UUID NOT NULL REFERENCES keel_consumer_accounts(consumer_id),
  card_product TEXT NOT NULL CHECK(card_product IN ('human-card-standard','human-card-accessible')),
  delivery_country CHAR(2) NOT NULL,
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS keel_human_card_orders (
  shipment_reference TEXT,
  delivery_evidence_hash CHAR(64),
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(consumer_id,idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS keel_human_card_orders_consumer_idx ON keel_human_card_orders(consumer_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS keel_consumer_provisioning_events (
