@@ -23,6 +23,7 @@ async function consumerActor(req,{crypto}){
  if(!token)throw new Error('consumer_session_required');
  const cfg={publicKeyPem:process.env.KEEL_CONSUMER_SESSION_PUBLIC_KEY_PEM,issuer:process.env.KEEL_CONSUMER_SESSION_ISSUER,audience:process.env.KEEL_CONSUMER_SESSION_AUDIENCE,keyId:process.env.KEEL_CONSUMER_SESSION_KEY_ID};
  if(!cfg.publicKeyPem||!cfg.issuer||!cfg.audience||!cfg.keyId)throw new Error('consumer_session_verification_not_configured');
+ if(cfg.issuer!==process.env.KEEL_IDENTITY_PROVIDER_ISSUER)throw new Error('consumer_session_issuer_provider_mismatch');
  const verified=sessionVerifier.verifyConsumerSession(token,cfg);
  const secret=process.env.KEEL_CONSUMER_SUBJECT_HMAC_KEY,provider=process.env.KEEL_IDENTITY_PROVIDER_ID;
  if(!secret||secret.length<32||!provider)throw new Error('consumer_subject_hmac_key_not_configured');
