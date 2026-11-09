@@ -352,7 +352,7 @@ const server = http.createServer(async (req,res) => {
         const c=q.rows[0];
         if(c.consumed_at){await client.query('ROLLBACK');return send(res,409,{error:'pairing_challenge_already_consumed'});}
         await client.query('UPDATE keel_human_card_pairing_challenges SET consumed_at=NOW() WHERE tenant_id=$1 AND challenge_id=$2',[actor.tenant_id,challengeId]);
-        const nonceValid=humanCardPairing.hashNonce(nonce)===c.nonce_hash;
+        let nonceValid=false;try{nonceValid=humanCardPairing.hashNonce(nonce)===c.nonce_hash;}catch{nonceValid=false;}
         const expiryIso=c.expires_at instanceof Date?c.expires_at.toISOString():new Date(c.expires_at).toISOString();
         const expired=humanCardPairing.isExpired(expiryIso);
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
