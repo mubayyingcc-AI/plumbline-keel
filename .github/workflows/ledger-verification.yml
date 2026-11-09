@@ -1,0 +1,69 @@
+name: Keel ledger verification
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - 'ledger/**'
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d keel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/keel_test
+      KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@localhost:5432/keel_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Create isolated tenant fixture and restricted runtime role
+        run: |
+          psql "$PG_ADMIN_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE keel_tenants (
+            tenant_id UUID PRIMARY KEY,
+            tenant_name TEXT NOT NULL,
+            tenant_slug TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active'
+          );
+          CREATE ROLE keel_runtime LOGIN PASSWORD 'keel_runtime_test' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          GRANT USAGE ON SCHEMA public TO keel_runtime;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON keel_tenants TO keel_runtime;
+          SQL
+      - name: Apply ledger migrations to disposable PostgreSQL
+        run: |
+          psql "$PG_ADMIN_URL" -v ON_ERROR_STOP=1 -f db/migrations/012_double_entry_ledger.sql
+          psql "$PG_ADMIN_URL" -v ON_ERROR_STOP=1 -f db/migrations/013_ledger_posting_and_reservations.sql
+          psql "$PG_ADMIN_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT SELECT, INSERT, UPDATE, DELETE ON
+            keel_ledger_accounts,
+            keel_ledger_journals,
+            keel_ledger_lines,
+            keel_ledger_account_balances,
+            keel_ledger_reservations,
+            keel_ledger_events
+          TO keel_runtime;
+          SQL
+      - name: Run unit and PostgreSQL integration tests
+        run: npm test
