@@ -67,7 +67,7 @@ All institutional endpoints require tenant auth, principal identity, role/scope 
 - POST /api/payment-authority/reconcile — compare provider records to Keel intents, holds and postings.
 - POST /api/payment-authority/kill-switch — freeze future instructions and invoke supported provider controls.
 
-The first implementation endpoint is a read-only/stateless evaluator behind tenant auth. No public unauthenticated endpoint may create authority, approve or execute payments.
+When implemented, the first API endpoint must be a read-only/stateless evaluator backed by server-stored mandates and source-authenticated availability. Client-supplied mandate or balance assertions must never be treated as verified evidence. No public unauthenticated endpoint may create authority, approve or execute payments.
 
 ## 8. Threat model and mandatory controls
 - Prompt injection / compromised agent: untrusted agent content; server-side scopes; no agent policy mutation.
