@@ -659,9 +659,43 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/actions'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const b=await readBody(req),id=cleanString(b.actionId,120)||crypto.randomUUID(),pool=await dbPool(),client=await pool.connect();
-      try{await client.query('BEGIN');await client.query("INSERT INTO keel_regulatory_actions(tenant_id,action_id,finding_id,owner_principal_id,due_at,status,payload) VALUES($1,$2,$3,$4,$5,'open',$6)",[actor.tenant_id,id,b.findingId,b.ownerPrincipalId||null,b.dueAt||null,JSON.stringify(b)]);await recordEventWithClient(client,actor,'REGULATORY_ACTION_CREATED',id,{findingId:b.findingId,ownerPrincipalId:b.ownerPrincipalId||null,dueAt:b.dueAt||null});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
-      return send(res,201,{ok:true,actionId:id});
+      const b=await readBody(req),id=cleanString(b.actionId,120)||crypto.randomUUID(),ownerId=cleanString(b.ownerPrincipalId,80),dueAt=b.dueAt||null,pool=await dbPool();
+      if(!b.findingId||!ownerId||!/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(ownerId))return send(res,400,{error:'finding_id_and_valid_owner_principal_required'});
+      if(dueAt&&!Number.isFinite(Date.parse(dueAt)))return send(res,400,{error:'invalid_action_due_date'});
+      const [finding,owner]=await Promise.all([pool.query('SELECT finding_id FROM keel_regulatory_findings WHERE tenant_id=$1 AND finding_id=$2',[actor.tenant_id,b.findingId]),pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,ownerId])]);
+      if(!finding.rowCount)return send(res,404,{error:'tenant_finding_not_found'});if(!owner.rowCount)return send(res,404,{error:'active_tenant_action_owner_not_found'});
+      const client=await pool.connect();
+      try{await client.query('BEGIN');await client.query("INSERT INTO keel_regulatory_actions(tenant_id,action_id,finding_id,owner_principal_id,due_at,status,payload) VALUES($1,$2,$3,$4,$5,'open',$6)",[actor.tenant_id,id,b.findingId,ownerId,dueAt,JSON.stringify(b)]);await recordEventWithClient(client,actor,'REGULATORY_ACTION_CREATED',id,{findingId:b.findingId,ownerPrincipalId:ownerId,dueAt});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      return send(res,201,{ok:true,actionId:id,status:'open'});
+    }
+
+    if(req.method==='GET' && route==='/api/regulatory/actions'){
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const rows=await (await dbPool()).query('SELECT action_id,finding_id,owner_principal_id,due_at,status,payload,created_at FROM keel_regulatory_actions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,actions:rows.rows});
+    }
+    if(req.method==='POST' && route==='/api/regulatory/actions/transition'){
+      if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id||!['owner','admin','reviewer'].includes(actor.role))return send(res,403,{error:'named_independent_reviewer_required'});
+      const b=await readBody(req),id=cleanString(b.actionId,120),next=cleanString(b.status,30),pool=await dbPool(),client=await pool.connect();
+      if(!id||!['in_progress','implemented','verified','rejected'].includes(next))return send(res,400,{error:'invalid_action_transition'});
+      try{
+       await client.query('BEGIN');
+       const q=await client.query('SELECT action_id,finding_id,owner_principal_id,status,payload FROM keel_regulatory_actions WHERE tenant_id=$1 AND action_id=$2 FOR UPDATE',[actor.tenant_id,id]);
+       if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'tenant_action_not_found'});}
+       const a=q.rows[0],allowed={open:['in_progress','rejected'],in_progress:['implemented','rejected'],implemented:['verified','rejected'],verified:[],rejected:[]};
+       if(!allowed[a.status]?.includes(next)){await client.query('ROLLBACK');return send(res,409,{error:'invalid_action_state_transition',from:a.status,to:next});}
+       if(next==='verified'&&String(a.owner_principal_id)===String(actor.principal_id)){await client.query('ROLLBACK');return send(res,403,{error:'action_owner_cannot_verify_own_remediation'});}
+       const payload={...(a.payload||{}),lastTransition:{from:a.status,to:next,reviewerPrincipalId:actor.principal_id,rationale:cleanString(b.rationale,1000),evidenceRefs:Array.isArray(b.evidenceRefs)?b.evidenceRefs:[],at:new Date().toISOString()}};
+       if(next==='verified'&&(!payload.lastTransition.rationale||!payload.lastTransition.evidenceRefs.length)){await client.query('ROLLBACK');return send(res,400,{error:'verification_requires_rationale_and_evidence'});}
+       await client.query('UPDATE keel_regulatory_actions SET status=$3,payload=$4 WHERE tenant_id=$1 AND action_id=$2',[actor.tenant_id,id,next,JSON.stringify(payload)]);
+       if(next==='verified'){
+        const open=await client.query("SELECT COUNT(*)::int AS count FROM keel_regulatory_actions WHERE tenant_id=$1 AND finding_id=$2 AND action_id<>$3 AND status<>'verified'",[actor.tenant_id,a.finding_id,id]);
+        if(open.rows[0].count===0)await client.query("UPDATE keel_regulatory_findings SET status='closed' WHERE tenant_id=$1 AND finding_id=$2",[actor.tenant_id,a.finding_id]);
+       }
+       await recordEventWithClient(client,actor,'REGULATORY_ACTION_TRANSITIONED',id,payload.lastTransition);await client.query('COMMIT');
+       return send(res,200,{ok:true,actionId:id,status:next});
+      }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
     }
     if(req.method==='POST' && route==='/api/regulatory/changes/impact-assessments'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
