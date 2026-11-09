@@ -826,7 +826,7 @@ const server = http.createServer(async (req,res) => {
         const result=await ledgerPosting.postJournal(pool,actor.tenant_id,await readBody(req));
         return send(res,result.replay?200:201,{ok:true,...result,notice:'Ledger posting only; this does not initiate or confirm an external payment or settlement.'});
       }
-      const balanceMatch=route.match(/^\\/api\\/ledger\\/accounts\\/([^/]+)\\/balance$/);
+      const balanceMatch=route.match(/^\/api\/ledger\\/accounts\\/([^/]+)\\/balance$/);
       if(req.method==='GET'&&balanceMatch){
         const balance=await ledgerPosting.getAccountBalance(pool,actor.tenant_id,decodeURIComponent(balanceMatch[1]));
         return send(res,200,{ok:true,balance});
@@ -835,13 +835,13 @@ const server = http.createServer(async (req,res) => {
         const result=await ledgerPosting.createReservation(pool,actor.tenant_id,await readBody(req));
         return send(res,result.replay?200:201,{ok:true,...result});
       }
-      const releaseMatch=route.match(/^\\/api\\/ledger\\/reservations\\/([^/]+)\\/release$/);
+      const releaseMatch=route.match(/^\/api\/ledger\\/reservations\\/([^/]+)\\/release$/);
       if(req.method==='POST'&&releaseMatch){
         const b=await readBody(req);
         const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,decodeURIComponent(releaseMatch[1]),b.reason);
         return send(res,200,{ok:true,...result});
       }
-      const consumeMatch=route.match(/^\\/api\\/ledger\\/reservations\\/([^/]+)\\/consume$/);
+      const consumeMatch=route.match(/^\/api\/ledger\\/reservations\\/([^/]+)\\/consume$/);
       if(req.method==='POST'&&consumeMatch){
         const b=await readBody(req);
         const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,decodeURIComponent(consumeMatch[1]),b.journal);
