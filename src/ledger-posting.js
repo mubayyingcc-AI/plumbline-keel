@@ -179,19 +179,18 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (typeof accountId !== 'string' || !accountId.trim()) fail('ledger_account_id_required');
-  const client = await pool.connect();
-  try {
+  return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId.trim());
     const balance = await refreshProjection(client, tenantId, account);
     const reserved = await activeReservations(client, tenantId, accountId.trim());
+    const totals = await client.query('SELECT debit_total::text,credit_total::text FROM keel_ledger_account_balances WHERE tenant_id=$1 AND account_id=$2',[tenantId,accountId.trim()]);
     return {
       accountId: account.account_id, currency: account.currency, normalSide: account.normal_side,
-      debitTotalMinor: (await client.query('SELECT debit_total::text FROM keel_ledger_account_balances WHERE tenant_id=$1 AND account_id=$2',[tenantId,accountId.trim()])).rows[0].debit_total,
-      creditTotalMinor: (await client.query('SELECT credit_total::text FROM keel_ledger_account_balances WHERE tenant_id=$1 AND account_id=$2',[tenantId,accountId.trim()])).rows[0].credit_total,
+      debitTotalMinor: totals.rows[0].debit_total, creditTotalMinor: totals.rows[0].credit_total,
       ledgerBalanceMinor: balance.toString(), reservedMinor: reserved.toString(),
       availableMinor: (balance-reserved).toString()
     };
-  } finally { client.release(); }
+  }, tenantId);
 }
 async function createReservation(pool, tenantIdInput, input) {
   requirePool(pool);
