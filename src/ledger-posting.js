@@ -73,6 +73,19 @@ async function activeReservations(client, tenantId, accountId) {
 }
 async function postJournalWithClient(client, tenantId, input) {
   const journal = validateJournal({ ...input, tenantId });
+  if (journal.reversalOfJournalId) {
+    const original=await client.query(
+      "SELECT journal_id,status FROM keel_ledger_journals WHERE tenant_id=$1 AND journal_id=$2 FOR UPDATE",
+      [tenantId,journal.reversalOfJournalId]
+    );
+    if(!original.rowCount||original.rows[0].status!=='posted')fail('ledger_reversal_original_not_posted',409);
+    const originalLines=await client.query(
+      'SELECT account_id,side,currency,amount_minor::text FROM keel_ledger_lines WHERE tenant_id=$1 AND journal_id=$2 ORDER BY line_number',
+      [tenantId,journal.reversalOfJournalId]
+    );
+    const expected=originalLines.rows.map(line=>({accountId:line.account_id,side:line.side==='debit'?'credit':'debit',currency:line.currency,amountMinor:line.amount_minor}));
+    if(JSON.stringify(expected)!==JSON.stringify(journal.lines))fail('ledger_reversal_must_exactly_reverse_original',409);
+  }
   const existing = await client.query('SELECT journal_id,fingerprint,status FROM keel_ledger_journals WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',[tenantId,journal.idempotencyKey]);
   if (existing.rowCount) { const prior=existing.rows[0]; if(prior.fingerprint!==journal.fingerprint||prior.journal_id!==journal.journalId)fail('ledger_idempotency_conflict',409); if(prior.status!=='posted')fail('ledger_idempotency_incomplete',409); return {journalId:prior.journal_id,fingerprint:journal.fingerprint,status:'posted',replay:true}; }
   // Lock accounts in stable lexical order to reduce deadlock risk.
