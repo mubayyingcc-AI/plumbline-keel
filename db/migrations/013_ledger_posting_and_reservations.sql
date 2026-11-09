@@ -1,6 +1,6 @@
--- Keel ledger posting, projection and reservation foundation.
--- Apply only through a reviewed migration runner after 012 and after PostgreSQL integration tests.
--- Never apply this migration automatically at application startup.
+-- Keel ledger posting, projections, reservations and tenant isolation.
+-- Requires migration 012. Apply only with a reviewed migration runner after disposable-PostgreSQL tests.
+-- Do not apply automatically at application startup.
 
 ALTER TABLE keel_ledger_accounts
   ADD COLUMN IF NOT EXISTS allow_negative_balance BOOLEAN NOT NULL DEFAULT FALSE,
@@ -10,9 +10,11 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_ledger_account_normal_side_class_check') THEN
     ALTER TABLE keel_ledger_accounts ADD CONSTRAINT keel_ledger_account_normal_side_class_check
-      CHECK (account_class='memorandum' OR
-        (account_class IN ('asset','expense') AND normal_side='debit') OR
-        (account_class IN ('liability','equity','income') AND normal_side='credit'));
+      CHECK (
+        account_class='memorandum'
+        OR (account_class IN ('asset','expense') AND normal_side='debit')
+        OR (account_class IN ('liability','equity','income') AND normal_side='credit')
+      );
   END IF;
 END $$;
 
@@ -31,7 +33,22 @@ CREATE TABLE IF NOT EXISTS keel_ledger_account_balances (
 CREATE INDEX IF NOT EXISTS keel_ledger_balances_currency_idx
   ON keel_ledger_account_balances(tenant_id,currency,account_id);
 
--- Seed projections from any journals already posted before this migration.
+CREATE OR REPLACE FUNCTION keel_ledger_balance_currency_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE account_currency CHAR(3);
+BEGIN
+  SELECT currency INTO account_currency FROM keel_ledger_accounts
+    WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
+  IF account_currency IS NULL OR account_currency<>NEW.currency THEN
+    RAISE EXCEPTION 'ledger balance currency must match account currency';
+  END IF;
+  RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_balance_currency_guard_trigger ON keel_ledger_account_balances;
+CREATE TRIGGER keel_ledger_balance_currency_guard_trigger
+  BEFORE INSERT OR UPDATE ON keel_ledger_account_balances
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_balance_currency_guard();
+
+-- Seed rebuildable projections only from posted journal facts.
 WITH totals AS (
   SELECT l.tenant_id,l.account_id,
     COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0) AS debit_total,
@@ -72,78 +89,61 @@ CREATE TABLE IF NOT EXISTS keel_ledger_reservations (
   CHECK((status='active' AND closed_at IS NULL) OR (status<>'active' AND closed_at IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS keel_ledger_reservations_active_idx
-  ON keel_ledger_reservations(tenant_id,account_id,expires_at)
-  WHERE status='active';
+  ON keel_ledger_reservations(tenant_id,account_id,expires_at) WHERE status='active';
 CREATE INDEX IF NOT EXISTS keel_ledger_reservations_expiry_idx
-  ON keel_ledger_reservations(expires_at)
-  WHERE status='active' AND expires_at IS NOT NULL;
+  ON keel_ledger_reservations(expires_at) WHERE status='active' AND expires_at IS NOT NULL;
 
--- A reversal can reference only a posted original and must remain within the same tenant.
-CREATE OR REPLACE FUNCTION keel_ledger_reversal_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE original_status TEXT;
+CREATE OR REPLACE FUNCTION keel_ledger_reservation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE account_currency CHAR(3);
 BEGIN
-  IF NEW.reversal_of_journal_id IS NOT NULL THEN
-    SELECT status INTO original_status FROM keel_ledger_journals
-      WHERE tenant_id=NEW.tenant_id AND journal_id=NEW.reversal_of_journal_id;
-    IF original_status IS DISTINCT FROM 'posted' THEN
-      RAISE EXCEPTION 'ledger reversal must reference a posted journal';
+  SELECT currency INTO account_currency FROM keel_ledger_accounts
+    WHERE tenant_id=NEW.tenant_id AND account_id=NEW.account_id;
+  IF account_currency IS NULL OR account_currency<>NEW.currency THEN
+    RAISE EXCEPTION 'reservation currency must match account currency';
+  END IF;
+  IF TG_OP='UPDATE' THEN
+    IF (NEW.tenant_id,NEW.reservation_id,NEW.idempotency_key,NEW.account_id,NEW.currency,NEW.amount_minor,NEW.purpose,NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.tenant_id,OLD.reservation_id,OLD.idempotency_key,OLD.account_id,OLD.currency,OLD.amount_minor,OLD.purpose,OLD.created_at) THEN
+      RAISE EXCEPTION 'reservation identity and amount are immutable';
+    END IF;
+    IF OLD.status<>'active' OR NEW.status NOT IN ('released','consumed','expired') THEN
+      RAISE EXCEPTION 'reservation state transition is invalid';
     END IF;
   END IF;
   RETURN NEW;
 END; $$;
-DROP TRIGGER IF EXISTS keel_ledger_reversal_guard_trigger ON keel_ledger_journals;
-CREATE TRIGGER keel_ledger_reversal_guard_trigger
-  BEFORE INSERT OR UPDATE OF reversal_of_journal_id ON keel_ledger_journals
-  FOR EACH ROW EXECUTE FUNCTION keel_ledger_reversal_guard();
+DROP TRIGGER IF EXISTS keel_ledger_reservation_guard_trigger ON keel_ledger_reservations;
+CREATE TRIGGER keel_ledger_reservation_guard_trigger
+  BEFORE INSERT OR UPDATE ON keel_ledger_reservations
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_reservation_guard();
 
--- Database-level defence: a reversal must be an exact line-for-line inverse.
-CREATE OR REPLACE FUNCTION keel_ledger_assert_full_reversal() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v_tenant UUID; v_journal TEXT; v_status TEXT; v_original TEXT;
-BEGIN
-  v_tenant := COALESCE(NEW.tenant_id,OLD.tenant_id);
-  v_journal := COALESCE(NEW.journal_id,OLD.journal_id);
-  SELECT status,reversal_of_journal_id INTO v_status,v_original
-    FROM keel_ledger_journals WHERE tenant_id=v_tenant AND journal_id=v_journal;
-  IF v_status='posted' AND v_original IS NOT NULL THEN
-    IF NOT EXISTS (SELECT 1 FROM keel_ledger_journals WHERE tenant_id=v_tenant AND journal_id=v_original AND status='posted') THEN
-      RAISE EXCEPTION 'reversal original journal must be posted';
-    END IF;
-    IF EXISTS (
-      SELECT account_id,CASE side WHEN 'debit' THEN 'credit' ELSE 'debit' END,currency,amount_minor
-        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_original
-      EXCEPT ALL
-      SELECT account_id,side,currency,amount_minor
-        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_journal
-    ) OR EXISTS (
-      SELECT account_id,side,currency,amount_minor
-        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_journal
-      EXCEPT ALL
-      SELECT account_id,CASE side WHEN 'debit' THEN 'credit' ELSE 'debit' END,currency,amount_minor
-        FROM keel_ledger_lines WHERE tenant_id=v_tenant AND journal_id=v_original
-    ) THEN
-      RAISE EXCEPTION 'reversal journal must exactly invert every original line';
-    END IF;
-  END IF;
-  RETURN NULL;
-END; $$;
-DROP TRIGGER IF EXISTS keel_ledger_full_reversal_header_check ON keel_ledger_journals;
-CREATE CONSTRAINT TRIGGER keel_ledger_full_reversal_header_check
-  AFTER INSERT OR UPDATE ON keel_ledger_journals DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION keel_ledger_assert_full_reversal();
-DROP TRIGGER IF EXISTS keel_ledger_full_reversal_line_check ON keel_ledger_lines;
-CREATE CONSTRAINT TRIGGER keel_ledger_full_reversal_line_check
-  AFTER INSERT OR UPDATE OR DELETE ON keel_ledger_lines DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION keel_ledger_assert_full_reversal();
-
-
--- Append-only ledger event evidence is committed in the same transaction as the financial state change.
+-- Append-only audit events are committed in the same transaction as the financial state change.
 CREATE TABLE IF NOT EXISTS keel_ledger_events (
   tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
   event_id UUID NOT NULL,
-  event_type TEXT NOT NULL CHECK(event_type IN ('ACCOUNT_CREATED','JOURNAL_POSTED','RESERVATION_CREATED','RESERVATION_RELEASED','RESERVATION_CONSUMED','PROJECTION_REBUILT')),
+  event_type TEXT NOT NULL CHECK(event_type IN (
+    'ACCOUNT_CREATED','JOURNAL_POSTED','RESERVATION_CREATED',
+    'RESERVATION_RELEASED','RESERVATION_CONSUMED','PROJECTION_REBUILT'
+  )),
   subject_id TEXT NOT NULL,
-  event_fingerprint CHAR(64) NOT NULL CHECK(event_fingerprint ~ '^[0-9a-f]{64}
--- The runtime database role must not own these tables and must not have BYPASSRLS.
+  event_fingerprint CHAR(64) NOT NULL CHECK(event_fingerprint ~ '^[0-9a-f]{64}$'),
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(tenant_id,event_id)
+);
+CREATE INDEX IF NOT EXISTS keel_ledger_events_subject_idx
+  ON keel_ledger_events(tenant_id,subject_id,created_at DESC);
+CREATE OR REPLACE FUNCTION keel_ledger_events_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Keel ledger events are append-only';
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_events_no_mutation ON keel_ledger_events;
+CREATE TRIGGER keel_ledger_events_no_mutation
+  BEFORE UPDATE OR DELETE ON keel_ledger_events
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
+
+-- Tenant isolation is defence in depth. Runtime role must not own these tables and must not have BYPASSRLS.
 DO $$
 DECLARE t TEXT;
 BEGIN
@@ -160,37 +160,3 @@ BEGIN
     );
   END LOOP;
 END $$;
-
--- RLS context is intentionally transaction-local. This query should return no rows
--- outside a tenant-scoped transaction when executed as the runtime role.
-),
-  payload JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY(tenant_id,event_id)
-);
-CREATE INDEX IF NOT EXISTS keel_ledger_events_subject_idx ON keel_ledger_events(tenant_id,subject_id,created_at DESC);
-CREATE OR REPLACE FUNCTION keel_ledger_events_immutable() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RAISE EXCEPTION 'Keel ledger events are append-only'; END; $;
-DROP TRIGGER IF EXISTS keel_ledger_events_no_mutation ON keel_ledger_events;
-CREATE TRIGGER keel_ledger_events_no_mutation BEFORE UPDATE OR DELETE ON keel_ledger_events FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
-
--- Tenant isolation. The application must set keel.tenant_id transaction-locally.
--- The runtime database role must not own these tables and must not have BYPASSRLS.
-DO $$
-DECLARE t TEXT;
-BEGIN
-  FOREACH t IN ARRAY ARRAY[
-    'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
-    'keel_ledger_account_balances','keel_ledger_reservations'
-  ] LOOP
-    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
-    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %I',t||'_tenant_isolation',t);
-    EXECUTE format(
-      'CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid)',
-      t||'_tenant_isolation',t
-    );
-  END LOOP;
-END $$;
-
--- RLS context is intentionally transaction-local. This query should return no rows
--- outside a tenant-scoped transaction when executed as the runtime role.
