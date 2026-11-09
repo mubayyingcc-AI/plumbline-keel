@@ -266,8 +266,6 @@ const apiDescription = {
     '/api/consumer/identity/provider-events':{post:{summary:'Receive signed identity-verification provider events'}},
     '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
     '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}},
-    '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
-    '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}} ,
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -323,7 +321,7 @@ const server = http.createServer(async (req,res) => {
       });
     }
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
-    if (await consumerIdentityApi.handle({req,res,route,send,dbPool,crypto})) return;
+    if (await consumerIdentityApi.handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBrowser})) return;
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);
