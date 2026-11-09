@@ -64,7 +64,11 @@ CREATE TABLE IF NOT EXISTS keel_consumer_recovery_groups (
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  UNIQUE(recovery_group_id,owner_consumer_id)
 );
-ALTER TABLE keel_consumer_cards ADD CONSTRAINT keel_consumer_cards_recovery_group_fk FOREIGN KEY(recovery_group_id) REFERENCES keel_consumer_recovery_groups(recovery_group_id);
+DO $ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_consumer_cards_recovery_group_fk') THEN
+  ALTER TABLE keel_consumer_cards ADD CONSTRAINT keel_consumer_cards_recovery_group_fk FOREIGN KEY(recovery_group_id) REFERENCES keel_consumer_recovery_groups(recovery_group_id);
+ END IF;
+END $;
 CREATE TABLE IF NOT EXISTS keel_consumer_recovery_trustees (
  recovery_group_id UUID NOT NULL REFERENCES keel_consumer_recovery_groups(recovery_group_id),
  trustee_consumer_id UUID NOT NULL REFERENCES keel_consumer_accounts(consumer_id),
