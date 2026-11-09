@@ -259,6 +259,14 @@ async function listAccounts(pool, tenantIdInput) {
     return rows.rows;
   },tenantId);
 }
+async function listAccounts(pool,tenantIdInput){
+  requirePool(pool);
+  const tenantId=actorTenant(tenantIdInput);
+  return withTransaction(pool,async client=>{
+    const result=await client.query('SELECT account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable,created_at FROM keel_ledger_accounts WHERE tenant_id=$1 ORDER BY account_code,currency',[tenantId]);
+    return result.rows;
+  },tenantId);
+}
 async function createReservation(pool, tenantIdInput, input) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
@@ -366,4 +374,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount};
+module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount};
