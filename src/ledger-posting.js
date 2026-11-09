@@ -125,18 +125,25 @@ async function postJournalWithClient(client, tenantId, input) {
   return { journalId: journal.journalId, fingerprint: journal.fingerprint, status: 'posted', replay: false };
 }
 async function withTransaction(pool, work, tenantId) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
-    if (tenantId) await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
-    const result = await work(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
-    throw error;
-  } finally { client.release(); }
+  // PostgreSQL SERIALIZABLE transactions can legitimately abort under contention.
+  // Retry only known transient transaction failures; never retry business rejections.
+  for (let attempt=1; attempt<=3; attempt++) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+      if (tenantId) await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      const code=error && error.code;
+      if ((code==='40001'||code==='40P01') && attempt<3) continue;
+      throw error;
+    } finally { client.release(); }
+  }
+  fail('ledger_transaction_retry_exhausted',409);
 }
 function requirePool(pool) {
   if (!pool || typeof pool.connect !== 'function') fail('ledger_storage_unavailable', 503);
