@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
+const { canonical } = require('./authority-chain');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -84,10 +85,27 @@ async function verifyAccountProjectionWithClient(client,tenantId,account) {
     computed:{debitTotalMinor:debit.toString(),creditTotalMinor:credit.toString(),balanceMinor:computed.toString()}};
 }
 async function appendLedgerEvent(client, tenantId, eventType, subjectId, payload) {
+  await client.query(
+    'INSERT INTO keel_ledger_event_heads(tenant_id,last_sequence,last_fingerprint) VALUES($1,0,NULL) ON CONFLICT(tenant_id) DO NOTHING',
+    [tenantId]
+  );
+  const head=await client.query(
+    'SELECT last_sequence,last_fingerprint FROM keel_ledger_event_heads WHERE tenant_id=$1 FOR UPDATE',
+    [tenantId]
+  );
+  const sequence=BigInt(head.rows[0].last_sequence)+1n;
+  const previousFingerprint=head.rows[0].last_fingerprint;
   const eventId=crypto.randomUUID();
-  const body={tenantId,eventId,eventType,subjectId,payload};
-  const fingerprint=crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
-  await client.query('INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6)',[tenantId,eventId,eventType,subjectId,fingerprint,JSON.stringify(payload)]);
+  const body={tenantId,eventId,eventType,subjectId,payload,sequence:sequence.toString(),previousFingerprint};
+  const fingerprint=crypto.createHash('sha256').update(canonical(body)).digest('hex');
+  await client.query(
+    'INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,tenant_sequence,previous_event_fingerprint,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+    [tenantId,eventId,eventType,subjectId,sequence.toString(),previousFingerprint,fingerprint,JSON.stringify(payload)]
+  );
+  await client.query(
+    'UPDATE keel_ledger_event_heads SET last_sequence=$2,last_fingerprint=$3,updated_at=NOW() WHERE tenant_id=$1',
+    [tenantId,sequence.toString(),fingerprint]
+  );
 }
 async function verifyAccountProjection(pool,tenantIdInput,accountId) {
   requirePool(pool);
@@ -284,22 +302,6 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
     };
   }, tenantId);
 }
-async function listAccounts(pool, tenantIdInput) {
-  requirePool(pool);
-  const tenantId=actorTenant(tenantIdInput);
-  return withTransaction(pool,async client=>{
-    const rows=await client.query('SELECT account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable,created_at FROM keel_ledger_accounts WHERE tenant_id=$1 ORDER BY account_code,currency',[tenantId]);
-    return rows.rows;
-  },tenantId);
-}
-async function listAccounts(pool,tenantIdInput){
-  requirePool(pool);
-  const tenantId=actorTenant(tenantIdInput);
-  return withTransaction(pool,async client=>{
-    const result=await client.query('SELECT account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable,created_at FROM keel_ledger_accounts WHERE tenant_id=$1 ORDER BY account_code,currency',[tenantId]);
-    return result.rows;
-  },tenantId);
-}
 async function createReservation(pool, tenantIdInput, input) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
@@ -407,4 +409,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount};
+module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,normalBalance,amount,withTransaction};
