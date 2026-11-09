@@ -32,11 +32,12 @@ function normalBalance(account, debit, credit) {
 }
 async function lockAccount(client, tenantId, accountId, includeSuspended = false) {
   const result = await client.query(
-    'SELECT tenant_id,account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable FROM keel_ledger_accounts WHERE tenant_id=$1 AND account_id=$2 FOR UPDATE',
+    'SELECT tenant_id,account_id,account_code,account_name,account_class,currency,currency_exponent,normal_side,status,allow_negative_balance,is_reservable FROM keel_ledger_accounts WHERE tenant_id=$1 AND account_id=$2 FOR UPDATE',
     [tenantId, accountId]
   );
   if (!result.rowCount) fail('ledger_account_not_found', 404);
   if (!includeSuspended && result.rows[0].status !== 'active') fail('ledger_account_not_active', 409);
+  if (result.rows[0].currency_exponent===null) fail('ledger_account_currency_exponent_unconfigured',409);
   return result.rows[0];
 }
 async function readProjection(client, tenantId, account) {
@@ -255,6 +256,7 @@ async function createAccount(pool, tenantIdInput, account) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(accountId)) fail('ledger_account_id_invalid');
   if (!code || code.length > 64 || !name || name.length > 180) fail('ledger_account_metadata_invalid');
   if (!/^[A-Z]{3}$/.test(currency || '')) fail('ledger_account_currency_invalid');
+  if (!Number.isInteger(account.currencyExponent) || account.currencyExponent<0 || account.currencyExponent>6) fail('ledger_account_currency_exponent_invalid');
   if (!['asset','liability','equity','income','expense','memorandum'].includes(accountClass)) fail('ledger_account_class_invalid');
   if (!['debit','credit'].includes(normalSide)) fail('ledger_account_normal_side_invalid');
   if (accountClass !== 'memorandum') {
@@ -264,9 +266,9 @@ async function createAccount(pool, tenantIdInput, account) {
   return withTransaction(pool, async client => {
     await client.query(
       `INSERT INTO keel_ledger_accounts
-       (tenant_id,account_id,account_code,account_name,account_class,currency,normal_side,status,allow_negative_balance,is_reservable)
-       VALUES($1,$2,$3,$4,$5,$6,$7,'active',$8,$9)`,
-      [tenantId,accountId,code,name,accountClass,currency,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
+       (tenant_id,account_id,account_code,account_name,account_class,currency,currency_exponent,normal_side,status,allow_negative_balance,is_reservable)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10)`,
+      [tenantId,accountId,code,name,accountClass,currency,account.currencyExponent,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
     );
     await client.query('INSERT INTO keel_ledger_account_balances(tenant_id,account_id,currency) VALUES($1,$2,$3)',[tenantId,accountId,currency]);
     await appendLedgerEvent(client,tenantId,'ACCOUNT_CREATED',accountId,{currency,accountClass,normalSide,allowNegativeBalance:account.allowNegativeBalance===true,isReservable:account.isReservable===true});
@@ -303,7 +305,7 @@ async function listAccounts(pool,tenantIdInput) {
     );
     return result.rows.map(row=>({
       accountId:row.account_id,accountCode:row.account_code,accountName:row.account_name,
-      accountClass:row.account_class,currency:row.currency,normalSide:row.normal_side,
+      accountClass:row.account_class,currency:row.currency,currencyExponent:row.currency_exponent,normalSide:row.normal_side,
       status:row.status,allowNegativeBalance:row.allow_negative_balance,isReservable:row.is_reservable,
       debitTotalMinor:row.debit_total_minor,creditTotalMinor:row.credit_total_minor,
       ledgerBalanceMinor:row.ledger_balance_minor,reservedMinor:row.reserved_minor,
@@ -321,7 +323,7 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
     const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId.trim());
     return {
-      accountId: account.account_id, currency: account.currency, normalSide: account.normal_side,
+      accountId: account.account_id, currency: account.currency, currencyExponent:account.currency_exponent, normalSide: account.normal_side,
       debitTotalMinor: projection.debit.toString(), creditTotalMinor: projection.credit.toString(),
       ledgerBalanceMinor: balance.toString(), reservedMinor: reserved.toString(),
       availableMinor: (balance-reserved).toString()
