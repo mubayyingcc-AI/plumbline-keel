@@ -15,6 +15,7 @@ const regulatoryAssurance = require('./src/regulatory-assurance');
 const humanCardPairing = require('./src/human-card-pairing');
 const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
+const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
@@ -266,6 +267,17 @@ const apiDescription = {
     '/api/consumer/identity/provider-events':{post:{summary:'Receive signed identity-verification provider events'}},
     '/api/consumer/me':{get:{summary:'Read authenticated consumer identity and Human Card order status'}},
     '/api/consumer/card-orders':{post:{summary:'Submit an idempotent physical Human Card order request'}},
+    '/api/consumer/cards':{get:{summary:'List consumer Human Cards and security status'}},
+    '/api/consumer/cards/pairing/challenge':{post:{summary:'Issue physical Human Card secure-element pairing challenge'}},
+    '/api/consumer/cards/pairing/verify':{post:{summary:'Verify consumer physical-card proof of possession'}},
+    '/api/consumer/cards/lock':{post:{summary:'Emergency lock consumer physical card'}},
+    '/api/consumer/recovery/groups':{post:{summary:'Create independent consumer recovery trustee group'}},
+    '/api/consumer/recovery/requests':{post:{summary:'Open delayed consumer card recovery'}},
+    '/api/consumer/recovery/requests/{requestId}/approval':{post:{summary:'Record independent trustee recovery approval'}},
+    '/api/consumer/recovery/requests/{requestId}/finalise':{post:{summary:'Complete delayed recovery and require replacement card'}},
+    '/api/partners/card-programme/events':{post:{summary:'Receive signed card partner personalisation events'}},
+    '/api/partners/card-attestation/events':{post:{summary:'Receive signed independent hardware attestation events'}},
+    '/api/partners/card-delivery/events':{post:{summary:'Receive signed independent card delivery events'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -321,6 +333,7 @@ const server = http.createServer(async (req,res) => {
       });
     }
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
+    if (await consumerCardSecurityApi.handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser})) return;
     if (await consumerIdentityApi.handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBrowser})) return;
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
