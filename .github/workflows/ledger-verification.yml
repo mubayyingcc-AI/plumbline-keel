@@ -62,6 +62,7 @@ jobs:
             keel_ledger_lines,
             keel_ledger_account_balances,
             keel_ledger_reservations,
+            keel_ledger_event_heads,
             keel_ledger_events
           TO keel_runtime;
           SQL
