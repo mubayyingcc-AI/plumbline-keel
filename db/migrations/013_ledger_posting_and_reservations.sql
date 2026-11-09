@@ -149,7 +149,7 @@ DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
-    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_events'
+    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events','keel_ledger_events'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
@@ -159,4 +159,38 @@ BEGIN
       t||'_tenant_isolation',t
     );
   END LOOP;
-END $$;
+END $$;-- Append-only, per-tenant hash-linked ledger event stream.
+CREATE TABLE IF NOT EXISTS keel_ledger_event_heads (
+  tenant_id UUID PRIMARY KEY REFERENCES keel_tenants(tenant_id),
+  last_sequence BIGINT NOT NULL DEFAULT 0 CHECK(last_sequence>=0),
+  last_fingerprint CHAR(64),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK((last_sequence=0 AND last_fingerprint IS NULL) OR (last_sequence>0 AND last_fingerprint ~ '^[0-9a-f]{64}$'))
+);
+CREATE TABLE IF NOT EXISTS keel_ledger_events (
+  tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
+  event_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  tenant_sequence BIGINT NOT NULL CHECK(tenant_sequence>0),
+  previous_event_fingerprint CHAR(64),
+  event_fingerprint CHAR(64) NOT NULL CHECK(event_fingerprint ~ '^[0-9a-f]{64}$'),
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(tenant_id,event_id),
+  UNIQUE(tenant_id,tenant_sequence),
+  UNIQUE(tenant_id,event_fingerprint),
+  CHECK(previous_event_fingerprint IS NULL OR previous_event_fingerprint ~ '^[0-9a-f]{64}$')
+);
+CREATE INDEX IF NOT EXISTS keel_ledger_events_subject_idx
+  ON keel_ledger_events(tenant_id,subject_id,tenant_sequence DESC);
+CREATE OR REPLACE FUNCTION keel_ledger_events_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Keel ledger events are append-only';
+END; $$;
+DROP TRIGGER IF EXISTS keel_ledger_events_no_mutation ON keel_ledger_events;
+CREATE TRIGGER keel_ledger_events_no_mutation
+  BEFORE UPDATE OR DELETE ON keel_ledger_events
+  FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
+
+
