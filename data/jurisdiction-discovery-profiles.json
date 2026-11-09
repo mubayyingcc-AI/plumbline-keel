@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "keel-jurisdiction-discovery/1.0",
+  "notice": "Discovery inventory only. Not legal advice, a complete rule inventory or an applicability decision. Verify official current sources and obtain institution legal/compliance approval.",
+  "markets": [
+    {
+      "code": "SA",
+      "name": "Saudi Arabia",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "PDPL and implementing regulations",
+        "SDAIA AI risk framework/guidance",
+        "SAMA instructions",
+        "sector-specific rules"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "AE",
+      "name": "United Arab Emirates",
+      "subJurisdictions": [
+        "federal",
+        "Dubai",
+        "Abu Dhabi",
+        "DIFC",
+        "ADGM"
+      ],
+      "discoveryAreas": [
+        "Federal data protection",
+        "CBUAE AI/ML guidance and enabling technology",
+        "CBUAE customer data",
+        "DIFC and ADGM separate regimes",
+        "sector-specific rules"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "QA",
+      "name": "Qatar",
+      "subJurisdictions": [
+        "national",
+        "Qatar Financial Centre"
+      ],
+      "discoveryAreas": [
+        "National personal data protection",
+        "NCSA guidance",
+        "QCB AI/financial-sector instructions",
+        "QFC separate regime"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "BH",
+      "name": "Bahrain",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "PDPL",
+        "CBB rulebook",
+        "National AI policy and guidance"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "OM",
+      "name": "Oman",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "PDPL and executive regulations",
+        "Central Bank of Oman requirements",
+        "Government AI policy scope"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "KW",
+      "name": "Kuwait",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "CITRA privacy regulation and precise scope",
+        "Central Bank of Kuwait requirements",
+        "Sector and government policies"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "NG",
+      "name": "Nigeria",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "Nigeria Data Protection Act and NDPC instruments",
+        "CBN and payment-system rules",
+        "Financial reporting/AML",
+        "Outsourcing, cloud and cybersecurity"
+      ],
+      "status": "research_pending"
+    },
+    {
+      "code": "GB",
+      "name": "United Kingdom",
+      "subJurisdictions": [
+        "national"
+      ],
+      "discoveryAreas": [
+        "UK GDPR and Data Protection Act",
+        "FCA/PRA rules",
+        "Operational resilience and outsourcing",
+        "Payment services and settlement",
+        "Cross-sector AI requirements"
+      ],
+      "status": "research_pending"
+    }
+  ]
+}

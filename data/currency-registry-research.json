@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "keel-currency-registry/1.0",
+  "coverage": "Illustrative subset only; production requires authoritative, licensed, versioned ISO 4217 ingestion.",
+  "source": "ISO 4217 maintenance agency publication - verification pending",
+  "records": [
+    {
+      "code": "NGN",
+      "name": "Nigerian naira",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "GBP",
+      "name": "Pound sterling",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "USD",
+      "name": "US dollar",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "EUR",
+      "name": "Euro",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "JPY",
+      "name": "Japanese yen",
+      "minorUnit": 0,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "KWD",
+      "name": "Kuwaiti dinar",
+      "minorUnit": 3,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "BHD",
+      "name": "Bahraini dinar",
+      "minorUnit": 3,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "OMR",
+      "name": "Omani rial",
+      "minorUnit": 3,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "QAR",
+      "name": "Qatari riyal",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "SAR",
+      "name": "Saudi riyal",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    },
+    {
+      "code": "AED",
+      "name": "UAE dirham",
+      "minorUnit": 2,
+      "validFrom": "2020-01-01",
+      "validTo": null,
+      "source": "ISO 4217",
+      "sourceVersion": "verify current official publication",
+      "status": "research"
+    }
+  ]
+}
