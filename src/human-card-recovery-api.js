@@ -11,6 +11,7 @@ async function handle({req,res,route,authenticateTenant,dbPool,send,readBody,sam
  const actor=await authenticateTenant(req);
  if(!actor){send(res,401,{error:'valid_tenant_api_key_required'});return true;}
  if(!actor.principal_id){send(res,403,{error:'named_principal_required'});return true;}
+ if(actor.identity_assurance!=='externally_verified'){send(res,403,{error:'externally_verified_cardholder_identity_required'});return true;}
  const pool=await dbPool();
  if(!pool){send(res,503,{error:'card_registry_unavailable'});return true;}
  if(groups){
@@ -40,7 +41,7 @@ async function handle({req,res,route,authenticateTenant,dbPool,send,readBody,sam
    const d=await client.query('SELECT * FROM keel_human_card_devices WHERE tenant_id=$1 AND card_id=$2 AND principal_id=$3 FOR UPDATE',[actor.tenant_id,cardId,actor.principal_id]);
    if(!d.rowCount){await client.query('ROLLBACK');send(res,404,{error:'human_card_not_found'});return true;}
    if(['lost','revoked','replaced'].includes(d.rows[0].device_status)){await client.query('ROLLBACK');send(res,409,{error:'card_already_lost_or_revoked'});return true;}
-   const g=await client.query("SELECT * FROM keel_human_card_recovery_groups WHERE tenant_id=$1 AND owner_principal_id=$2 AND status='active' ORDER BY created_at DESC LIMIT 1 FOR UPDATE",[actor.tenant_id,actor.principal_id]);
+   const g=await client.query("SELECT rg.* FROM keel_human_card_recovery_groups rg WHERE rg.tenant_id=$1 AND rg.owner_principal_id=$2 AND rg.status='active' AND (SELECT COUNT(*) FROM keel_human_card_recovery_trustees rt JOIN keel_principals p ON p.tenant_id=rt.tenant_id AND p.principal_id=rt.trustee_principal_id WHERE rt.tenant_id=rg.tenant_id AND rt.recovery_group_id=rg.recovery_group_id AND p.status='active' AND p.identity_assurance='externally_verified')>=rg.threshold ORDER BY rg.created_at DESC LIMIT 1 FOR UPDATE",[actor.tenant_id,actor.principal_id]);
    if(!g.rowCount){await client.query('ROLLBACK');send(res,409,{error:'active_independent_recovery_group_required'});return true;}
    const r=crypto.randomUUID(),group=g.rows[0];
    await client.query("UPDATE keel_human_card_devices SET device_status='lost',lifecycle_state='locked',updated_at=NOW() WHERE tenant_id=$1 AND card_id=$2",[actor.tenant_id,cardId]);
