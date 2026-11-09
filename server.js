@@ -17,6 +17,7 @@ const humanCardPairing = require('./src/human-card-pairing');
 const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
+const ledgerPosting = require('./src/ledger-posting');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
@@ -280,6 +281,13 @@ const apiDescription = {
     '/api/partners/card-attestation/events':{post:{summary:'Receive signed independent hardware attestation events'}},
     '/api/partners/card-delivery/events':{post:{summary:'Receive signed independent card delivery events'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
+    '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts and explicit currency exponents'},post:{summary:'Create a tenant ledger account with configured ISO currency minor-unit exponent'}},
+    '/api/ledger/events/verify':{get:{summary:'Verify the tenant append-only ledger event hash chain'}},
+    '/api/ledger/journals':{post:{summary:'Atomically post an immutable balanced journal'}},
+    '/api/ledger/accounts/{accountId}/balance':{get:{summary:'Read ledger, reserved and available balances'}},
+    '/api/ledger/reservations':{post:{summary:'Reserve available ledger funds'}},
+    '/api/ledger/reservations/{reservationId}/release':{post:{summary:'Release an active funds reservation'}},
+    '/api/ledger/reservations/{reservationId}/consume':{post:{summary:'Atomically consume a reservation with a journal'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
@@ -797,6 +805,55 @@ const server = http.createServer(async (req,res) => {
       const [oq,mq,cq]=await Promise.all([pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT obligation_id,control_id FROM keel_regulatory_mappings WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT payload FROM keel_regulatory_controls WHERE tenant_id=$1',[actor.tenant_id])]);
       const impact=regulatoryAssurance.assessRegulatoryChange({oldVersion:b.oldVersion,newVersion:b.newVersion,obligations:oq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id})),controls:cq.rows.map(x=>x.payload)});
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
+    }
+    // Ledger APIs: tenant-scoped accounting records only; no external payment execution.
+    if (route.startsWith('/api/ledger/')) {
+      const actor=await authenticateTenant(req);
+      if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool();
+      if(!pool)return send(res,503,{error:'ledger_storage_unavailable'});
+      const canWrite=['owner','admin','integration'].includes(actor.role);
+      if(req.method==='POST'&&!canWrite)return send(res,403,{error:'ledger_write_role_required'});
+      if(req.method==='POST'&&!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      if(req.method==='POST'&&route==='/api/ledger/accounts'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'ledger_account_admin_required'});
+        const account=await ledgerPosting.createAccount(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,account});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/events/verify'){
+        const verification=await ledgerPosting.verifyLedgerEventChain(pool,actor.tenant_id);
+        return send(res,verification.valid?200:409,{ok:verification.valid,verification});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/accounts'){
+        const accounts=await ledgerPosting.listAccounts(pool,actor.tenant_id);
+        return send(res,200,{count:accounts.length,accounts});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/journals'){
+        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,await readBody(req));
+        return send(res,result.replay?200:201,{ok:true,...result,notice:'Ledger posting only; this does not initiate or confirm an external payment or settlement.'});
+      }
+      const balanceMatch=route.match(/^\/api\/ledger\/accounts\/([^/]+)\/balance$/);
+      if(req.method==='GET'&&balanceMatch){
+        const balance=await ledgerPosting.getAccountBalance(pool,actor.tenant_id,decodeURIComponent(balanceMatch[1]));
+        return send(res,200,{ok:true,balance});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/reservations'){
+        const result=await ledgerPosting.createReservation(pool,actor.tenant_id,await readBody(req));
+        return send(res,result.replay?200:201,{ok:true,...result});
+      }
+      const releaseMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/release$/);
+      if(req.method==='POST'&&releaseMatch){
+        const b=await readBody(req);
+        const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,decodeURIComponent(releaseMatch[1]),b.reason);
+        return send(res,200,{ok:true,...result});
+      }
+      const consumeMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/consume$/);
+      if(req.method==='POST'&&consumeMatch){
+        const b=await readBody(req);
+        const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,decodeURIComponent(consumeMatch[1]),b.journal);
+        return send(res,result.status==='expired'?409:(result.replay?200:201),{ok:result.status!=='expired',...result});
+      }
+      return send(res,404,{error:'ledger_route_not_found'});
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});

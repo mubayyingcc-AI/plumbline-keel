@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS keel_ledger_lines (
 );
 CREATE INDEX IF NOT EXISTS keel_ledger_lines_account_idx ON keel_ledger_lines(tenant_id,account_id,currency,journal_id);
 
-CREATE OR REPLACE FUNCTION keel_ledger_reject_posted_mutation() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE OR REPLACE FUNCTION keel_ledger_reject_posted_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_status TEXT;
 BEGIN
  IF TG_OP IN ('UPDATE','DELETE') THEN
@@ -60,7 +60,7 @@ BEGIN
   IF v_status='posted' THEN RAISE EXCEPTION 'posted ledger journal is immutable'; END IF;
  END IF;
  IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
-END; $;
+END; $$;
 DROP TRIGGER IF EXISTS keel_ledger_lines_immutable ON keel_ledger_lines;
 CREATE TRIGGER keel_ledger_lines_immutable BEFORE INSERT OR UPDATE OR DELETE ON keel_ledger_lines
 FOR EACH ROW EXECUTE FUNCTION keel_ledger_reject_posted_mutation();
@@ -121,7 +121,7 @@ DROP TRIGGER IF EXISTS keel_ledger_line_currency_check ON keel_ledger_lines;
 CREATE TRIGGER keel_ledger_line_currency_check BEFORE INSERT OR UPDATE ON keel_ledger_lines
 FOR EACH ROW EXECUTE FUNCTION keel_ledger_account_currency_guard();
 
-CREATE OR REPLACE FUNCTION keel_ledger_account_metadata_guard() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE OR REPLACE FUNCTION keel_ledger_account_metadata_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF (NEW.tenant_id,NEW.account_id,NEW.account_code,NEW.account_name,NEW.account_class,NEW.currency,NEW.normal_side)
     IS DISTINCT FROM
@@ -129,7 +129,7 @@ BEGIN
   RAISE EXCEPTION 'ledger account identity and classification are immutable; use status to suspend or close';
  END IF;
  RETURN NEW;
-END; $;
+END; $$;
 DROP TRIGGER IF EXISTS keel_ledger_account_metadata_immutable ON keel_ledger_accounts;
 CREATE TRIGGER keel_ledger_account_metadata_immutable BEFORE UPDATE ON keel_ledger_accounts
 FOR EACH ROW EXECUTE FUNCTION keel_ledger_account_metadata_guard();

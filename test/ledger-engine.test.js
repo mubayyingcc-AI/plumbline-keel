@@ -25,7 +25,7 @@ test('requires distinct accounts and at least two lines',()=>{
 test('reversal is a compensating journal and does not mutate original',()=>{
  const original=base(),before=structuredClone(original);
  const reversal=ledger.buildReversal({original,tenantId:'tenant-a',journalId:'j-002',idempotencyKey:'idempotency-key-0002',effectiveAt:'2026-11-09T11:00:00Z'});
- assert.equal(reversal.lines[0].side,'credit');assert.equal(reversal.lines[1].side,'debit');assert.deepEqual(original,before);
+ assert.equal(reversal.lines[0].side,'credit');assert.equal(reversal.lines[1].side,'debit');assert.equal(reversal.reversalOfJournalId,'j-001');assert.deepEqual(original,before);
 });
 test('prevents cross-tenant reversal',()=>{
  assert.throws(()=>ledger.buildReversal({original:base(),tenantId:'tenant-b',journalId:'j-002',idempotencyKey:'idempotency-key-0002',effectiveAt:'2026-11-09T11:00:00Z'}),/tenant_mismatch/);
