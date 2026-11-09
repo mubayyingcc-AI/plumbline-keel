@@ -143,23 +143,7 @@ CREATE TRIGGER keel_ledger_events_no_mutation
   BEFORE UPDATE OR DELETE ON keel_ledger_events
   FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
 
--- Tenant isolation is defence in depth. Runtime role must not own these tables and must not have BYPASSRLS.
-DO $$
-DECLARE t TEXT;
-BEGIN
-  FOREACH t IN ARRAY ARRAY[
-    'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
-    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events','keel_ledger_events'
-  ] LOOP
-    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
-    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %I',t||'_tenant_isolation',t);
-    EXECUTE format(
-      'CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid)',
-      t||'_tenant_isolation',t
-    );
-  END LOOP;
-END $$;-- Append-only, per-tenant hash-linked ledger event stream.
+-- Append-only, per-tenant hash-linked ledger event stream.
 CREATE TABLE IF NOT EXISTS keel_ledger_event_heads (
   tenant_id UUID PRIMARY KEY REFERENCES keel_tenants(tenant_id),
   last_sequence BIGINT NOT NULL DEFAULT 0 CHECK(last_sequence>=0),
@@ -193,4 +177,20 @@ CREATE TRIGGER keel_ledger_events_no_mutation
   BEFORE UPDATE OR DELETE ON keel_ledger_events
   FOR EACH ROW EXECUTE FUNCTION keel_ledger_events_immutable();
 
-
+-- Tenant isolation is defence in depth. Runtime role must not own these tables and must not have BYPASSRLS.
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
+    'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events'
+  ] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I',t||'_tenant_isolation',t);
+    EXECUTE format(
+      'CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'',true),'''')::uuid)',
+      t||'_tenant_isolation',t
+    );
+  END LOOP;
+END $$;
