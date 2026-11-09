@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -82,6 +83,12 @@ async function verifyAccountProjection(client,tenantId,account) {
     projection:{debitTotalMinor:projection.debit.toString(),creditTotalMinor:projection.credit.toString(),balanceMinor:projection.balance.toString(),version:projection.version},
     computed:{debitTotalMinor:debit.toString(),creditTotalMinor:credit.toString(),balanceMinor:computed.toString()}};
 }
+async function appendLedgerEvent(client, tenantId, eventType, subjectId, payload) {
+  const eventId=crypto.randomUUID();
+  const body={tenantId,eventId,eventType,subjectId,payload};
+  const fingerprint=crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+  await client.query('INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6)',[tenantId,eventId,eventType,subjectId,fingerprint,JSON.stringify(payload)]);
+}
 async function activeReservations(client, tenantId, accountId) {
   const r = await client.query(
     `SELECT COALESCE(SUM(amount_minor),0)::text AS reserved
@@ -155,6 +162,7 @@ async function postJournalWithClient(client, tenantId, input) {
     const reserved = await activeReservations(client, tenantId, id);
     if (!account.allow_negative_balance && balance < reserved) fail('ledger_posting_would_breach_active_reservations', 409);
   }
+  await appendLedgerEvent(client,tenantId,'JOURNAL_POSTED',journal.journalId,{fingerprint:journal.fingerprint,sourceRef:journal.sourceRef,effectiveAt:journal.effectiveAt,lineCount:journal.lineCount,totalsByCurrency:journal.totalsByCurrency});
   return { journalId: journal.journalId, fingerprint: journal.fingerprint, status: 'posted', replay: false };
 }
 async function withTransaction(pool, work, tenantId) {
@@ -208,6 +216,7 @@ async function createAccount(pool, tenantIdInput, account) {
       [tenantId,accountId,code,name,accountClass,currency,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
     );
     await client.query('INSERT INTO keel_ledger_account_balances(tenant_id,account_id,currency) VALUES($1,$2,$3)',[tenantId,accountId,currency]);
+    await appendLedgerEvent(client,tenantId,'ACCOUNT_CREATED',accountId,{currency,accountClass,normalSide,allowNegativeBalance:account.allowNegativeBalance===true,isReservable:account.isReservable===true});
     return { accountId, currency, accountClass, normalSide, status: 'active' };
   }, tenantId);
 }
@@ -284,6 +293,7 @@ async function createReservation(pool, tenantIdInput, input) {
       if(p.reservation_id!==reservationId||p.account_id!==accountId||p.currency!==account.currency||p.amount_minor!==value.toString()||p.purpose!==purpose)fail('reservation_idempotency_conflict',409);
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
+    await appendLedgerEvent(client,tenantId,'RESERVATION_CREATED',reservationId,{accountId,currency:account.currency,amountMinor:value.toString(),purpose,expiresAt});
     return {reservationId,status:'active',replay:false};
   }, tenantId);
 }
@@ -297,8 +307,11 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
     if(!row.rowCount)fail('reservation_not_found',404);
     if(row.rows[0].status==='released')return {reservationId,status:'released',replay:true};
     if(row.rows[0].status!=='active')fail('reservation_not_active',409);
-    await client.query("UPDATE keel_ledger_reservations SET status='released',closed_at=NOW(),close_reason=$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),reason.trim()]);
-    return {reservationId,status:'released',replay:false};
+    const expiry=await client.query('SELECT expires_at IS NOT NULL AND expires_at<=NOW() AS expired FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim()]);
+    const next=expiry.rows[0].expired?'expired':'released';
+    await client.query('UPDATE keel_ledger_reservations SET status=$3,closed_at=NOW(),close_reason=$4 WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim(),next,reason.trim()]);
+    await appendLedgerEvent(client,tenantId,'RESERVATION_RELEASED',reservationId.trim(),{reason:reason.trim(),status:next});
+    return {reservationId,status:next,replay:false};
   }, tenantId);
 }
 async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
@@ -315,7 +328,12 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
       if(existing.rowCount&&existing.rows[0].journal_id===validatedJournal.journalId&&existing.rows[0].fingerprint===validatedJournal.fingerprint)return {reservationId,status:'consumed',journalId:validatedJournal.journalId,replay:true};
       fail('reservation_already_consumed',409);
     }
-    if(reservation.status!=='active'||(reservation.expires_at&&new Date(reservation.expires_at).getTime()<=Date.now()))fail('reservation_not_active',409);
+    if(reservation.status!=='active')fail('reservation_not_active',409);
+    const live=await client.query('SELECT ($1::timestamptz IS NULL OR $1::timestamptz>NOW()) AS live',[reservation.expires_at]);
+    if(!live.rows[0].live){
+      await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired_before_consumption' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim()]);
+      fail('reservation_expired',409);
+    }
     const checked=validatedJournal;
     const account=await lockAccount(client,tenantId,reservation.account_id);
     let reduction=0n;
@@ -327,6 +345,7 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     if(reduction!==-BigInt(reservation.amount_minor))fail('reservation_journal_amount_mismatch',409);
     await client.query("UPDATE keel_ledger_reservations SET status='consumed',closed_at=NOW(),close_reason='consumed_by_journal:'||$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),checked.journalId]);
     const posted=await postJournalWithClient(client,tenantId,journal);
+    await appendLedgerEvent(client,tenantId,'RESERVATION_CONSUMED',reservationId.trim(),{journalId:posted.journalId});
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
