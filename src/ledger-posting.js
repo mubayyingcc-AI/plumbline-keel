@@ -271,8 +271,8 @@ async function createAccount(pool, tenantIdInput, account) {
       [tenantId,accountId,code,name,accountClass,currency,account.currencyExponent,normalSide,account.allowNegativeBalance===true,account.isReservable===true]
     );
     await client.query('INSERT INTO keel_ledger_account_balances(tenant_id,account_id,currency) VALUES($1,$2,$3)',[tenantId,accountId,currency]);
-    await appendLedgerEvent(client,tenantId,'ACCOUNT_CREATED',accountId,{currency,accountClass,normalSide,allowNegativeBalance:account.allowNegativeBalance===true,isReservable:account.isReservable===true});
-    return { accountId, currency, accountClass, normalSide, status: 'active' };
+    await appendLedgerEvent(client,tenantId,'ACCOUNT_CREATED',accountId,{currency,currencyExponent:account.currencyExponent,accountClass,normalSide,allowNegativeBalance:account.allowNegativeBalance===true,isReservable:account.isReservable===true});
+    return { accountId, currency, currencyExponent:account.currencyExponent, accountClass, normalSide, status: 'active' };
   }, tenantId);
 }
 async function postJournal(pool, tenantIdInput, journal) {
@@ -285,7 +285,7 @@ async function listAccounts(pool,tenantIdInput) {
   const tenantId=actorTenant(tenantIdInput);
   return withTransaction(pool,async client=>{
     const result=await client.query(
-      `SELECT a.account_id,a.account_code,a.account_name,a.account_class,a.currency,
+      `SELECT a.account_id,a.account_code,a.account_name,a.account_class,a.currency,a.currency_exponent,
               a.normal_side,a.status,a.allow_negative_balance,a.is_reservable,
               COALESCE(b.debit_total,0)::text AS debit_total_minor,
               COALESCE(b.credit_total,0)::text AS credit_total_minor,
