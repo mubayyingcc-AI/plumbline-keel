@@ -77,7 +77,8 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
       {accountId:reversalEquity,side:'debit',currency:'USD',amountMinor:'49'}
     ]};
     await assert.rejects(()=>posting.postJournal(pool,tenantId,forged),/ledger_reversal_must_exactly_reverse_original/);
-    assert.equal((await posting.verifyLedgerEventChain(pool,tenantId)).valid,true);
+    const chainCheck=await posting.verifyLedgerEventChain(pool,tenantId);
+    assert.equal(chainCheck.valid,true,JSON.stringify(chainCheck));
   } finally {
     await pool.end();
   }
