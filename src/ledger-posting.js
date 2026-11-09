@@ -392,7 +392,8 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     const live=await client.query('SELECT ($1::timestamptz IS NULL OR $1::timestamptz>NOW()) AS live',[reservation.expires_at]);
     if(!live.rows[0].live){
       await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired_before_consumption' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim()]);
-      fail('reservation_expired',409);
+      await appendLedgerEvent(client,tenantId,'RESERVATION_RELEASED',reservationId.trim(),{status:'expired',reason:'expired_before_consumption'});
+      return {reservationId,status:'expired',replay:false};
     }
     const checked=validatedJournal;
     const account=await lockAccount(client,tenantId,reservation.account_id);
