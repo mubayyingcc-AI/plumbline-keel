@@ -13,7 +13,7 @@ function normalizeObligation(x){
  const type=str(x.sourceType,'source_type',40);if(!OBLIGATION_TYPES.has(type))throw Error('unsupported_source_type');
  const out={obligationId:str(x.obligationId,'obligation_id',120),sourceId:str(x.sourceId,'source_id',120),sourceVersion:str(x.sourceVersion,'source_version',80),sourceType:type,jurisdiction:str(x.jurisdiction,'jurisdiction',80),instrument:str(x.instrument,'instrument',180),locator:str(x.locator,'locator',180),title:str(x.title,'title',300),regulatedRole:str(x.regulatedRole,'regulated_role',80),effectiveFrom:str(x.effectiveFrom,'effective_from',50),effectiveTo:x.effectiveTo||null,applicability:x.applicability&&typeof x.applicability==='object'&&!Array.isArray(x.applicability)?x.applicability:{},evidenceExpectations:arr(x.evidenceExpectations,'evidence_expectations'),legalReviewer:x.legalReviewer?str(x.legalReviewer,'legal_reviewer',120):null};
  if(!Number.isFinite(Date.parse(out.effectiveFrom))||(out.effectiveTo&&!Number.isFinite(Date.parse(out.effectiveTo))))throw Error('invalid_obligation_dates');
- if(out.effectiveTo&&Date.parse(out.effectiveTo)<=Date.parse(out.effectiveFrom))throw Error('invalid_obligation_period');
+ if(out.effectiveTo&&(!Number.isFinite(Date.parse(out.effectiveTo))||Date.parse(out.effectiveTo)<=Date.parse(out.effectiveFrom)))throw Error('invalid_obligation_period');
  out.versionFingerprint=hash(out);return out;
 }
 function evaluateApplicability(obligation,context,asOf=new Date()){
