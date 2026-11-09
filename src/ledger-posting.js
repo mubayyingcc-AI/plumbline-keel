@@ -119,7 +119,7 @@ async function verifyLedgerEventChain(pool,tenantIdInput) {
     for(const row of rows.rows){
       const sequence=BigInt(row.tenant_sequence);
       if(sequence!==expected||row.previous_event_fingerprint!==previous){
-        return {valid:false,verifiedEvents:(expected-1n).toString(),failure:'sequence_or_link_mismatch',eventId:row.event_id,expectedSequence:expected.toString(),actualSequence:sequence.toString(),previousMatches:row.previous_event_fingerprint===previous,expectedPrevious:previous,actualPrevious:row.previous_event_fingerprint};
+        return {valid:false,verifiedEvents:(expected-1n).toString(),failure:'sequence_or_link_mismatch',eventId:row.event_id,expectedSequence:expected.toString(),actualSequence:sequence.toString(),previousMatches:row.previous_event_fingerprint===previous,expectedPrevious:previous,actualPrevious:row.previous_event_fingerprint,visibleSequences:rows.rows.map(x=>x.tenant_sequence),visibleEventCount:rows.rowCount};
       }
       const body={tenantId,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,payload:row.payload,sequence:sequence.toString(),previousFingerprint:row.previous_event_fingerprint};
       const computed=crypto.createHash('sha256').update(canonical(body)).digest('hex');
