@@ -33,3 +33,5 @@ CREATE INDEX IF NOT EXISTS keel_reg_findings_tenant_idx ON keel_regulatory_findi
 CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS keel_regulatory_assessments (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), assessment_id TEXT NOT NULL, assessment_fingerprint CHAR(64) NOT NULL, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,assessment_id), UNIQUE(tenant_id,assessment_fingerprint));
+
+CREATE TABLE IF NOT EXISTS keel_regulatory_applicability_decisions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), decision_id UUID NOT NULL, obligation_id TEXT NOT NULL, obligation_version TEXT NOT NULL, applicable BOOLEAN NOT NULL, rationale JSONB NOT NULL, reviewer_principal_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,decision_id), FOREIGN KEY(tenant_id,obligation_id,obligation_version) REFERENCES keel_regulatory_obligations(tenant_id,obligation_id,source_version), FOREIGN KEY(tenant_id,reviewer_principal_id) REFERENCES keel_principals(tenant_id,principal_id));
