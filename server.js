@@ -13,6 +13,7 @@ const currencyEngine = require('./src/currency-engine');
 const financialState = require('./src/financial-state');
 const regulatoryAssurance = require('./src/regulatory-assurance');
 const humanCardPairing = require('./src/human-card-pairing');
+const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
@@ -258,6 +259,10 @@ const apiDescription = {
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
+    '/api/human-card/recovery/groups':{post:{summary:'Create recovery group with independently verified trustees'}},
+    '/api/human-card/recovery/requests':{post:{summary:'Lock a lost or compromised physical card and open trustee recovery'}},
+    '/api/human-card/recovery/requests/{requestId}/approvals':{post:{summary:'Record independent trustee recovery decision'}},
+    '/api/human-card/recovery/requests/{requestId}/finalise':{post:{summary:'Finalise delayed recovery into replacement-card pending state'}},
     '/api/tenants/bootstrap':{post:{summary:'Create institution tenant and one-time owner API key'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
@@ -312,6 +317,7 @@ const server = http.createServer(async (req,res) => {
         integrations:'customer-configured; no external registries connected'
       });
     }
+    if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);
