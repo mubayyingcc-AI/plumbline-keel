@@ -49,7 +49,7 @@ function verifyProof({publicKeyPem,message,nonce,nonceHash,signature,expiresAt,n
  try{return crypto.verify(null,Buffer.from(message),crypto.createPublicKey(publicKeyPem),Buffer.from(signature,'base64url'));}catch{return false;}
 }
 function validateRecoveryGroup({ownerId,trusteeIds,threshold,delayHours}){
- if(!Array.isArray(trusteeIds)||trusteeIds.length<RECOVERY_MIN_TRUSTEES||trusteeIds.length>RECOVERY_MAX_TRUSTEES||new Set(trusteeIds).size!==trusteeIds.length||trusteeIds.includes(ownerId))throw new Error('consumer_recovery_trustees_invalid');
+ if(!Array.isArray(trusteeIds)||trusteeIds.length<RECOVERY_MIN_TRUSTEES||trusteeIds.length>RECOVERY_MAX_TRUSTEES||trusteeIds.some(x=>typeof x!=='string'||!/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(x))||new Set(trusteeIds).size!==trusteeIds.length||trusteeIds.includes(ownerId))throw new Error('consumer_recovery_trustees_invalid');
  if(!Number.isInteger(threshold)||threshold<2||threshold>trusteeIds.length)throw new Error('consumer_recovery_threshold_invalid');
  if(!Number.isInteger(delayHours)||delayHours<RECOVERY_MIN_DELAY_HOURS||delayHours>RECOVERY_MAX_DELAY_HOURS)throw new Error('consumer_recovery_delay_invalid');
  return {ownerId,trusteeIds,threshold,delayHours};
