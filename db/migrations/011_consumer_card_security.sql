@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS keel_consumer_cards (
  delivery_evidence_hash CHAR(64),
  delivered_at TIMESTAMPTZ,
  paired_at TIMESTAMPTZ,
+ recovery_group_id UUID,
+ recovery_tested_at TIMESTAMPTZ,
  last_counter BIGINT NOT NULL DEFAULT 0 CHECK(last_counter>=0),
  locked_at TIMESTAMPTZ,
  lock_reason TEXT,
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS keel_consumer_recovery_groups (
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  UNIQUE(recovery_group_id,owner_consumer_id)
 );
+ALTER TABLE keel_consumer_cards ADD CONSTRAINT keel_consumer_cards_recovery_group_fk FOREIGN KEY(recovery_group_id) REFERENCES keel_consumer_recovery_groups(recovery_group_id);
 CREATE TABLE IF NOT EXISTS keel_consumer_recovery_trustees (
  recovery_group_id UUID NOT NULL REFERENCES keel_consumer_recovery_groups(recovery_group_id),
  trustee_consumer_id UUID NOT NULL REFERENCES keel_consumer_accounts(consumer_id),
@@ -74,7 +77,7 @@ CREATE TABLE IF NOT EXISTS keel_consumer_recovery_requests (
  card_id UUID NOT NULL REFERENCES keel_consumer_cards(card_id),
  owner_consumer_id UUID NOT NULL REFERENCES keel_consumer_accounts(consumer_id),
  reason_code TEXT NOT NULL CHECK(reason_code IN ('lost','stolen','compromised','recovery_test','replacement')),
- status TEXT NOT NULL CHECK(status IN ('pending','approved_waiting_period','rejected','replacement_required','cancelled')),
+ status TEXT NOT NULL CHECK(status IN ('pending','approved_waiting_period','rejected','replacement_required','cancelled','completed')),
  threshold_snapshot SMALLINT NOT NULL CHECK(threshold_snapshot BETWEEN 2 AND 7),
  delay_hours_snapshot SMALLINT NOT NULL CHECK(delay_hours_snapshot BETWEEN 24 AND 168),
  eligible_at TIMESTAMPTZ,
