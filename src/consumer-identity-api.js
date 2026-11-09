@@ -24,8 +24,8 @@ async function consumerActor(req,{crypto}){
  const cfg={publicKeyPem:process.env.KEEL_CONSUMER_SESSION_PUBLIC_KEY_PEM,issuer:process.env.KEEL_CONSUMER_SESSION_ISSUER,audience:process.env.KEEL_CONSUMER_SESSION_AUDIENCE,keyId:process.env.KEEL_CONSUMER_SESSION_KEY_ID};
  if(!cfg.publicKeyPem||!cfg.issuer||!cfg.audience||!cfg.keyId)throw new Error('consumer_session_verification_not_configured');
  const verified=sessionVerifier.verifyConsumerSession(token,cfg);
- const secret=process.env.KEEL_IDENTITY_WEBHOOK_SECRET,provider=process.env.KEEL_IDENTITY_PROVIDER_ID;
- if(!secret||!provider)throw new Error('identity_provider_integration_not_configured');
+ const secret=process.env.KEEL_CONSUMER_SUBJECT_HMAC_KEY,provider=process.env.KEEL_IDENTITY_PROVIDER_ID;
+ if(!secret||secret.length<32||!provider)throw new Error('consumer_subject_hmac_key_not_configured');
  const subjectHmac=crypto.createHmac('sha256',secret).update(provider).update(':').update(verified.subject).digest('hex');
  return {provider,subjectHmac,tokenId:verified.tokenId};
 }
@@ -77,7 +77,9 @@ async function handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBro
  if(!Number.isFinite(providerTime.getTime())||Math.abs(Date.now()-providerTime.getTime())>7*86400000)return send(res,400,{error:'identity_provider_event_time_invalid'});
  if(event.expiresAt&&!Number.isFinite(Date.parse(event.expiresAt)))return send(res,400,{error:'identity_expiry_invalid'});
  const pool=await dbPool();if(!pool)return send(res,503,{error:'consumer_identity_storage_unavailable'});
- const subjectHmac=crypto.createHmac('sha256',secret).update(event.provider).update(':').update(event.externalSubjectRef).digest('hex');
+ const subjectKey=process.env.KEEL_CONSUMER_SUBJECT_HMAC_KEY;
+ if(!subjectKey||subjectKey.length<32)return send(res,503,{error:'consumer_subject_hmac_key_not_configured'});
+ const subjectHmac=crypto.createHmac('sha256',subjectKey).update(event.provider).update(':').update(event.externalSubjectRef).digest('hex');
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
@@ -92,7 +94,7 @@ async function handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBro
    await client.query('INSERT INTO keel_consumer_external_identities(provider_id,subject_hmac,consumer_id) VALUES($1,$2,$3)',[event.provider,subjectHmac,consumerId]);
   }
   await client.query('UPDATE keel_consumer_external_identities SET last_seen_at=NOW() WHERE provider_id=$1 AND subject_hmac=$2',[event.provider,subjectHmac]);
-  await client.query('INSERT INTO keel_consumer_identity_events(provider_id,provider_event_id,consumer_id,event_status,assurance,evidence_hash,provider_reference,provider_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[event.provider,event.eventId,consumerId,event.status,event.assurance,event.evidenceHash,event.externalReference,providerTime.toISOString()]);
+  await client.query('INSERT INTO keel_consumer_identity_events(provider_id,provider_event_id,consumer_id,event_status,assurance,evidence_hash,provider_reference,provider_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[event.provider,event.eventId,consumerId,event.status,event.assurance,event.evidenceHash,crypto.createHash('sha256').update(event.externalReference).digest('hex'),providerTime.toISOString()]);
   const mappedStatus=event.status==='verified'?'identity_verified':event.status==='review_required'?'review_required':event.status==='rejected'?'rejected':event.status==='expired'?'expired':'identity_pending';
   const assurance=event.status==='verified'?event.assurance:'none';
   await client.query("UPDATE keel_consumer_accounts SET account_status=$2,identity_assurance=$3,identity_provider=$4,identity_evidence_hash=$5,identity_verified_at=CASE WHEN $2='identity_verified' THEN $6 ELSE NULL END,identity_expires_at=$7,last_provider_event_at=$8,updated_at=NOW() WHERE consumer_id=$1 AND (last_provider_event_at IS NULL OR last_provider_event_at<=$8)",[consumerId,mappedStatus,assurance,event.provider,event.evidenceHash,event.verifiedAt||providerTime.toISOString(),event.expiresAt,providerTime.toISOString()]);
