@@ -353,7 +353,7 @@ const server = http.createServer(async (req,res) => {
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
-        const q=await client.query('SELECT c.*,d.device_public_key,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
+        const q=await client.query('SELECT c.*,d.device_public_key,d.key_fingerprint,d.device_status,d.lifecycle_state,d.hardware_attestation_verified,d.last_challenge_counter FROM keel_human_card_pairing_challenges c JOIN keel_human_card_devices d ON d.tenant_id=c.tenant_id AND d.card_id=c.card_id WHERE c.tenant_id=$1 AND c.challenge_id=$2 AND c.principal_id=$3 FOR UPDATE OF c,d',[actor.tenant_id,challengeId,actor.principal_id]);
         if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'pairing_challenge_not_found'});}
         const c=q.rows[0];
         if(c.consumed_at){await client.query('ROLLBACK');return send(res,409,{error:'pairing_challenge_already_consumed'});}
@@ -364,7 +364,8 @@ const server = http.createServer(async (req,res) => {
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
         const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
         const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\n');
-        const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
+        let fingerprintValid=false;try{fingerprintValid=humanCardPairing.fingerprintPublicKey(c.device_public_key)===String(c.key_fingerprint||'').trim();}catch{fingerprintValid=false;}
+        const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&fingerprintValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
         if(!signatureValid){
           await recordEventWithClient(client,actor,'HUMAN_CARD_PAIRING_FAILED',c.card_id,{challengeId,expired,nonceValid,deviceEligible,counterValid});
           await client.query('COMMIT');
