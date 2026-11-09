@@ -111,6 +111,7 @@ async function dbPool() {
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_findings (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), finding_id TEXT NOT NULL, obligation_id TEXT NOT NULL, code TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('low','moderate','high','critical')), status TEXT NOT NULL CHECK(status IN ('open','in_progress','closed','reopened')), payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,finding_id))`);
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_actions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), action_id TEXT NOT NULL, finding_id TEXT NOT NULL, owner_principal_id UUID, due_at TIMESTAMPTZ, status TEXT NOT NULL CHECK(status IN ('open','in_progress','implemented','verified','rejected')), payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,action_id), FOREIGN KEY(tenant_id,finding_id) REFERENCES keel_regulatory_findings(tenant_id,finding_id))`);
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_conformity_dockets (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), docket_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('DRAFT','IN_REVIEW','ACCEPTED_WITH_GAPS','READY_FOR_EXTERNAL_REVIEW','SUPERSEDED')), manifest_fingerprint CHAR(64) NOT NULL, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,docket_id), UNIQUE(tenant_id,manifest_fingerprint))`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_assessments (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), assessment_id TEXT NOT NULL, assessment_fingerprint CHAR(64) NOT NULL, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,assessment_id), UNIQUE(tenant_id,assessment_fingerprint))`);
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_findings_tenant_idx ON keel_regulatory_findings(tenant_id,status,severity)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
       return pool;
@@ -572,7 +573,9 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/evidence'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const evidence=regulatoryAssurance.normalizeEvidence(await readBody(req)),pool=await dbPool(),client=await pool.connect();
+      const evidence=regulatoryAssurance.normalizeEvidence(await readBody(req));
+      if(evidence.verificationState!=='self_asserted') return send(res,403,{error:'external_evidence_verification_requires_trusted_connector',message:'Direct tenant uploads cannot self-assign source-authenticated or independently-verified status.'});
+      const pool=await dbPool(),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_evidence(tenant_id,evidence_id,version,verification_state,valid_until,payload,evidence_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,evidence.evidenceId,evidence.version,evidence.verificationState,evidence.validUntil,JSON.stringify(evidence),evidence.evidenceFingerprint]);await recordEventWithClient(client,actor,'REGULATORY_EVIDENCE_REGISTERED',evidence.evidenceId,{version:evidence.version,verificationState:evidence.verificationState,fingerprint:evidence.evidenceFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,evidence});
     }
@@ -595,8 +598,9 @@ const server = http.createServer(async (req,res) => {
        pool.query('SELECT payload FROM keel_regulatory_evidence WHERE tenant_id=$1',[actor.tenant_id])
       ]);
       const coverage=regulatoryAssurance.evaluateCoverage({obligations:oq.rows.map(x=>x.payload),controls:cq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id,evidenceIds:x.evidence_ids})),evidenceLinks:eq.rows.map(x=>x.payload)});
-      const client=await pool.connect();try{await client.query('BEGIN');for(const finding of coverage.findings)await client.query("INSERT INTO keel_regulatory_findings(tenant_id,finding_id,obligation_id,code,severity,status,payload) VALUES($1,$2,$3,$4,$5,'open',$6) ON CONFLICT(tenant_id,finding_id) DO NOTHING",[actor.tenant_id,finding.findingId,finding.obligationId,finding.code,finding.severity,JSON.stringify(finding)]);await recordEventWithClient(client,actor,'REGULATORY_GAPS_EVALUATED',coverage.assessmentFingerprint,{summary:coverage.summary,fingerprint:coverage.assessmentFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
-      return send(res,200,{ok:true,coverage});
+      const assessmentId='REGASS-'+coverage.assessmentFingerprint.slice(0,24),client=await pool.connect();
+      try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_assessments(tenant_id,assessment_id,assessment_fingerprint,snapshot) VALUES($1,$2,$3,$4)',[actor.tenant_id,assessmentId,coverage.assessmentFingerprint,JSON.stringify(coverage)]);for(const finding of coverage.findings)await client.query("INSERT INTO keel_regulatory_findings(tenant_id,finding_id,obligation_id,code,severity,status,payload) VALUES($1,$2,$3,$4,$5,'open',$6) ON CONFLICT(tenant_id,finding_id) DO NOTHING",[actor.tenant_id,finding.findingId,finding.obligationId,finding.code,finding.severity,JSON.stringify(finding)]);await recordEventWithClient(client,actor,'REGULATORY_GAPS_EVALUATED',assessmentId,{summary:coverage.summary,fingerprint:coverage.assessmentFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      return send(res,200,{ok:true,assessmentId,coverage});
     }
     if(req.method==='GET' && route==='/api/regulatory/findings'){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
@@ -606,8 +610,11 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/dockets'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const b=await readBody(req),coverage=b.coverage;if(!coverage)return send(res,400,{error:'coverage_required'});
-      const docket=regulatoryAssurance.createConformityDocket({...b,tenantId:actor.tenant_id}),pool=await dbPool(),client=await pool.connect();
+      const b=await readBody(req);if(!b.assessmentId||!b.scope)return send(res,400,{error:'assessment_id_and_scope_required'});
+      const pool=await dbPool(),assessment=await pool.query('SELECT snapshot FROM keel_regulatory_assessments WHERE tenant_id=$1 AND assessment_id=$2',[actor.tenant_id,b.assessmentId]);
+      if(!assessment.rowCount)return send(res,404,{error:'tenant_regulatory_assessment_not_found'});
+      if(b.state&&b.state!=='DRAFT')return send(res,403,{error:'external_review_state_requires_controlled_human_approval'});
+      const coverage=assessment.rows[0].snapshot,docket=regulatoryAssurance.createConformityDocket({...b,tenantId:actor.tenant_id,coverage,findings:coverage.findings,state:'DRAFT'}),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_conformity_dockets(tenant_id,docket_id,state,manifest_fingerprint,snapshot) VALUES($1,$2,$3,$4,$5)',[actor.tenant_id,docket.docketId,docket.state,docket.manifestFingerprint,JSON.stringify(docket)]);await recordEventWithClient(client,actor,'REGULATORY_DOCKET_CREATED',docket.docketId,{state:docket.state,manifestFingerprint:docket.manifestFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,docket});
     }
