@@ -31,6 +31,28 @@ CREATE TABLE IF NOT EXISTS keel_ledger_account_balances (
 CREATE INDEX IF NOT EXISTS keel_ledger_balances_currency_idx
   ON keel_ledger_account_balances(tenant_id,currency,account_id);
 
+-- Seed projections from any journals already posted before this migration.
+WITH totals AS (
+  SELECT l.tenant_id,l.account_id,
+    COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='debit'),0) AS debit_total,
+    COALESCE(SUM(l.amount_minor) FILTER(WHERE l.side='credit'),0) AS credit_total
+  FROM keel_ledger_lines l
+  JOIN keel_ledger_journals j ON j.tenant_id=l.tenant_id AND j.journal_id=l.journal_id
+  WHERE j.status='posted'
+  GROUP BY l.tenant_id,l.account_id
+)
+INSERT INTO keel_ledger_account_balances
+  (tenant_id,account_id,currency,debit_total,credit_total,normal_balance_minor,version)
+SELECT a.tenant_id,a.account_id,a.currency,
+  COALESCE(t.debit_total,0),COALESCE(t.credit_total,0),
+  CASE WHEN a.normal_side='debit'
+    THEN COALESCE(t.debit_total,0)-COALESCE(t.credit_total,0)
+    ELSE COALESCE(t.credit_total,0)-COALESCE(t.debit_total,0) END,
+  1
+FROM keel_ledger_accounts a
+LEFT JOIN totals t ON t.tenant_id=a.tenant_id AND t.account_id=a.account_id
+ON CONFLICT(tenant_id,account_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS keel_ledger_reservations (
   tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
   reservation_id TEXT NOT NULL,
