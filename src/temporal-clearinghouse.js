@@ -47,6 +47,7 @@ function applyClearedBuyerCash(f,{paymentId,amountMinor,bankSettlementEvidence,p
 }
 function allocateCashToAdvance(f,{amountMinor,allocationEvidence}){
  if(allocationEvidence!=='dual_controlled')fail('cash_allocation_requires_dual_control');
+ if(allocationEvidence!=='dual_controlled')fail('cash_allocation_requires_dual_control');
  const amount=units(amountMinor,'allocation_amount_minor',{min:1n}),paid=units(f.paidCashMinor,'paid_cash_minor'),advance=units(f.remainingAdvanceMinor,'remaining_advance_minor');
  if(amount>paid)fail('allocation_exceeds_cleared_cash');
  if(amount>advance)fail('allocation_exceeds_outstanding_advance');
