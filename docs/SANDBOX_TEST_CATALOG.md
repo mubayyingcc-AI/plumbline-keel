@@ -20,7 +20,7 @@ All fixtures are synthetic unless a private institution workspace explicitly dec
 | KFS-014 | Human Card security | Credential-free sandbox profile with unverified funding source | No PAN/token; unverified, unsigned or unreconciled funds remain HOLD | Executable synthetic profile test via POST /api/sandbox/human-card/runs; no issuer or hardware partner |
 | KFS-015 | DH-ATM assurance | Sponsor envelope exists but agent cash is unavailable | No cash-out capacity falsely reported | Not tested — DH-ATM engine pending |
 | KFS-016 | Offline conflict | Same bounded offline allocation presented to disconnected terminals | Conflict is detected after sync; liability/dispute path retained | Not tested — offline protocol pending |
-| KFS-017 | Period close dual control | Close a balanced period with maker and independent checker | Close hash pins trial balance; requester cannot approve own close; closed period is immutable | Not enabled — close/reopen approval workflow intentionally blocked |
+| KFS-017 | Period close dual control | Soft-close a balanced period; one principal requests close and a different principal approves | Snapshot hash unchanged; requester cannot approve; closure evidence append-only; closed period cannot accept postings | Implemented in tenant-authenticated API and PostgreSQL integration tests; controlled reopen remains pending |
 
 ## Acceptance rules
 
