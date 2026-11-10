@@ -257,18 +257,57 @@ async function recordEventWithClient(client, tenant, type, subjectId, payload) {
 }
 async function recordEvent(pool, tenant, type, subjectId, payload) {
   const client=await pool.connect();
-  try { await client.query('BEGIN'); const result=await recordEventWithClient(client,tenant,type,subjectId,payload); await client.query('COMMIT'); return result; }
+  try { await client.query('BEGIN'); await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenant.tenant_id]); const result=await recordEventWithClient(client,tenant,type,subjectId,payload); await client.query('COMMIT'); return result; }
   catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
+function tenantScopedPool(pool, tenantId) {
+  if (!pool) return null;
+  if (typeof tenantId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
+    throw new Error('tenant_database_context_invalid');
+  }
+  return {
+    async query(...args) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT set_config('keel.tenant_id',$1,true)", [tenantId]);
+        const result = await client.query(...args);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async connect() {
+      const client = await pool.connect();
+      return {
+        async query(...args) {
+          const sql = typeof args[0] === 'string' ? args[0] : args[0] && args[0].text || '';
+          const result = await client.query(...args);
+          if (/^\s*(?:BEGIN|START\s+TRANSACTION)\b/i.test(sql)) {
+            await client.query("SELECT set_config('keel.tenant_id',$1,true)", [tenantId]);
+          }
+          return result;
+        },
+        release(...args) { return client.release(...args); }
+      };
+    }
+  };
+}
+
 async function authenticateTenant(req) {
   const token=tenantSecurity.keyFromAuthorization(req.headers.authorization);
   if(!token) return null;
   const pool=await dbPool(); if(!pool) return null;
   const hash=tenantSecurity.hashPresentedKey(token);
-  const result=await pool.query("SELECT t.tenant_id,t.tenant_name,t.tenant_slug,k.key_id,k.role,k.principal_id,p.display_name AS principal_name,p.email AS principal_email,p.identity_assurance FROM keel_tenant_keys k JOIN keel_tenants t ON t.tenant_id=k.tenant_id LEFT JOIN keel_principals p ON p.principal_id=k.principal_id AND p.status='active' WHERE k.token_hash=$1 AND k.status='active' AND t.status='active' LIMIT 1",[hash]);
+  const result=await pool.query('SELECT * FROM public.keel_authenticate_tenant_key($1)',[hash]);
   if(!result.rowCount) return null;
-  await pool.query('UPDATE keel_tenant_keys SET last_used_at=NOW() WHERE key_id=$1',[result.rows[0].key_id]);
-  return result.rows[0];
+  const actor=result.rows[0];
+  await pool.query('SELECT public.keel_touch_tenant_key($1,$2)',[actor.key_id,actor.tenant_id]);
+  return actor;
 }
 function cleanString(value, max=2000) {
   return typeof value === 'string' ? value.trim().slice(0,max) : '';
@@ -385,7 +424,7 @@ const server = http.createServer(async (req,res) => {
   try {
     if (req.method === 'GET' && route === '/api/health') {
       let database = 'not_configured';
-      if (process.env.DATABASE_URL) {
+      if (process.env.KEEL_RUNTIME_DATABASE_URL) {
         try { const pool = await dbPool(); await pool.query('SELECT 1'); database = 'connected'; }
         catch { database = 'unavailable'; }
       }
@@ -408,7 +447,7 @@ const server = http.createServer(async (req,res) => {
       if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
       const body=await readBody(req),cardId=cleanString(body.cardId,100);
       if(!cardId) return send(res,400,{error:'card_id_required'});
-      const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'card_registry_unavailable'});
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
@@ -433,7 +472,7 @@ const server = http.createServer(async (req,res) => {
       if(actor.identity_assurance!=='externally_verified') return send(res,403,{error:'externally_verified_cardholder_identity_required'});
       const body=await readBody(req),challengeId=cleanString(body.challengeId,64),nonce=cleanString(body.nonce,128),signature=cleanString(body.signature,256);
       if(!challengeId||!nonce||!signature)return send(res,400,{error:'challenge_id_nonce_and_signature_required'});
-      const pool=await dbPool();if(!pool)return send(res,503,{error:'card_registry_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'card_registry_unavailable'});
       const client=await pool.connect();
       try {
         await client.query('BEGIN');
@@ -476,7 +515,7 @@ const server = http.createServer(async (req,res) => {
       const pool=await dbPool(); if(!pool) return send(res,503,{error:'tenant_storage_unavailable'});
       const tenant=tenantSecurity.normalizeTenant(await readBody(req));
       const issued=tenantSecurity.issueTenantKey(), tenantId=crypto.randomUUID(), client=await pool.connect();
-      try { await client.query('BEGIN'); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key','owner']); await client.query('COMMIT'); }
+      try { await client.query('BEGIN'); await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]); await client.query('INSERT INTO keel_tenants (tenant_id,tenant_name,tenant_slug) VALUES ($1,$2,$3)',[tenantId,tenant.name,tenant.slug]); await client.query('INSERT INTO keel_tenant_keys (key_id,tenant_id,token_hash,label,role) VALUES ($1,$2,$3,$4,$5)',[issued.keyId,tenantId,issued.tokenHash,'Initial institution key','owner']); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,tenant:{id:tenantId,name:tenant.name,slug:tenant.slug},apiKey:issued.token,keyId:issued.keyId,warning:'This key is shown once; only its hash is stored.'});
     }
@@ -497,7 +536,7 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id || !['owner','admin'].includes(actor.role)) return send(res,403,{error:'named_admin_principal_required'});
       const body=await readBody(req), delegationId=cleanString(body.delegationId,80); if(!delegationId) return send(res,400,{error:'delegation_id_required'});
-      const pool=await dbPool();
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const client=await pool.connect();
       try { await client.query('BEGIN'); const result=await client.query("UPDATE keel_delegations SET status='revoked' WHERE tenant_id=$1 AND delegation_id=$2 AND grantor_principal_id=$3 AND status='active' RETURNING delegation_id,grantee_principal_id,scopes"); if(!result.rowCount) { await client.query('ROLLBACK'); return send(res,404,{error:'active_granted_delegation_not_found'}); } await recordEventWithClient(client,actor,'DELEGATION_REVOKED',delegationId,{grantorPrincipalId:actor.principal_id,granteePrincipalId:result.rows[0].grantee_principal_id,scopes:result.rows[0].scopes}); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -552,7 +591,7 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!['owner','admin'].includes(tenant.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'admin'});
-      const pool=await dbPool(), payload=await readBody(req);
+      const pool=tenantScopedPool(await dbPool(),tenant.tenant_id), payload=await readBody(req);
       if(route==='/api/tenants/keys/revoke'){
         const keyId=cleanString(payload.keyId,100); if(!keyId) return send(res,400,{error:'key_id_required'});
         const result=await pool.query("UPDATE keel_tenant_keys SET status='revoked' WHERE key_id=$1 AND tenant_id=$2 AND status='active' RETURNING key_id",[keyId,tenant.tenant_id]);
@@ -569,7 +608,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'POST' && ['/api/assurance/models','/api/assurance/dockets','/api/assurance/drift'].includes(route)) {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),tenant.tenant_id); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
       const payload=await readBody(req);
       const requiredRole=route==='/api/assurance/dockets'?'reviewer':'integration';
       if(!['owner','admin',requiredRole].includes(tenant.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole});
@@ -613,7 +652,7 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/financial-state/objects') {
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'financial_state_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id); if(!pool) return send(res,503,{error:'financial_state_storage_unavailable'});
       const rows=await pool.query('SELECT payload FROM keel_financial_objects WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT 250',[actor.tenant_id]);
       const snapshot=financialState.buildStateSnapshot(rows.rows.map(x=>x.payload),{id:'keel-default-availability',version:'1',maxEvidenceAgeMs:86400000});
       return send(res,200,{ok:true,snapshot});
@@ -634,7 +673,7 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/currency/accounts'){
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
       const rows=await pool.query('SELECT account_id,owner_ref,instrument_code,account_type,created_at FROM keel_currency_accounts WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:rows.rowCount,accounts:rows.rows,notice:'These are simulation accounts, not bank or custodial accounts.'});
     }
@@ -656,7 +695,7 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/currency/transfers'){
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id); if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
       const rows=await pool.query('SELECT transfer_id,from_account_id,to_account_id,instrument_code,amount_units,idempotency_key,condition,status,created_at FROM keel_currency_transfer_intents WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:rows.rowCount,intents:rows.rows,notice:'Prepared simulation intents are not settled transactions.'});
     }
@@ -672,14 +711,14 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/fracture/assessments'){
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'fracture_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id); if(!pool) return send(res,503,{error:'fracture_storage_unavailable'});
       const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit')||25)));
       const rows=await pool.query('SELECT assessment_id,created_at,status,scenario_id,input_fingerprint,result_fingerprint,payload FROM keel_fracture_assessments WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[actor.tenant_id,limit]);
       return send(res,200,{ok:true,count:rows.rowCount,assessments:rows.rows});
     }
     if(req.method==='GET' && route==='/api/assurance/records'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool(), limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit')||25)));
+      const pool=tenantScopedPool(await dbPool(),tenant.tenant_id), limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit')||25)));
       const q=await Promise.all([
         pool.query('SELECT model_id,provider,model_name,version,owner_ref,purpose,access_scope,external,model_fingerprint,registered_at,updated_at FROM keel_model_census WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT $2',[tenant.tenant_id,limit]),
         pool.query('SELECT docket_id,created_at,decision_id,decision,docket_fingerprint,decision_fingerprint FROM keel_proof_dockets WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2',[tenant.tenant_id,limit]),
@@ -692,7 +731,7 @@ const server = http.createServer(async (req,res) => {
       const prefix='/api/assurance/dockets/', suffix='/export';
       const docketId=decodeURIComponent(route.slice(prefix.length,-suffix.length));
       if(!docketId || docketId.includes('/')) return send(res,400,{error:'invalid_docket_id'});
-      const pool=await dbPool(); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),tenant.tenant_id); if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
       const [docket,approvals,events]=await Promise.all([
         pool.query('SELECT docket_id,created_at,decision_id,decision,docket_fingerprint,decision_fingerprint,payload FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[tenant.tenant_id,docketId]),
         pool.query('SELECT a.principal_id,p.display_name,p.email,a.decision,a.rationale,a.created_at FROM keel_docket_approvals a JOIN keel_principals p ON p.tenant_id=a.tenant_id AND p.principal_id=a.principal_id WHERE a.tenant_id=$1 AND a.docket_id=$2 ORDER BY a.created_at ASC',[tenant.tenant_id,docketId]),
@@ -708,7 +747,7 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/assurance/chain/verify'){
       const tenant=await authenticateTenant(req); if(!tenant) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();
+      const pool=tenantScopedPool(await dbPool(),tenant.tenant_id);
       if(!pool) return send(res,503,{error:'assurance_storage_unavailable'});
       const result=await pool.query('SELECT tenant_id,tenant_sequence,previous_event_fingerprint,event_id,event_type,subject_id,actor_key_id,actor_role,payload,event_fingerprint FROM keel_assurance_events WHERE tenant_id=$1 AND tenant_sequence IS NOT NULL ORDER BY tenant_sequence ASC',[tenant.tenant_id]);
       const verification=authorityChain.verifyChain(result.rows.map(row=>({tenantId:row.tenant_id,sequence:Number(row.tenant_sequence),previousFingerprint:row.previous_event_fingerprint,eventId:row.event_id,eventType:row.event_type,subjectId:row.subject_id,actorKeyId:row.actor_key_id,actorRole:row.actor_role,payload:row.payload,eventFingerprint:row.event_fingerprint})));
@@ -718,7 +757,7 @@ const server = http.createServer(async (req,res) => {
 
     if(req.method==='GET' && ['/api/regulatory/sources','/api/regulatory/obligations','/api/regulatory/controls','/api/regulatory/dockets','/api/regulatory/assessments'].includes(route)){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
       const table=route.endsWith('/sources')?'keel_regulatory_sources':route.endsWith('/obligations')?'keel_regulatory_obligations':route.endsWith('/controls')?'keel_regulatory_controls':route.endsWith('/dockets')?'keel_conformity_dockets':'keel_regulatory_assessments';
       const rows=await pool.query('SELECT * FROM '+table+' WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,records:rows.rows});
     }
@@ -740,7 +779,7 @@ const server = http.createServer(async (req,res) => {
       if(!['owner','admin','integration'].includes(actor.role)) return send(res,403,{error:'tenant_role_insufficient'});
       const b=await readBody(req), sourceType=cleanString(b.sourceType,40), sourceId=cleanString(b.sourceId,120), jurisdiction=cleanString(b.jurisdiction,80), title=cleanString(b.title,300);
       if(!['law','harmonised_standard','standard','guidance','contract','internal_policy'].includes(sourceType)||!sourceId||!jurisdiction||!title) return send(res,400,{error:'invalid_regulatory_source'});
-      const pool=await dbPool(), client=await pool.connect();
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id), client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_sources(tenant_id,source_id,source_type,jurisdiction,title,authority_uri) VALUES($1,$2,$3,$4,$5,$6)',[actor.tenant_id,sourceId,sourceType,jurisdiction,title,b.authorityUri||null]);await recordEventWithClient(client,actor,'REGULATORY_SOURCE_REGISTERED',sourceId,{sourceType,jurisdiction,title});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,sourceId});
     }
@@ -764,7 +803,7 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       const evidence=regulatoryAssurance.normalizeEvidence(await readBody(req));
       if(evidence.verificationState!=='self_asserted') return send(res,403,{error:'external_evidence_verification_requires_trusted_connector',message:'Direct tenant uploads cannot self-assign source-authenticated or independently-verified status.'});
-      const pool=await dbPool(),client=await pool.connect();
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_evidence(tenant_id,evidence_id,version,verification_state,valid_until,payload,evidence_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,evidence.evidenceId,evidence.version,evidence.verificationState,evidence.validUntil,JSON.stringify(evidence),evidence.evidenceFingerprint]);await recordEventWithClient(client,actor,'REGULATORY_EVIDENCE_REGISTERED',evidence.evidenceId,{version:evidence.version,verificationState:evidence.verificationState,fingerprint:evidence.evidenceFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,evidence});
     }
@@ -779,7 +818,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/gaps/evaluate'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
       const [oq,cq,mq,eq]=await Promise.all([
        pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1',[actor.tenant_id]),
        pool.query('SELECT payload FROM keel_regulatory_controls WHERE tenant_id=$1',[actor.tenant_id]),
@@ -793,14 +832,14 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route==='/api/regulatory/findings'){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'regulatory_storage_unavailable'});
       const rows=await pool.query('SELECT finding_id,obligation_id,code,severity,status,payload,created_at FROM keel_regulatory_findings WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,findings:rows.rows});
     }
     if(req.method==='POST' && route==='/api/regulatory/dockets'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       const b=await readBody(req);if(!b.assessmentId||!b.scope)return send(res,400,{error:'assessment_id_and_scope_required'});
-      const pool=await dbPool(),assessment=await pool.query('SELECT snapshot FROM keel_regulatory_assessments WHERE tenant_id=$1 AND assessment_id=$2',[actor.tenant_id,b.assessmentId]);
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id),assessment=await pool.query('SELECT snapshot FROM keel_regulatory_assessments WHERE tenant_id=$1 AND assessment_id=$2',[actor.tenant_id,b.assessmentId]);
       if(!assessment.rowCount)return send(res,404,{error:'tenant_regulatory_assessment_not_found'});
       if(b.state&&b.state!=='DRAFT')return send(res,403,{error:'external_review_state_requires_controlled_human_approval'});
       const coverage=assessment.rows[0].snapshot,docket=regulatoryAssurance.createConformityDocket({...b,tenantId:actor.tenant_id,coverage,findings:coverage.findings,state:'DRAFT'}),client=await pool.connect();
@@ -863,7 +902,7 @@ const server = http.createServer(async (req,res) => {
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
     }
     if (req.method === 'GET' && route === '/api/ledger/status') {
-      const pool = await dbPool();
+      const pool = tenantScopedPool(await dbPool(),actor.tenant_id);
       if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
       const [migrations, role, ledgerRls, accountingRls] = await Promise.all([
         pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql','015_period_close_dual_control.sql']]),
@@ -896,7 +935,7 @@ const server = http.createServer(async (req,res) => {
     if (route.startsWith('/api/ledger/')) {
       const actor=await authenticateTenant(req);
       if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!pool)return send(res,503,{error:'ledger_storage_unavailable'});
       if(req.method==='GET'&&route==='/api/ledger/books'){
         const books=await accountingPeriods.listBooks(pool,actor.tenant_id);
@@ -1189,4 +1228,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema };
+module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
