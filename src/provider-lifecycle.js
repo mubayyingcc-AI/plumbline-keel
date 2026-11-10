@@ -2,6 +2,8 @@
 
 const crypto = require('node:crypto');
 const { canonical } = require('./authority-chain');
+const authorityPersistence = require('./authority-persistence');
+const { appendLedgerEvent } = require('./ledger-event-chain');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -100,35 +102,37 @@ async function withTenantTransaction(pool,tenantId,work){
   fail('provider_lifecycle_transaction_retry_exhausted',409);
 }
 
-async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45){
+async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,authorityContext,allowedProviderIds=['bank-sandbox']){
   const worker=required(workerId,'worker_id',120);
   if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
+  if(!authorityContext||!authorityContext.actor||!authorityContext.actor.principal_id||worker!==authorityContext.actor.principal_id)fail('provider_dispatch_authority_context_required',403);
+  if(!Array.isArray(allowedProviderIds)||!allowedProviderIds.length||allowedProviderIds.some(x=>typeof x!=='string'||!x.trim()))fail('provider_allowlist_required',403);
   return withTenantTransaction(pool,tenantId,async client=>{
-    // A worker may have sent the instruction before crashing. Expiry is therefore UNKNOWN, never an automatic resend.
-    await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW()",[tenantId]);
-    const claimed=await client.query(
-      `SELECT outbox_id,journal_id,provider_id,aggregate_type,aggregate_id,instruction_type,idempotency_key,payload,payload_fingerprint,attempts
-         FROM keel_provider_outbox
-        WHERE tenant_id=$1 AND status='queued' AND available_at<=NOW() AND attempts<max_attempts
-        ORDER BY available_at,created_at
-        FOR UPDATE SKIP LOCKED LIMIT 1`,
-      [tenantId]
-    );
+    const expired=await client.query("SELECT outbox_id,journal_id,provider_id,idempotency_key,payload,payload_fingerprint FROM keel_provider_outbox WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW() AND provider_id=ANY($2::text[]) ORDER BY lease_until FOR UPDATE SKIP LOCKED",[tenantId,allowedProviderIds]);
+    for(const row of expired.rows){
+      const payload=row.payload||{};
+      if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_expired_lease_financial_amount_and_currency_required',400);
+      const recoveryRequest={tenantId,journalId:row.journal_id,outboxId:row.outbox_id,providerId:row.provider_id,payloadFingerprint:row.payload_fingerprint,idempotencyKey:row.idempotency_key,recovery:'expired_lease_to_unknown'};
+      const recoveryProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:recover_expired',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(recoveryRequest),executionRef:row.outbox_id});
+      await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2 AND status='leased' AND lease_until<=NOW()",[tenantId,row.outbox_id]);
+      await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',recoveryProof.proofId,{action:'provider:instruction:recover_expired',envelopeId:recoveryProof.envelopeId,requestFingerprint:recoveryProof.requestFingerprint,executionRef:row.outbox_id});
+    }
+    const claimed=await client.query(`SELECT outbox_id,journal_id,provider_id,aggregate_type,aggregate_id,instruction_type,idempotency_key,payload,payload_fingerprint,attempts
+      FROM keel_provider_outbox WHERE tenant_id=$1 AND status='queued' AND available_at<=NOW() AND attempts<max_attempts AND provider_id=ANY($2::text[])
+      ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1`,[tenantId,allowedProviderIds]);
     if(!claimed.rowCount)return null;
-    const row=claimed.rows[0];
-    const updated=await client.query(
-      `UPDATE keel_provider_outbox SET status='leased',attempts=attempts+1,lease_owner=$3,
-              lease_until=NOW()+($4::integer * INTERVAL '1 second'),updated_at=NOW()
-        WHERE tenant_id=$1 AND outbox_id=$2 AND status='queued'
-        RETURNING attempts,lease_until`,
-      [tenantId,row.outbox_id,worker,leaseSeconds]
-    );
+    const row=claimed.rows[0],payload=row.payload||{};
+    if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_dispatch_financial_amount_and_currency_required',400);
+    const dispatchRequest={tenantId,journalId:row.journal_id,outboxId:row.outbox_id,providerId:row.provider_id,payloadFingerprint:row.payload_fingerprint,idempotencyKey:row.idempotency_key};
+    const authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:dispatch',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(dispatchRequest),executionRef:row.outbox_id});
+    const updated=await client.query(`UPDATE keel_provider_outbox SET status='leased',attempts=attempts+1,lease_owner=$3,lease_until=NOW()+($4::integer*INTERVAL '1 second'),updated_at=NOW()
+      WHERE tenant_id=$1 AND outbox_id=$2 AND status='queued' RETURNING attempts,lease_until`,[tenantId,row.outbox_id,worker,leaseSeconds]);
     if(!updated.rowCount)fail('provider_outbox_claim_race',409);
-    return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until};
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'provider:instruction:dispatch',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:row.outbox_id});
+    return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until,authorityProof};
   });
 }
-
-async function recordDispatchOutcome(pool,tenantId,input){
+async function recordDispatchOutcome(pool,tenantId,input,authorityContext){
   const outboxId=required(input.outboxId,'outbox_id',80);
   const worker=required(input.workerId,'worker_id',120);
   const outcome=input.outcome;
@@ -139,6 +143,7 @@ async function recordDispatchOutcome(pool,tenantId,input){
   if(!Number.isInteger(retryAfterSeconds)||retryAfterSeconds<1||retryAfterSeconds>86400)fail('retry_after_invalid');
   const providerInstructionId=input.providerInstructionId?required(input.providerInstructionId,'provider_instruction_id',200):null;
   const errorCode=input.errorCode?required(input.errorCode,'provider_error_code',120):null;
+  if(!authorityContext||!authorityContext.actor||!authorityContext.actor.principal_id||worker!==authorityContext.actor.principal_id)fail('provider_outcome_authority_context_required',403);
   return withTenantTransaction(pool,tenantId,async client=>{
     const current=await client.query(
       'SELECT status,lease_owner FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2 FOR UPDATE',
@@ -146,6 +151,11 @@ async function recordDispatchOutcome(pool,tenantId,input){
     );
     if(!current.rowCount)fail('provider_outbox_not_found',404);
     if(current.rows[0].status!=='leased'||current.rows[0].lease_owner!==worker)fail('provider_outbox_lease_not_owned',409);
+    const row=await client.query('SELECT provider_id,payload,payload_fingerprint,journal_id,idempotency_key FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,outboxId]);
+    const payload=row.rows[0].payload||{};
+    if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_outcome_financial_amount_and_currency_required',400);
+    const request={tenantId,outboxId,providerId:row.rows[0].provider_id,payloadFingerprint:row.rows[0].payload_fingerprint,outcome,safeToRetry,retryAfterSeconds,providerInstructionId,errorCode};
+    const proof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:outcome',resourceId:'provider:'+row.rows[0].provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(request),executionRef:outboxId});
     const next=safeToRetry?'queued':outcome;
     const result=await client.query(
       `UPDATE keel_provider_outbox SET status=$3,available_at=CASE WHEN $3='queued' THEN NOW()+($4::integer*INTERVAL '1 second') ELSE available_at END,
@@ -155,7 +165,8 @@ async function recordDispatchOutcome(pool,tenantId,input){
        RETURNING outbox_id,status,attempts,provider_instruction_id,last_error_code`,
       [tenantId,outboxId,next,retryAfterSeconds,providerInstructionId,errorCode]
     );
-    return result.rows[0];
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',proof.proofId,{action:'provider:instruction:outcome',envelopeId:proof.envelopeId,requestFingerprint:proof.requestFingerprint,executionRef:outboxId});
+    return {...result.rows[0],authorityProof:proof};
   });
 }
 
