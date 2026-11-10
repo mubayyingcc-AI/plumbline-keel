@@ -31,7 +31,7 @@ if [[ -n "${KEEL_BACKUP_S3_BUCKET:-}" ]]; then
   : "${KEEL_BACKUP_S3_REGION:?KEEL_BACKUP_S3_REGION required}"
   : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID required}"
   : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY required}"
-  [[ "$KEEL_BACKUP_S3_ENDPOINT" == https://* ]] || { echo "remote_backup_endpoint_must_use_https" >&2; exit 2; }
+  [[ "$KEEL_BACKUP_S3_ENDPOINT" == https://* || "${KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT:-false}" == true ]] || { echo "remote_backup_endpoint_must_use_https" >&2; exit 2; }
   command -v aws >/dev/null 2>&1 || { echo "aws_cli_required_for_remote_backup" >&2; exit 127; }
   prefix="${KEEL_BACKUP_S3_PREFIX:-keel}/$KEEL_BACKUP_DATABASE_ID/$stamp"
   aws --endpoint-url "$KEEL_BACKUP_S3_ENDPOINT" --region "$KEEL_BACKUP_S3_REGION" s3 cp --only-show-errors "$encrypted" "s3://$KEEL_BACKUP_S3_BUCKET/$prefix/$(basename "$encrypted")"
