@@ -287,7 +287,7 @@ function tenantScopedPool(pool, tenantId) {
         async query(...args) {
           const sql = typeof args[0] === 'string' ? args[0] : args[0] && args[0].text || '';
           const result = await client.query(...args);
-          if (/^\\s*(?:BEGIN|START\\s+TRANSACTION)\\b/i.test(sql)) {
+          if (/^\s*(?:BEGIN|START\s+TRANSACTION)\b/i.test(sql)) {
             await client.query("SELECT set_config('keel.tenant_id',$1,true)", [tenantId]);
           }
           return result;
@@ -1228,4 +1228,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema };
+module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
