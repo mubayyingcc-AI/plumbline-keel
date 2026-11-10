@@ -61,7 +61,7 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 8333:8333 chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
+          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
@@ -138,7 +138,7 @@ jobs:
       - name: Start S3-compatible test service and create disposable bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 8333:8333 chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
+          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
