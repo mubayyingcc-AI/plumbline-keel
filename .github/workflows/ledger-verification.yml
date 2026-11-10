@@ -30,6 +30,7 @@ jobs:
           --health-retries 20
     env:
       PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/keel_test
+      PGSSLMODE: disable
       KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@localhost:5432/keel_test
     steps:
       - uses: actions/checkout@v4
