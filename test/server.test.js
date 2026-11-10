@@ -182,3 +182,28 @@ test('ledger status fails closed when no database is configured', async () => {
   assert.equal(data.status, 'BLOCKED');
   assert.equal(data.reason, 'database_not_configured');
 });
+
+test('Payment Authority sandbox runs the real evaluator and never executes a payment', async () => {
+  const scenarios = ['PA-001','PA-002','PA-003','PA-004'];
+  const expected = ['ALLOW_WITHIN_MANDATE','HUMAN_APPROVAL_REQUIRED','HOLD','DENY'];
+  for (let i=0;i<scenarios.length;i++) {
+    const response = await fetch(base + '/api/sandbox/payment-authority/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scenarioId:scenarios[i]}) });
+    const data = await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.result.decision,expected[i]);
+    assert.equal(data.passed,true);
+    assert.equal(data.execution,'DISABLED');
+    assert.equal(data.synthetic,true);
+  }
+});
+
+test('Human Card sandbox profile contains no payment credentials and unverified funding is held', async () => {
+  const response = await fetch(base + '/api/sandbox/human-card/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scenarioId:'HC-001'}) });
+  const data = await response.json();
+  assert.equal(response.status,200);
+  assert.equal(data.card.status,'sandbox');
+  assert.match(data.card.display.label,/NOT A PAYMENT CARD/);
+  assert.equal(data.card.providerTokenRef,undefined);
+  assert.equal(data.fundingAvailability.status,'HOLD');
+  assert.equal(data.execution,'DISABLED');
+});
