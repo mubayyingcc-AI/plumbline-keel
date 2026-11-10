@@ -86,12 +86,14 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       minio:
-        image: quay.io/minio/minio:latest
+        image: localstack/localstack:latest
         env:
-          MINIO_ROOT_USER: keelci
-          MINIO_ROOT_PASSWORD: keelci-test-password
+          SERVICES: s3
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
         ports:
-          - 9000:9000
+          - 4566:4566
     env:
       PGDATA: /var/lib/postgresql/16/main
       PGUSER: postgres
@@ -99,28 +101,30 @@ jobs:
       PGPORT: "5432"
       PGPASSWORD: postgres
       PGBACKREST_REPO1_S3_BUCKET: keel-ci-backups
-      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
+      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:4566
       PGBACKREST_REPO1_S3_REGION: us-east-1
-      PGBACKREST_REPO1_S3_KEY: keelci
-      PGBACKREST_REPO1_S3_KEY_SECRET: keelci-test-password
+      PGBACKREST_REPO1_S3_KEY: test
+      PGBACKREST_REPO1_S3_KEY_SECRET: test
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL 16 server and pgBackRest
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-16 postgresql-client-16 pgbackrest
+          sudo apt-get install -y postgresql-16 postgresql-client-16 pgbackrest awscli
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           sudo pg_ctlcluster 16 main start
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
       - name: Wait for S3 test endpoint and create disposable bucket
         run: |
           for attempt in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && break
+            curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null && break
             sleep 2
           done
-          curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null
-          docker run --rm --network host quay.io/minio/mc:latest alias set ci http://127.0.0.1:9000 keelci keelci-test-password
-          docker run --rm --network host quay.io/minio/mc:latest mb --ignore-existing ci/keel-ci-backups
+          curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null
+          aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
