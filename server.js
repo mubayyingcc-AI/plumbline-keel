@@ -18,6 +18,7 @@ const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
+const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
@@ -317,6 +318,11 @@ const apiDescription = {
     '/api/sandbox/reconciliation/scenarios':{get:{summary:'Executable synthetic provider-event reconciliation scenarios'}},
     '/api/sandbox/reconciliation/runs':{post:{summary:'Reconcile declared synthetic provider events against expected transfer records'}},
     '/api/ledger/status':{get:{summary:'Ledger migration, runtime-role and row-level security readiness'}},
+    '/api/ledger/books':{get:{summary:'List tenant accounting books'},post:{summary:'Create a tenant accounting book'}},
+    '/api/ledger/books/{bookId}/accounts':{get:{summary:'List chart-of-account mappings'},post:{summary:'Map an existing ledger account to a book'}},
+    '/api/ledger/periods':{get:{summary:'List accounting periods'},post:{summary:'Create a planned accounting period'}},
+    '/api/ledger/periods/{periodId}/open':{post:{summary:'Open a planned accounting period'}},
+    '/api/ledger/trial-balance':{get:{summary:'Calculate opening, movement and closing trial balance by currency'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
@@ -897,6 +903,47 @@ const server = http.createServer(async (req,res) => {
       const canWrite=['owner','admin','integration'].includes(actor.role);
       if(req.method==='POST'&&!canWrite)return send(res,403,{error:'ledger_write_role_required'});
       if(req.method==='POST'&&!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      if(req.method==='GET'&&route==='/api/ledger/books'){
+        const books=await accountingPeriods.listBooks(pool,actor.tenant_id);
+        return send(res,200,{count:books.length,books});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/books'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
+        const book=await accountingPeriods.createBook(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,book});
+      }
+      const bookAccountsMatch=route.match(/^\/api\/ledger\/books\/([^/]+)\/accounts$/);
+      if(bookAccountsMatch&&req.method==='GET'){
+        const accounts=await accountingPeriods.listBookAccounts(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]));
+        return send(res,200,{count:accounts.length,accounts});
+      }
+      if(bookAccountsMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
+        const body=await readBody(req);
+        const mapping=await accountingPeriods.mapAccount(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]),body.accountId);
+        return send(res,201,{ok:true,mapping});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/periods'){
+        const periods=await accountingPeriods.listPeriods(pool,actor.tenant_id,url.searchParams.get('bookId'));
+        return send(res,200,{count:periods.length,periods});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/periods'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        const period=await accountingPeriods.createPeriod(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,period});
+      }
+      const openPeriodMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/open$/);
+      if(openPeriodMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        const result=await accountingPeriods.openPeriod(pool,actor.tenant_id,decodeURIComponent(openPeriodMatch[1]));
+        return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/trial-balance'){
+        const bookId=url.searchParams.get('bookId'),periodId=url.searchParams.get('periodId');
+        if(!bookId||!periodId)return send(res,400,{error:'book_id_and_period_id_required'});
+        const result=await accountingPeriods.trialBalance(pool,actor.tenant_id,bookId,periodId);
+        return send(res,result.balanced?200:409,{ok:result.balanced,trialBalance:result});
+      }
       if(req.method==='POST'&&route==='/api/ledger/accounts'){
         if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'ledger_account_admin_required'});
         const account=await ledgerPosting.createAccount(pool,actor.tenant_id,await readBody(req));
@@ -911,8 +958,10 @@ const server = http.createServer(async (req,res) => {
         return send(res,200,{count:accounts.length,accounts});
       }
       if(req.method==='POST'&&route==='/api/ledger/journals'){
-        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,await readBody(req));
-        return send(res,result.replay?200:201,{ok:true,...result,notice:'Ledger posting only; this does not initiate or confirm an external payment or settlement.'});
+        const body=await readBody(req);
+        if(!body.bookId||!body.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
+        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body);
+        return send(res,result.replay?200:201,{ok:true,...result,notice:'Period-bound ledger posting only; this does not initiate or confirm an external payment or settlement.'});
       }
       const balanceMatch=route.match(/^\/api\/ledger\/accounts\/([^/]+)\/balance$/);
       if(req.method==='GET'&&balanceMatch){
