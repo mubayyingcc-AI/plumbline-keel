@@ -27,19 +27,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-      s3:
-        image: localstack/localstack:latest
-        env:
-          SERVICES: s3
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-        ports:
-          - 4567:4566
     env:
       PGSSLMODE: disable
       KEEL_BACKUP_S3_BUCKET: keel-ci-backups
-      KEEL_BACKUP_S3_ENDPOINT: http://127.0.0.1:4567
+      KEEL_BACKUP_S3_ENDPOINT: http://127.0.0.1:8333
       KEEL_BACKUP_S3_REGION: us-east-1
       KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT: "true"
       AWS_ACCESS_KEY_ID: test
@@ -70,10 +61,10 @@ jobs:
         run: |
           aws configure set default.s3.addressing_style path
           for attempt in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:4567/_localstack/health >/dev/null && break
+            curl -fsS http://127.0.0.1:8333/status >/dev/null && break
             sleep 2
           done
-          aws --endpoint-url http://127.0.0.1:4567 s3 mb s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
       - name: Generate ephemeral test encryption identity
         id: age
         run: |
@@ -90,7 +81,7 @@ jobs:
         run: bash scripts/backup-postgres-encrypted.sh
       - name: Verify remote backup artifacts
         run: |
-          count="$(aws --endpoint-url http://127.0.0.1:4567 s3 ls s3://keel-ci-backups/keel/ci-source/ --recursive | wc -l)"
+          count="$(aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups/keel/ci-source/ --recursive | wc -l)"
           test "$count" -eq 3
       - name: Verify backup metadata and restore into clean database
         env:
@@ -115,14 +106,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       s3:
-        image: localstack/localstack:latest
-        env:
-          SERVICES: s3
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-        ports:
-          - 4566:4566
+                env:
     env:
       PGDATA: /var/lib/postgresql/16/main
       PGUSER: postgres
@@ -130,7 +114,7 @@ jobs:
       PGPORT: "5432"
       PGPASSWORD: postgres
       PGBACKREST_REPO1_S3_BUCKET: keel-ci-backups
-      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:4566
+      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:8333
       PGBACKREST_REPO1_S3_REGION: us-east-1
       PGBACKREST_REPO1_S3_KEY: test
       PGBACKREST_REPO1_S3_KEY_SECRET: test
@@ -149,11 +133,11 @@ jobs:
       - name: Wait for S3 test endpoint and create disposable bucket
         run: |
           for attempt in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null && break
+            curl -fsS http://127.0.0.1:8333/status >/dev/null && break
             sleep 2
           done
-          curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null
-          aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://keel-ci-backups
+          curl -fsS http://127.0.0.1:8333/status >/dev/null
+          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
