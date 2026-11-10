@@ -19,6 +19,8 @@ const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
 const providerLifecycle = require('./src/provider-lifecycle');
+const {ProviderSandboxAdapter}=require('./src/provider-sandbox-adapter');
+const providerCallbackIngress=require('./src/provider-callback-ingress');
 const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
@@ -28,7 +30,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
 const rateBuckets = new Map();
 
 const products = [
@@ -175,6 +177,15 @@ function send(res, status, payload, type='application/json; charset=utf-8', extr
     ...extraHeaders
   });
   res.end(type.startsWith('application/json') ? JSON.stringify(payload) : payload);
+}
+
+async function readRawBody(req,limit=MAX_BODY){
+  return new Promise((resolve,reject)=>{
+    const chunks=[];let size=0,finished=false;
+    req.on('data',chunk=>{size+=chunk.length;if(size>limit&&!finished){finished=true;reject(Object.assign(new Error('request_body_too_large'),{status:413}));req.destroy();return;}chunks.push(chunk);});
+    req.on('end',()=>{if(!finished){finished=true;resolve(Buffer.concat(chunks).toString('utf8'));}});
+    req.on('error',error=>{if(!finished){finished=true;reject(error);}});
+  });
 }
 
 function readBody(req) {
@@ -992,6 +1003,17 @@ const server = http.createServer(async (req,res) => {
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);const q=await pool.query('SELECT proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref,created_at FROM keel_action_proof_objects WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:q.rowCount,proofs:q.rows});
     }
+    if(req.method==='POST'&&route==='/api/providers/callback/bank-sandbox'){
+      if(rateLimited(req,'/api/providers/callback/bank-sandbox'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const secret=process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET,keyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID;
+      if(!secret||Buffer.byteLength(secret)<32||!keyId)return send(res,503,{error:'provider_callback_verification_not_configured'});
+      const rawBody=await readRawBody(req,MAX_BODY),adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:async()=>{throw new Error('callback_adapter_dispatch_disabled');},keyring:{[keyId]:secret},activeKeyId:keyId});
+      const signature=req.headers['x-keel-signature'],receivedKeyId=req.headers['x-keel-key-id'];
+      if(typeof signature!=='string'||typeof receivedKeyId!=='string')return send(res,403,{error:'provider_signature_headers_required'});
+      const pool=await dbPool();if(!pool)return send(res,503,{error:'provider_callback_storage_unavailable'});
+      const result=await providerCallbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:receivedKeyId});
+      return send(res,result.replay?200:202,{ok:true,...result,execution:'RECONCILIATION_ONLY',notice:'Signature verified and event durably recorded. No ledger settlement, reversal or write-off is performed.'});
+    }
     if(route.startsWith('/api/providers/')){
       const actor=await authenticateTenant(req);
       if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
@@ -1330,4 +1352,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
+module.exports = { server, demoPayload, products, rateLimited, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
