@@ -26,4 +26,10 @@ test('guarded migration runner includes the accounting books and periods migrati
   assert.match(script,/014_accounting_books_and_periods\.sql/);
   assert.match(script,/015_period_close_dual_control\.sql/);
 });
-\n\ntest('guarded migration runner includes tenant security and provider lifecycle migrations',()=>{\n  const script=fs.readFileSync(path.join(__dirname,'..','scripts','apply-ledger-migrations.js'),'utf8');\n  assert.match(script,/016_global_tenant_rls_and_auth\\.sql/);\n  assert.match(script,/017_provider_outbox_inbox_reconciliation\\.sql/);\n});\n
+
+
+test('guarded migration runner includes tenant security and provider lifecycle migrations',()=>{
+  const script=fs.readFileSync(path.join(__dirname,'..','scripts','apply-ledger-migrations.js'),'utf8');
+  assert.match(script,/016_global_tenant_rls_and_auth\\.sql/);
+  assert.match(script,/017_provider_outbox_inbox_reconciliation\\.sql/);
+});
