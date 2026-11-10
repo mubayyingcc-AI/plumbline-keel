@@ -86,17 +86,12 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       minio:
-        image: minio/minio:latest
+        image: quay.io/minio/minio:latest
         env:
           MINIO_ROOT_USER: keelci
           MINIO_ROOT_PASSWORD: keelci-test-password
         ports:
           - 9000:9000
-        options: >-
-          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       PGDATA: /var/lib/postgresql/16/main
       PGUSER: postgres
@@ -117,10 +112,15 @@ jobs:
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           sudo pg_ctlcluster 16 main start
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
-      - name: Create disposable S3 bucket
+      - name: Wait for S3 test endpoint and create disposable bucket
         run: |
-          docker run --rm --network host minio/mc:latest alias set ci http://127.0.0.1:9000 keelci keelci-test-password
-          docker run --rm --network host minio/mc:latest mb --ignore-existing ci/keel-ci-backups
+          for attempt in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null
+          docker run --rm --network host quay.io/minio/mc:latest alias set ci http://127.0.0.1:9000 keelci keelci-test-password
+          docker run --rm --network host quay.io/minio/mc:latest mb --ignore-existing ci/keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
