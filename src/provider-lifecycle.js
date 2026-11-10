@@ -108,7 +108,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
   if(!authorityContext||!authorityContext.actor||!authorityContext.actor.principal_id||worker!==authorityContext.actor.principal_id)fail('provider_dispatch_authority_context_required',403);
   if(!Array.isArray(allowedProviderIds)||!allowedProviderIds.length||allowedProviderIds.some(x=>typeof x!=='string'||!x.trim()))fail('provider_allowlist_required',403);
   return withTenantTransaction(pool,tenantId,async client=>{
-    const expired=await client.query("SELECT outbox_id,journal_id,provider_id,idempotency_key,payload,payload_fingerprint FROM keel_provider_outbox WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW() ORDER BY lease_until FOR UPDATE SKIP LOCKED",[tenantId]);
+    const expired=await client.query("SELECT outbox_id,journal_id,provider_id,idempotency_key,payload,payload_fingerprint FROM keel_provider_outbox WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW() AND provider_id=ANY($2::text[]) ORDER BY lease_until FOR UPDATE SKIP LOCKED",[tenantId,allowedProviderIds]);
     for(const row of expired.rows){
       const payload=row.payload||{};
       if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_expired_lease_financial_amount_and_currency_required',400);
