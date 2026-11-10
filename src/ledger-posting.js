@@ -328,12 +328,21 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
     }
     const posted = await postJournalWithClient(client, tenantId, journal);
     if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityPersistence.digest(journal),executionRef:posted.journalId});
+    let providerAuthorityProof=null;
+    if(authorityContext){
+      const providerId=String(instruction.providerId||'').trim();
+      const payload=instruction.payload&&typeof instruction.payload==='object'?instruction.payload:{};
+      if(!providerId||typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_instruction_financial_amount_and_currency_required',400);
+      const request={tenantId, journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+      providerAuthorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:enqueue',resourceId:'provider:'+providerId,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(request),executionRef:posted.journalId});
+    }
     const outbox = await providerLifecycle.enqueueInstruction(client, {
       ...instruction,
       tenantId,
       journalId: posted.journalId
     });
-    return { journal: authorityProof?{...posted,authorityProof}:posted, outbox };
+    if(providerAuthorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
+    return { journal: authorityProof?{...posted,authorityProof}:posted, outbox:providerAuthorityProof?{...outbox,authorityProof:providerAuthorityProof}:outbox };
   }, tenantId);
 }
 async function listAccounts(pool,tenantIdInput) {
