@@ -16,7 +16,8 @@ test('product catalogue is served by the API', async () => {
   const response = await fetch(base + '/api/products');
   const data = await response.json();
   assert.equal(response.status, 200);
-  assert.equal(data.products.length, 8);
+  assert.equal(data.products.length, 9);
+  assert.ok(data.products.some(p => p.id === 'ledger'));
   assert.ok(data.products.some(p => p.id === 'capacity'));
   assert.ok(data.products.some(p => p.id === 'payment-authority'));
   assert.ok(data.products.some(p => p.id === 'card-control'));
@@ -172,4 +173,135 @@ test('assurance status exposes the contract consumed by the website', async () =
   assert.equal(data.availability, 'available');
   assert.equal(data.tenantIsolation, 'credential-scoped');
   assert.equal(typeof data.boundary, 'string');
+});
+
+test('ledger status fails closed when no database is configured', async () => {
+  if (process.env.DATABASE_URL) return;
+  const response = await fetch(base + '/api/ledger/status');
+  const data = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(data.status, 'BLOCKED');
+  assert.equal(data.reason, 'database_not_configured');
+});
+
+test('Payment Authority sandbox runs the real evaluator and never executes a payment', async () => {
+  const scenarios = ['PA-001','PA-002','PA-003','PA-004'];
+  const expected = ['ALLOW_WITHIN_MANDATE','HUMAN_APPROVAL_REQUIRED','HOLD','DENY'];
+  for (let i=0;i<scenarios.length;i++) {
+    const response = await fetch(base + '/api/sandbox/payment-authority/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scenarioId:scenarios[i]}) });
+    const data = await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.result.decision,expected[i]);
+    assert.equal(data.passed,true);
+    assert.equal(data.execution,'DISABLED');
+    assert.equal(data.synthetic,true);
+  }
+});
+
+test('Human Card sandbox profile contains no payment credentials and unverified funding is held', async () => {
+  const response = await fetch(base + '/api/sandbox/human-card/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scenarioId:'HC-001'}) });
+  const data = await response.json();
+  assert.equal(response.status,200);
+  assert.equal(data.card.status,'sandbox');
+  assert.match(data.card.display.label,/NOT A PAYMENT CARD/);
+  assert.equal(data.card.providerTokenRef,undefined);
+  assert.equal(data.fundingAvailability.status,'HOLD');
+  assert.equal(data.execution,'DISABLED');
+});
+
+test('Payment Authority and Human Card scenario catalogues are backend supplied', async () => {
+  const pa = await fetch(base + '/api/sandbox/payment-authority/scenarios');
+  const paData = await pa.json();
+  assert.equal(pa.status,200);
+  assert.deepEqual(paData.scenarios.map(x=>x.id),['PA-001','PA-002','PA-003','PA-004']);
+  const hc = await fetch(base + '/api/sandbox/human-card/scenarios');
+  const hcData = await hc.json();
+  assert.equal(hc.status,200);
+  assert.deepEqual(hcData.scenarios.map(x=>x.id),['HC-001']);
+});
+
+test('currency precision catalogue exposes references without live settlement', async () => {
+  const response = await fetch(base + '/api/sandbox/currency/instruments');
+  const data = await response.json();
+  assert.equal(response.status,200);
+  assert.ok(data.instruments.some(x=>x.code==='NGN'&&x.scale===2));
+  assert.ok(data.instruments.every(x=>x.liveSettlement===false));
+  assert.equal(data.execution,'DISABLED');
+});
+
+test('currency precision API converts exact decimal strings to integer atomic units', async () => {
+  for (const [instrumentCode,amount,units] of [['USD','12.34','1234'],['NGN','123.45','12345'],['COMPUTE_CREDIT','0.000001','1']]) {
+    const response = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode,amount})});
+    const data = await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.atomicUnits,units);
+    assert.equal(data.execution,'DISABLED');
+  }
+});
+
+test('currency precision API rejects JSON numbers and excess decimal precision', async () => {
+  const numeric = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode:'USD',amount:0.1})});
+  assert.equal(numeric.status,400);
+  const precision = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode:'USD',amount:'1.001'})});
+  assert.equal(precision.status,400);
+});
+
+test('reconciliation sandbox catalog is backend supplied', async () => {
+  const response=await fetch(base+'/api/sandbox/reconciliation/scenarios');
+  const data=await response.json();
+  assert.equal(response.status,200);
+  assert.deepEqual(data.scenarios.map(x=>x.id),['REC-001','REC-002','REC-003','REC-004','REC-005','REC-006']);
+});
+
+test('reconciliation sandbox preserves match, duplicate, mismatch, missing, partial and late outcomes', async () => {
+  const cases=[['REC-001','MATCHED'],['REC-002','EXCEPTIONS'],['REC-003','EXCEPTIONS'],['REC-004','INCOMPLETE'],['REC-005','INCOMPLETE'],['REC-006','EXCEPTIONS']];
+  for(const [scenarioId,status] of cases){
+    const response=await fetch(base+'/api/sandbox/reconciliation/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenarioId})});
+    const data=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.result.status,status);
+    assert.equal(data.passed,true);
+    assert.equal(data.synthetic,true);
+    assert.equal(data.providerConnected,false);
+    assert.equal(data.execution,'DISABLED');
+  }
+});
+
+test('favicon routes serve the real SVG asset', async () => {
+  for (const path of ['/favicon.svg','/favicon.ico']) {
+    const response=await fetch(base+path);
+    assert.equal(response.status,200);
+    assert.match(response.headers.get('content-type'),/image\/svg\+xml/);
+    assert.match(await response.text(),/<svg/);
+  }
+});
+
+test('tenant accounting APIs require an authenticated tenant key', async () => {
+  const paths=['/api/ledger/books','/api/ledger/periods','/api/ledger/trial-balance?bookId=book-1&periodId=period-1'];
+  for(const path of paths){
+    const response=await fetch(base+path);
+    assert.equal(response.status,401);
+  }
+  const create=await fetch(base+'/api/ledger/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+  assert.equal(create.status,401);
+});
+
+test('dual-control period close endpoints are tenant-authenticated', async () => {
+  const paths=[
+    '/api/ledger/periods/p-1/close-requests',
+    '/api/ledger/periods/p-1/closure'
+  ];
+  for(const path of paths){
+    const response=await fetch(base+path);
+    assert.equal(response.status,401);
+  }
+  for(const path of [
+    '/api/ledger/periods/p-1/soft-close',
+    '/api/ledger/periods/p-1/close-requests',
+    '/api/ledger/periods/p-1/close-requests/r-1/approve',
+    '/api/ledger/periods/p-1/close-requests/r-1/reject'
+  ]){
+    const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    assert.equal(response.status,401);
+  }
 });

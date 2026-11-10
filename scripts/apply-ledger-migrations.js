@@ -37,9 +37,9 @@ async function main() {
     const owner = ownerResult.rows[0].owner;
     const role = await client.query("SELECT 1 FROM pg_roles WHERE rolname='keel_runtime'");
     if (role.rowCount) {
-      await client.query('ALTER ROLE keel_runtime WITH LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT');
+      await client.query('ALTER ROLE keel_runtime WITH LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
     } else {
-      await client.query('CREATE ROLE keel_runtime LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT');
+      await client.query('CREATE ROLE keel_runtime LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
     }
 
     await client.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
@@ -47,7 +47,7 @@ async function main() {
 
     await client.query('SELECT pg_advisory_lock($1,$2)', [73654, 12]);
     locked = true;
-    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql']) {
+    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql', '014_accounting_books_and_periods.sql', '015_period_close_dual_control.sql']) {
       const file = path.join(__dirname, '..', 'db', 'migrations', version);
       const sql = fs.readFileSync(file, 'utf8');
       const checksum = crypto.createHash('sha256').update(sql).digest('hex');
@@ -79,8 +79,8 @@ async function main() {
     await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE ' + ownerName + ' IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ' + roleName);
     await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE ' + ownerName + ' IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ' + roleName);
 
-    const check = await client.query("SELECT rolsuper AS is_superuser, rolcreatedb AS can_create_database, rolcreaterole AS can_create_roles FROM pg_roles WHERE rolname='keel_runtime'");
-    if (check.rows[0].is_superuser || check.rows[0].can_create_database || check.rows[0].can_create_roles) {
+    const check = await client.query("SELECT rolsuper AS is_superuser, rolcreatedb AS can_create_database, rolcreaterole AS can_create_roles, rolbypassrls AS can_bypass_rls FROM pg_roles WHERE rolname='keel_runtime'");
+    if (check.rows[0].is_superuser || check.rows[0].can_create_database || check.rows[0].can_create_roles || check.rows[0].can_bypass_rls) {
       throw new Error('runtime_role_privilege_boundary_failed');
     }
     console.log('runtime_role_ready keel_runtime (NOSUPERUSER, NOCREATEDB, NOCREATEROLE)');

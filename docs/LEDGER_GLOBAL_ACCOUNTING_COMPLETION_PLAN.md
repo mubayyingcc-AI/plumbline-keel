@@ -1,23 +1,29 @@
 # Keel Global Ledger — Completion and Production Assurance Plan
 
-**Status:** Transactional posting foundation under draft review; accounting and operational layers remain incomplete.
+**Status:** Double-entry posting, book-scoped chart of accounts, effective-dated periods and exact multi-currency trial balance are implemented in the isolated Railway staging environment. This is a staging-validated foundation, not a production-ready global accounting system. Dual-control period close is implemented in staging; controlled reopen, durable provider reconciliation, operational recovery and independent assurance remain incomplete.
 
-## Implemented foundation in PR #22
-Double-entry journal validation, exact integer minor-unit posting, account currency exponent, atomic PostgreSQL posting, SERIALIZABLE retries, immutable posted journals, full compensating reversals, idempotency, reservations, projections, tenant RLS and append-only hash-linked events. Verified previously on disposable PostgreSQL 16; not production-deployed.
+## Implemented foundation in PR #22 and staging integration PR #27
+- Double-entry journal validation, exact integer minor-unit posting, account currency exponent, atomic PostgreSQL posting, SERIALIZABLE retries, immutable posted journals, compensating reversals, idempotency, reservations, account projections, tenant RLS and append-only hash-linked events.
+- Tenant-scoped accounting books, book-specific chart-of-account mappings, non-overlapping effective-dated periods, open-period posting gate and accounting-date boundary checks.
+- Opening, period movement and closing trial balance by account and currency, using integer minor units and no cross-currency netting.
+- Migrations 012, 013, 014 and 015 applied to isolated Railway PostgreSQL 18 staging. The app connects as keel_runtime, without superuser or RLS-bypass privileges; twelve ledger/accounting tables have forced tenant RLS.
+- Disposable PostgreSQL 16 CI applies all four migrations and exercises restricted-role posting, reservations, book mapping, period controls and trial-balance equality.
+
+No production database migration or external financial settlement is enabled.
 
 ## Required accounting layers
 1. **Currency master data:** authoritative versioned ISO 4217 source, effective dates, historic changes, redenomination, non-circulating/fund codes, precision and cash rounding. FX rates use decimal/fixed-point with quote direction, source, timestamp, validity, spread and purpose.
 2. **Entity and books:** tenant → legal entity → accounting book → chart of accounts; functional/presentation/transaction currencies; control accounts, subledgers, intercompany and consolidation boundaries.
-3. **Accounting periods:** entity/book calendars, time zones, fiscal years, planned/open/soft-close/closed/reopened states, backdating, controlled adjustments and maker-checker reopen.
-4. **Trial balance and reporting:** opening/movement/closing balances, debit-credit proof, suspense/control checks, versioned statement mappings, reporting basis (IFRS/local GAAP/IPSAS where applicable).
-5. **Reconciliation:** bank/custodian/switch/card/central-bank/settlement ingestion; exact matching and exception workflow for partial, duplicate, missing, late, reversed, fee, FX and out-of-order events. Fuzzy matching suggests only. Unmatched items are never silently adjusted.
+3. **Accounting periods:** planned/open/soft-close and dual-control final close are implemented. The close requester and approver must be different API keys bound to different principals; a hash-pinned trial balance and immutable closure record are required. Still required: fiscal-year/calendar generation, controlled backdating, approved reopen and adjustment-period policy.
+4. **Trial balance and reporting:** opening/movement/closing balances and per-currency debit-credit proof are implemented for mapped accounts. Still required: suspense/control-account reconciliation, versioned financial-statement mappings, consolidation and reporting basis outputs (IFRS/local GAAP/IPSAS where applicable).
+5. **Reconciliation:** a synthetic deterministic matching POC handles exact, duplicate, overstatement, missing, partial, wrong-type and late events. Still required: durable bank/custodian/switch/card/central-bank/settlement ingestion, fee/FX/reversal/out-of-order matching, operator exception workflow and independent source proof. Fuzzy matching suggests only. Unmatched items are never silently adjusted.
 6. **Provider lifecycle:** durable outbox/inbox, deduplication, retries, unknown outcomes, confirmation, reversal and reconciliation. Network calls never occur inside ledger DB transactions.
-7. **Controls:** maker-checker, service identities, scoped authority, suspense write-off approval, period close/reopen approval, least privilege, tenant RLS.
+7. **Controls:** restricted runtime identity, tenant RLS, open-period posting gate and dual-control period close evidence are implemented. Still required: scoped service authority, suspense write-off approval, controlled period reopen and broader approval evidence.
 8. **Operations:** backups, PITR, restore drills, failover, WAL monitoring, key rotation, DR, alerting, incident response and load/fault testing.
 9. **Assurance:** independent accounting, database, security, privacy, penetration, concurrency and operational review.
 
 ## Required acceptance tests
-Currency 0/2/3 decimals and historic changes; multi-currency separation; concurrent posting/reservation; idempotent and conflicting replay; exact reversal; closed-period rejection; authorised reopen; trial balance to control accounts; statement duplicates/missing/late/partial/FX; cross-tenant RLS; projection rebuild/tamper; backup restore and deterministic replay.
+Currency 0/2/3/6 decimals and historic changes; multi-currency separation; concurrent posting/reservation; idempotent and conflicting replay; exact reversal; non-open/out-of-range period rejection; chart-of-account mapping; exact trial balance per currency; period close dual-control and authorised reopen; statement duplicates/missing/late/partial/FX; cross-tenant RLS; projection rebuild/tamper; backup restore and deterministic replay.
 
 ## Release rule
 Do not apply migrations to production, connect live funds or enable financial execution until full schema/API review, disposable PostgreSQL CI, staging migration/rollback and restore drills, signed provider/legal evidence contracts, and independent accounting/security/operational approval pass.
