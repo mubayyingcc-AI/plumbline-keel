@@ -34,7 +34,6 @@ jobs:
           --health-retries 20
     env:
       KEEL_BACKUP_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci
-      KEEL_BACKUP_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,7 +46,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           shift
-          exec docker exec -e PGPASSWORD=postgres "$KEEL_BACKUP_TEST_PG_CONTAINER" psql -X -U postgres -d keel_backup_ci "$@"
+          exec docker run --rm --network host -e PGPASSWORD=postgres postgres:18-bookworm psql -X -h 127.0.0.1 -U postgres -d keel_backup_ci "$@"
           SH
           cat > "$RUNNER_TEMP/pg-bin/pg_dump" <<'SH'
           #!/usr/bin/env bash
@@ -60,7 +59,7 @@ jobs:
             if [[ "$arg" == --dbname=* ]]; then continue; fi
             args+=("$arg")
           done
-          exec docker exec -e PGPASSWORD=postgres -e "PGOPTIONS=${PGOPTIONS:-}" "$KEEL_BACKUP_TEST_PG_CONTAINER" pg_dump --dbname=postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci "${args[@]}"
+          exec docker run --rm --network host -e PGPASSWORD=postgres -e "PGOPTIONS=${PGOPTIONS:-}" postgres:18-bookworm pg_dump --dbname=postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci "${args[@]}"
           SH
           chmod +x "$RUNNER_TEMP/pg-bin/"*
           echo "$RUNNER_TEMP/pg-bin" >> "$GITHUB_PATH"
