@@ -305,3 +305,28 @@ test('dual-control period close endpoints are tenant-authenticated', async () =>
     assert.equal(response.status,401);
   }
 });
+
+
+test('application database pool refuses admin DATABASE_URL without runtime URL', async () => {
+  const priorAdmin=process.env.DATABASE_URL;
+  const priorRuntime=process.env.KEEL_RUNTIME_DATABASE_URL;
+  try {
+    process.env.DATABASE_URL='postgresql://administrator:must-not-be-used@127.0.0.1:1/keel';
+    delete process.env.KEEL_RUNTIME_DATABASE_URL;
+    const { dbPool }=require('../server');
+    assert.equal(await dbPool(),null);
+  } finally {
+    if(priorAdmin===undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL=priorAdmin;
+    if(priorRuntime===undefined) delete process.env.KEEL_RUNTIME_DATABASE_URL; else process.env.KEEL_RUNTIME_DATABASE_URL=priorRuntime;
+  }
+});
+
+test('core schema bootstrap is isolated from the web runtime pool', () => {
+  const { dbPool, bootstrapCoreSchema }=require('../server');
+  assert.equal(typeof dbPool,'function');
+  assert.equal(typeof bootstrapCoreSchema,'function');
+  assert.match(bootstrapCoreSchema.toString(),/CREATE TABLE IF NOT EXISTS keel_leads/);
+  assert.doesNotMatch(dbPool.toString(),/CREATE TABLE|ALTER TABLE|CREATE INDEX/);
+  assert.match(dbPool.toString(),/KEEL_RUNTIME_DATABASE_URL/);
+  assert.match(dbPool.toString(),/runtime_database_role_boundary_failed/);
+});
