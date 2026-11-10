@@ -1121,8 +1121,8 @@ const server = http.createServer(async (req,res) => {
         }
         if(!body.journal)return send(res,400,{error:'consumption_journal_required'});
         if(!body.journal.bookId||!body.journal.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
-        if(actor.role==='integration'&&!actor.principal_id)return send(res,403,{error:'named_agent_principal_required'});
-        const authorityContext=actor.principal_id?{actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId}:null;
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
         const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,reservationId,body.journal,authorityContext);
         return send(res,200,{ok:true,...result});
       }
