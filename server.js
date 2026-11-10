@@ -902,7 +902,7 @@ const server = http.createServer(async (req,res) => {
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
     }
     if (req.method === 'GET' && route === '/api/ledger/status') {
-      const pool = tenantScopedPool(await dbPool(),actor.tenant_id);
+      const pool = await dbPool();
       if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
       const [migrations, role, ledgerRls, accountingRls] = await Promise.all([
         pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql','015_period_close_dual_control.sql']]),
