@@ -21,9 +21,9 @@ test('detects duplicate provider event and idempotency keys',()=>{
 });
 
 test('amount mismatch is an exception, not a clean reconciliation',()=>{
-  const r=engine.reconcile({expectedTransfers:[expected()],providerEvents:[event({amountMinor:'98000'})],now});
+  const r=engine.reconcile({expectedTransfers:[expected()],providerEvents:[event({amountMinor:'108000'})],now});
   assert.equal(r.status,'EXCEPTIONS');
-  assert.ok(r.results[0].reasons.includes('AMOUNT_OVERSTATEMENT')===false);
+  assert.ok(r.results[0].reasons.includes('AMOUNT_OVERSTATEMENT'));
   assert.equal(r.results[0].status,'EXCEPTION');
 });
 
