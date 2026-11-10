@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
 const providerLifecycle = require('./provider-lifecycle');
+const authorityPersistence = require('./authority-persistence');
+const authorityCrypto = require('node:crypto');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -292,10 +294,10 @@ async function createAccount(pool, tenantIdInput, account) {
     return { accountId, currency, currencyExponent:account.currencyExponent, accountClass, normalSide, status: 'active' };
   }, tenantId);
 }
-async function postJournal(pool, tenantIdInput, journal) {
+async function postJournal(pool, tenantIdInput, journal, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
-  return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal), tenantId);
+  return withTransaction(pool, async client => {\n    if(authorityContext){\n      const normalized=validateJournal({...journal,tenantId});\n      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];\n      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);\n      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();\n      await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});\n    }\n    return postJournalWithClient(client, tenantId, journal);\n  }, tenantId);
 }
 
 // Atomically commit the ledger journal and its external instruction.
@@ -364,7 +366,7 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
     };
   }, tenantId);
 }
-async function createReservation(pool, tenantIdInput, input) {
+async function createReservation(pool, tenantIdInput, input, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (!input || typeof input !== 'object') fail('reservation_required');
@@ -419,7 +421,7 @@ async function createReservation(pool, tenantIdInput, input) {
     return {reservationId,status:'active',replay:false};
   }, tenantId);
 }
-async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
+async function releaseReservation(pool, tenantIdInput, reservationId, reason, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (typeof reservationId !== 'string' || !reservationId.trim()) fail('reservation_id_required');
@@ -436,7 +438,7 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
     return {reservationId,status:next,replay:false};
   }, tenantId);
 }
-async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
+async function consumeReservation(pool, tenantIdInput, reservationId, journal, authorityContext) {
   requirePool(pool);
   const tenantId=actorTenant(tenantIdInput);
   const validatedJournal=validateJournal({...journal,tenantId});
