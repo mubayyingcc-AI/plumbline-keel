@@ -39,9 +39,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client-16 age
-          sudo update-alternatives --set pg_dump /usr/lib/postgresql/16/bin/pg_dump
-          sudo update-alternatives --set pg_restore /usr/lib/postgresql/16/bin/pg_restore
-          sudo update-alternatives --set psql /usr/lib/postgresql/16/bin/psql
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - name: Validate shell syntax
         run: |
           bash -n scripts/backup-postgres-encrypted.sh
