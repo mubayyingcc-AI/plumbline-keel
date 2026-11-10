@@ -95,18 +95,17 @@ BEGIN
   IF OLD.status='closed' THEN
     RAISE EXCEPTION 'closed accounting period is immutable';
   END IF;
+  IF NEW.status='closed' THEN
+    RAISE EXCEPTION 'period close is disabled until dual-control close approval is implemented';
+  END IF;
   IF NEW.status<>OLD.status AND NOT (
     (OLD.status='planned' AND NEW.status='open')
     OR (OLD.status='open' AND NEW.status='soft_closed')
-    OR (OLD.status='soft_closed' AND NEW.status='closed')
   ) THEN
     RAISE EXCEPTION 'accounting period state transition is not permitted';
   END IF;
   IF NEW.status='open' AND NEW.opened_at IS NULL THEN
     NEW.opened_at:=NOW();
-  END IF;
-  IF NEW.status='closed' THEN
-    RAISE EXCEPTION 'period close is disabled until dual-control close approval is implemented';
   END IF;
   NEW.version:=OLD.version+1;
   RETURN NEW;
