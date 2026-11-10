@@ -87,6 +87,10 @@ jobs:
           KEEL_BACKUP_AGE_RECIPIENT: ${{ steps.age.outputs.recipient }}
           KEEL_BACKUP_DATABASE_ID: ci-source
         run: bash scripts/backup-postgres-encrypted.sh
+      - name: Verify remote backup artifacts
+        run: |
+          count="$(aws --endpoint-url http://127.0.0.1:4567 s3 ls s3://keel-ci-backups/keel/ci-source/ --recursive | wc -l)"
+          test "$count" -eq 3
       - name: Verify backup metadata and restore into clean database
         env:
           KEEL_BACKUP_AGE_IDENTITY_FILE: ${{ runner.temp }}/age-identity.txt
