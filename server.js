@@ -967,8 +967,8 @@ const server = http.createServer(async (req,res) => {
         if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         if(rateLimited(req,'/api/ledger/period-close'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
-        if(!actor.key_id)return send(res,403,{error:'independent_api_key_identity_required'});
-        const result=await accountingPeriods.requestPeriodClose(pool,actor.tenant_id,decodeURIComponent(closeRequestsMatch[1]),actor.key_id);
+        if(!actor.key_id||!actor.principal_id)return send(res,403,{error:'independent_principal_identity_required'});
+        const result=await accountingPeriods.requestPeriodClose(pool,actor.tenant_id,decodeURIComponent(closeRequestsMatch[1]),actor.key_id,actor.principal_id);
         return send(res,201,{ok:true,...result});
       }
       const closeActionMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/close-requests\/([^/]+)\/(approve|reject)$/);
@@ -976,14 +976,14 @@ const server = http.createServer(async (req,res) => {
         if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         if(rateLimited(req,'/api/ledger/period-close'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
-        if(!actor.key_id)return send(res,403,{error:'independent_api_key_identity_required'});
+        if(!actor.key_id||!actor.principal_id)return send(res,403,{error:'independent_principal_identity_required'});
         const periodId=decodeURIComponent(closeActionMatch[1]),requestId=decodeURIComponent(closeActionMatch[2]);
         if(closeActionMatch[3]==='approve'){
-          const result=await accountingPeriods.approvePeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id);
+          const result=await accountingPeriods.approvePeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id,actor.principal_id);
           return send(res,result.closed?200:409,{ok:result.closed,...result});
         }
         const body=await readBody(req);
-        const result=await accountingPeriods.rejectPeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id,body.reason);
+        const result=await accountingPeriods.rejectPeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id,actor.principal_id,body.reason);
         return send(res,200,{ok:true,...result});
       }
       const closureMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/closure$/);
