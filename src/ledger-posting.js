@@ -5,7 +5,6 @@ const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
 const authorityPersistence = require('./authority-persistence');
 const providerLifecycle = require('./provider-lifecycle');
-const authorityPersistence = require('./authority-persistence');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -403,7 +402,6 @@ async function createReservation(pool, tenantIdInput, input, authorityContext) {
   if (expiresAt !== null && (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt)<=Date.now())) fail('reservation_expiry_invalid');
   return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId);
-    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:create',resourceId:'account:'+accountId,amountMinor:value.toString(),currency:account.currency,requestFingerprint:authorityPersistence.digest({reservationId,idempotencyKey:idem,accountId,amountMinor:value.toString(),purpose,expiresAt}),executionRef:reservationId}):null;
     if (!account.is_reservable) fail('ledger_account_not_reservable', 409);
     const replay=await client.query(
       'SELECT reservation_id,account_id,currency,amount_minor::text,purpose,status,expires_at FROM keel_ledger_reservations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
@@ -418,6 +416,7 @@ async function createReservation(pool, tenantIdInput, input, authorityContext) {
       }
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:create',resourceId:'account:'+accountId,amountMinor:value.toString(),currency:account.currency,requestFingerprint:authorityPersistence.digest({reservationId,idempotencyKey:idem,accountId,amountMinor:value.toString(),purpose,expiresAt}),executionRef:reservationId}):null;
     const projection = await readProjection(client, tenantId, account);
     const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId);
@@ -483,7 +482,8 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal, a
     if(!live.rows[0].live){
       await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired_before_consumption' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim()]);
       await appendLedgerEvent(client,tenantId,'RESERVATION_RELEASED',reservationId.trim(),{status:'expired',reason:'expired_before_consumption'});
-      return {reservationId,status:'expired',replay:false};
+      if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:reservation:consume',envelopeId:authorityProof.envelopeId,executionRef:validatedJournal.journalId,outcome:'reservation_expired'});
+      return {reservationId,status:'expired',replay:false,authorityProof};
     }
     const checked=validatedJournal;
     const account=await lockAccount(client,tenantId,reservation.account_id);
