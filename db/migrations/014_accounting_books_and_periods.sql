@@ -17,6 +17,19 @@ CREATE TABLE IF NOT EXISTS keel_accounting_books (
   UNIQUE(tenant_id,entity_id,book_code)
 );
 
+CREATE TABLE IF NOT EXISTS keel_accounting_book_accounts (
+  tenant_id UUID NOT NULL,
+  book_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended')),
+  mapped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(tenant_id,book_id,account_id),
+  FOREIGN KEY(tenant_id,book_id) REFERENCES keel_accounting_books(tenant_id,book_id),
+  FOREIGN KEY(tenant_id,account_id) REFERENCES keel_ledger_accounts(tenant_id,account_id)
+);
+CREATE INDEX IF NOT EXISTS keel_accounting_book_accounts_account_idx
+  ON keel_accounting_book_accounts(tenant_id,account_id,book_id);
+
 CREATE TABLE IF NOT EXISTS keel_accounting_periods (
   tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
   period_id TEXT NOT NULL,
@@ -114,7 +127,7 @@ BEGIN
   END IF;
   SELECT * INTO p FROM keel_accounting_periods
    WHERE tenant_id=NEW.tenant_id AND book_id=NEW.book_id AND period_id=NEW.period_id
-   FOR KEY SHARE;
+   FOR SHARE;
   IF NOT FOUND THEN RAISE EXCEPTION 'accounting period not found for journal book'; END IF;
   IF p.status<>'open' THEN RAISE EXCEPTION 'ledger posting requires an open accounting period'; END IF;
   IF NEW.accounting_date<p.period_start OR NEW.accounting_date>p.period_end THEN
@@ -130,7 +143,7 @@ CREATE TRIGGER keel_ledger_journal_period_guard_trigger
 DO $$
 DECLARE t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['keel_accounting_books','keel_accounting_periods'] LOOP
+  FOREACH t IN ARRAY ARRAY['keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',t);
     EXECUTE format('DROP POLICY IF EXISTS keel_tenant_isolation ON %I',t);
