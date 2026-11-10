@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Pool } = require('pg');
+const { bootstrapCoreSchema } = require('../server');
 
 function quoteIdentifier(value) {
   return '"' + String(value).replace(/"/g, '""') + '"';
@@ -33,6 +34,8 @@ async function main() {
   const client = await pool.connect();
   let locked = false;
   try {
+    await bootstrapCoreSchema(client);
+    console.log('core_schema_bootstrap_complete');
     const ownerResult = await client.query('SELECT current_user AS owner');
     const owner = ownerResult.rows[0].owner;
     const role = await client.query("SELECT 1 FROM pg_roles WHERE rolname='keel_runtime'");
