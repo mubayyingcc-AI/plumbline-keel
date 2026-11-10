@@ -74,7 +74,16 @@ CREATE TRIGGER keel_accounting_period_close_request_guard_trigger
   BEFORE UPDATE ON keel_accounting_period_close_requests
   FOR EACH ROW EXECUTE FUNCTION keel_accounting_period_close_request_guard();
 
-CREATE OR REPLACE FUNCTION keel_accounting_period_closure_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION keel_accounting_period_close_request_no_delete() RETURNS trigger LANGUAGE plpgsql AS $
+BEGIN
+  RAISE EXCEPTION 'accounting period close request evidence cannot be deleted';
+END; $;
+DROP TRIGGER IF EXISTS keel_accounting_period_close_request_no_delete_trigger ON keel_accounting_period_close_requests;
+CREATE TRIGGER keel_accounting_period_close_request_no_delete_trigger
+  BEFORE DELETE ON keel_accounting_period_close_requests
+  FOR EACH ROW EXECUTE FUNCTION keel_accounting_period_close_request_no_delete();
+
+CREATE OR REPLACE FUNCTION keel_accounting_period_closure_immutable() RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN
   RAISE EXCEPTION 'accounting period closure evidence is append-only';
 END; $$;
@@ -84,8 +93,9 @@ CREATE TRIGGER keel_accounting_period_closure_immutable_trigger
   FOR EACH ROW EXECUTE FUNCTION keel_accounting_period_closure_immutable();
 
 CREATE OR REPLACE FUNCTION keel_accounting_period_transition_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE c keel_accounting_period_closures%ROWTYPE;
-DECLARE r keel_accounting_period_close_requests%ROWTYPE;
+DECLARE
+  c keel_accounting_period_closures%ROWTYPE;
+  r keel_accounting_period_close_requests%ROWTYPE;
 BEGIN
   IF (NEW.tenant_id,NEW.period_id,NEW.book_id,NEW.period_code,NEW.period_start,NEW.period_end)
      IS DISTINCT FROM
@@ -101,7 +111,7 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION 'approved dual-control closure record required'; END IF;
     SELECT * INTO r FROM keel_accounting_period_close_requests
       WHERE tenant_id=c.tenant_id AND request_id=c.request_id;
-    IF NOT FOUND OR r.status<>'approved' OR r.requested_by_key_id=r.approved_by_key_id
+    IF NOT FOUND OR r.period_id<>NEW.period_id OR r.status<>'approved' OR r.requested_by_key_id=r.approved_by_key_id
        OR r.approved_by_key_id<>NEW.closed_by OR c.closed_by_key_id<>NEW.closed_by
        OR c.trial_balance_hash<>r.trial_balance_hash OR c.closed_at<>NEW.closed_at THEN
       RAISE EXCEPTION 'approved dual-control closure evidence does not match period';
