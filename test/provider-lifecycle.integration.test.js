@@ -25,24 +25,19 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     await periods.openPeriod(pool,tenantId,periodId);
 
     const journalId='provider-journal-'+suffix;
-    await posting.postJournal(pool,tenantId,{journalId,idempotencyKey:'provider-ledger-'+suffix+'-000001',description:'Provider instruction funding',sourceRef:'test:provider:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
+    const journal={journalId,idempotencyKey:'provider-ledger-'+suffix+'-000001',description:'Provider instruction funding',sourceRef:'test:provider:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
       {accountId:cash,side:'debit',currency:'USD',amountMinor:'500'},
       {accountId:liability,side:'credit',currency:'USD',amountMinor:'500'}
-    ]});
-
-    const client=await pool.connect();
-    let outboxId;
-    try{
-      await client.query('BEGIN');
-      await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
-      const payload={amountMinor:'500',currency:'USD',beneficiaryRef:'beneficiary-'+suffix};
-      const created=await lifecycle.enqueueInstruction(client,{tenantId,journalId,providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-outbox-'+suffix+'-0001',payload});
-      outboxId=created.outbox_id;
-      const replay=await lifecycle.enqueueInstruction(client,{tenantId,journalId,providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-outbox-'+suffix+'-0001',payload});
-      assert.equal(replay.replay,true);
-      assert.equal(replay.outbox_id,outboxId);
-      await client.query('COMMIT');
-    }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+    ]};
+    const instruction={providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-outbox-'+suffix+'-0001',payload:{amountMinor:'500',currency:'USD',beneficiaryRef:'beneficiary-'+suffix}};
+    const committed=await posting.postJournalAndEnqueueInstruction(pool,tenantId,journal,instruction);
+    assert.equal(committed.journal.status,'posted');
+    assert.equal(committed.outbox.replay,false);
+    const outboxId=committed.outbox.outbox_id;
+    const replay=await posting.postJournalAndEnqueueInstruction(pool,tenantId,journal,instruction);
+    assert.equal(replay.journal.replay,true);
+    assert.equal(replay.outbox.replay,true);
+    assert.equal(replay.outbox.outbox_id,outboxId);
 
     const claimed=await lifecycle.claimNextInstruction(pool,tenantId,'worker-'+suffix,30);
     assert.equal(claimed.outbox_id,outboxId);
