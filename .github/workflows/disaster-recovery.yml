@@ -45,7 +45,8 @@ jobs:
       - name: Install PostgreSQL client and age
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client-16 age awscli
+          sudo apt-get install -y postgresql-client-16 age python3-pip
+          sudo python3 -m pip install --break-system-packages awscli
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - name: Validate shell syntax
         run: |
@@ -124,7 +125,8 @@ jobs:
       - name: Install PostgreSQL 16 server and pgBackRest
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-16 postgresql-client-16 pgbackrest awscli
+          sudo apt-get install -y postgresql-16 postgresql-client-16 pgbackrest python3-pip
+          sudo python3 -m pip install --break-system-packages awscli
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           sudo pg_ctlcluster 16 main start
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
