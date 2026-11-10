@@ -4,7 +4,7 @@ const {canonical}=require('./authority-chain');
 const ALGORITHM='Ed25519';
 function fail(code){const e=new Error(code);e.code=code;throw e;}
 function keyObject(key,type){
- try{return type==='private'?crypto.createPrivateKey(key):crypto.createPublicKey(key);}
+ try{if(key instanceof crypto.KeyObject){if(type==='private'&&key.type!=='private')fail('checkpoint_private_key_invalid');if(type==='public'&&key.type!=='public')fail('checkpoint_public_key_invalid');return key;}return type==='private'?crypto.createPrivateKey(key):crypto.createPublicKey(key);}
  catch(_){fail('checkpoint_'+type+'_key_invalid');}
 }
 function assertEd25519(key,type){
