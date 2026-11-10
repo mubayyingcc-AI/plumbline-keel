@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
+const authorityPersistence = require('./authority-persistence');
 const providerLifecycle = require('./provider-lifecycle');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -292,26 +293,56 @@ async function createAccount(pool, tenantIdInput, account) {
     return { accountId, currency, currencyExponent:account.currencyExponent, accountClass, normalSide, status: 'active' };
   }, tenantId);
 }
-async function postJournal(pool, tenantIdInput, journal) {
+async function postJournal(pool, tenantIdInput, journal, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
-  return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal), tenantId);
+  return withTransaction(pool, async client => {
+    let authorityProof=null;
+    if(authorityContext){
+      const normalized=validateJournal({...journal,tenantId});
+      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
+      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);
+      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();
+      authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
+    }
+    const posted=await postJournalWithClient(client, tenantId, journal);
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:posted.journalId});
+    return authorityProof?{...posted,authorityProof}:posted;
+  }, tenantId);
 }
 
 // Atomically commit the ledger journal and its external instruction.
 // A failed outbox write rolls back the journal; no network request occurs here.
-async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, instruction) {
+async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, instruction, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (!instruction || typeof instruction !== 'object') fail('provider_instruction_required');
   return withTransaction(pool, async client => {
+    let authorityProof=null;
+    if(authorityContext){
+      const normalized=validateJournal({...journal,tenantId});
+      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
+      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);
+      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();
+      authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
+    }
     const posted = await postJournalWithClient(client, tenantId, journal);
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityPersistence.digest(journal),executionRef:posted.journalId});
+    let providerAuthorityProof=null;
+    if(authorityContext){
+      const providerId=String(instruction.providerId||'').trim();
+      const payload=instruction.payload&&typeof instruction.payload==='object'?instruction.payload:{};
+      if(!providerId||typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_instruction_financial_amount_and_currency_required',400);
+      const request={tenantId,journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+      providerAuthorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:enqueue',resourceId:'provider:'+providerId,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(request),executionRef:posted.journalId});
+    }
     const outbox = await providerLifecycle.enqueueInstruction(client, {
       ...instruction,
       tenantId,
       journalId: posted.journalId
     });
-    return { journal: posted, outbox };
+    if(providerAuthorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
+    return { journal: authorityProof?{...posted,authorityProof}:posted, outbox:providerAuthorityProof?{...outbox,authorityProof:providerAuthorityProof}:outbox };
   }, tenantId);
 }
 async function listAccounts(pool,tenantIdInput) {
@@ -364,7 +395,7 @@ async function getAccountBalance(pool, tenantIdInput, accountId) {
     };
   }, tenantId);
 }
-async function createReservation(pool, tenantIdInput, input) {
+async function createReservation(pool, tenantIdInput, input, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (!input || typeof input !== 'object') fail('reservation_required');
@@ -394,6 +425,7 @@ async function createReservation(pool, tenantIdInput, input) {
       }
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:create',resourceId:'account:'+accountId,amountMinor:value.toString(),currency:account.currency,requestFingerprint:authorityPersistence.digest({reservationId,idempotencyKey:idem,accountId,amountMinor:value.toString(),purpose,expiresAt}),executionRef:reservationId}):null;
     const projection = await readProjection(client, tenantId, account);
     const balance = projection.balance;
     const reserved = await activeReservations(client, tenantId, accountId);
@@ -416,27 +448,30 @@ async function createReservation(pool, tenantIdInput, input) {
       return {reservationId:p.reservation_id,status:p.status,replay:true};
     }
     await appendLedgerEvent(client,tenantId,'RESERVATION_CREATED',reservationId,{accountId,currency:account.currency,amountMinor:value.toString(),purpose,expiresAt});
-    return {reservationId,status:'active',replay:false};
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:reservation:create',envelopeId:authorityProof.envelopeId,executionRef:reservationId});
+    return authorityProof?{reservationId,status:'active',replay:false,authorityProof}:{reservationId,status:'active',replay:false};
   }, tenantId);
 }
-async function releaseReservation(pool, tenantIdInput, reservationId, reason) {
+async function releaseReservation(pool, tenantIdInput, reservationId, reason, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
   if (typeof reservationId !== 'string' || !reservationId.trim()) fail('reservation_id_required');
   if (typeof reason !== 'string' || !reason.trim() || reason.length > 500) fail('reservation_release_reason_required');
   return withTransaction(pool, async client => {
-    const row=await client.query('SELECT reservation_id,status FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
+    const row=await client.query('SELECT reservation_id,status,account_id,currency,amount_minor::text FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
     if(!row.rowCount)fail('reservation_not_found',404);
     if(row.rows[0].status==='released')return {reservationId,status:'released',replay:true};
     if(row.rows[0].status!=='active')fail('reservation_not_active',409);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:release',resourceId:'account:'+row.rows[0].account_id,amountMinor:row.rows[0].amount_minor,currency:row.rows[0].currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),reason}),executionRef:reservationId.trim()}):null;
     const expiry=await client.query('SELECT expires_at IS NOT NULL AND expires_at<=NOW() AS expired FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim()]);
     const next=expiry.rows[0].expired?'expired':'released';
     await client.query('UPDATE keel_ledger_reservations SET status=$3,closed_at=NOW(),close_reason=$4 WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim(),next,reason.trim()]);
     await appendLedgerEvent(client,tenantId,'RESERVATION_RELEASED',reservationId.trim(),{reason:reason.trim(),status:next});
-    return {reservationId,status:next,replay:false};
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:reservation:release',envelopeId:authorityProof.envelopeId,executionRef:reservationId.trim()});
+    return authorityProof?{reservationId,status:next,replay:false,authorityProof}:{reservationId,status:next,replay:false};
   }, tenantId);
 }
-async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
+async function consumeReservation(pool, tenantIdInput, reservationId, journal, authorityContext) {
   requirePool(pool);
   const tenantId=actorTenant(tenantIdInput);
   const validatedJournal=validateJournal({...journal,tenantId});
@@ -451,11 +486,13 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
       fail('reservation_already_consumed',409);
     }
     if(reservation.status!=='active')fail('reservation_not_active',409);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:consume',resourceId:'account:'+reservation.account_id,amountMinor:reservation.amount_minor.toString(),currency:reservation.currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),journal:validatedJournal}),executionRef:validatedJournal.journalId}):null;
     const live=await client.query('SELECT ($1::timestamptz IS NULL OR $1::timestamptz>NOW()) AS live',[reservation.expires_at]);
     if(!live.rows[0].live){
       await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired_before_consumption' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim()]);
       await appendLedgerEvent(client,tenantId,'RESERVATION_RELEASED',reservationId.trim(),{status:'expired',reason:'expired_before_consumption'});
-      return {reservationId,status:'expired',replay:false};
+      if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:reservation:consume',envelopeId:authorityProof.envelopeId,executionRef:validatedJournal.journalId,outcome:'reservation_expired'});
+      return {reservationId,status:'expired',replay:false,authorityProof};
     }
     const checked=validatedJournal;
     const account=await lockAccount(client,tenantId,reservation.account_id);
@@ -469,7 +506,8 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     await client.query("UPDATE keel_ledger_reservations SET status='consumed',closed_at=NOW(),close_reason='consumed_by_journal:'||$3 WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim(),checked.journalId]);
     const posted=await postJournalWithClient(client,tenantId,journal);
     await appendLedgerEvent(client,tenantId,'RESERVATION_CONSUMED',reservationId.trim(),{journalId:posted.journalId});
-    return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:reservation:consume',envelopeId:authorityProof.envelopeId,executionRef:posted.journalId});
+    return authorityProof?{reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay,authorityProof}:{reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
 module.exports={createAccount,postJournal,postJournalAndEnqueueInstruction,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,verifyLedgerEventChain,normalBalance,amount,withTransaction};

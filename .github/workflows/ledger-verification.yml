@@ -2,7 +2,7 @@ name: Keel ledger verification
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'security/**']
   push:
     branches:
       - main

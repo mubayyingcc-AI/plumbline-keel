@@ -50,3 +50,5 @@ test('only definitive pre-send failure can be retried',async()=>{
 test('lease bounds prevent unbounded provider dispatch leases',async()=>{
   await assert.rejects(()=>lifecycle.claimNextInstruction({},tenant,'worker-1',999),/lease_seconds_invalid/);
 });
+
+test('provider dispatch fails closed without a named delegated authority context before database access',async()=>{await assert.rejects(()=>lifecycle.claimNextInstruction({},tenant,'worker-without-authority',30),/provider_dispatch_authority_context_required/);});
