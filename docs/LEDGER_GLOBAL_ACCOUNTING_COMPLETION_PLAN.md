@@ -7,7 +7,7 @@
 - Tenant-scoped accounting books, book-specific chart-of-account mappings, non-overlapping effective-dated periods, open-period posting gate and accounting-date boundary checks.
 - Opening, period movement and closing trial balance by account and currency, using integer minor units and no cross-currency netting.
 - Migrations 012, 013, 014 and 015 applied to isolated Railway PostgreSQL 18 staging. The app connects as keel_runtime, without superuser or RLS-bypass privileges; twelve ledger/accounting tables have forced tenant RLS.
-- Disposable PostgreSQL 16 CI applies all three migrations and exercises restricted-role posting, reservations, book mapping, period controls and trial-balance equality.
+- Disposable PostgreSQL 16 CI applies all four migrations and exercises restricted-role posting, reservations, book mapping, period controls and trial-balance equality.
 
 No production database migration or external financial settlement is enabled.
 
