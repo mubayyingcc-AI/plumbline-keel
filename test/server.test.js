@@ -274,3 +274,13 @@ test('favicon routes serve the real SVG asset', async () => {
     assert.match(await response.text(),/<svg/);
   }
 });
+
+test('tenant accounting APIs require an authenticated tenant key', async () => {
+  const paths=['/api/ledger/books','/api/ledger/periods','/api/ledger/trial-balance?bookId=book-1&periodId=period-1'];
+  for(const path of paths){
+    const response=await fetch(base+path);
+    assert.equal(response.status,401);
+  }
+  const create=await fetch(base+'/api/ledger/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+  assert.equal(create.status,401);
+});
