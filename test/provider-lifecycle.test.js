@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const lifecycle=require('../src/provider-lifecycle');
 
 const tenant='11111111-1111-4111-8111-111111111111';
-test('provider payload fingerprint is stable across object key order',()=>{
+test('provider HMAC verifier accepts a valid signature and rejects a modified body',()=>{\n  const crypto=require('node:crypto'),rawBody=JSON.stringify({event:'settled'}),secret='unit-test-webhook-secret-with-32-bytes';\n  const signature='sha256='+crypto.createHmac('sha256',secret).update(rawBody).digest('hex');\n  const attestation=lifecycle.verifyHmacSha256({rawBody,signature,secret,keyId:'test-key'});\n  assert.equal(attestation.status,'verified');\n  assert.throws(()=>lifecycle.verifyHmacSha256({rawBody:rawBody+' ',signature,secret,keyId:'test-key'}),/provider_signature_invalid/);\n});\ntest('provider HMAC verifier rejects short secrets and malformed signatures',()=>{\n  assert.throws(()=>lifecycle.verifyHmacSha256({rawBody:'{}',signature:'bad',secret:'short',keyId:'test'}),/provider_webhook_secret_too_short/);\n});\ntest('provider payload fingerprint is stable across object key order',()=>{
   assert.equal(lifecycle.digest({a:1,b:{x:2,y:3}}),lifecycle.digest({b:{y:3,x:2},a:1}));
 });
 test('provider payload fingerprint changes when a value changes',()=>{
