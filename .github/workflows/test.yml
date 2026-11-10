@@ -1,7 +1,7 @@
 name: Plumbline Keel CI
 on:
   push:
-    branches: [main, 'security/**']
+    branches: [main, 'security/**', 'release/**']
   pull_request:
     branches: [main, 'security/**']
 jobs:
