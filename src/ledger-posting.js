@@ -3,9 +3,9 @@
 const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
+const authorityPersistence = require('./authority-persistence');
 const providerLifecycle = require('./provider-lifecycle');
 const authorityPersistence = require('./authority-persistence');
-const authorityCrypto = require('node:crypto');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -297,7 +297,18 @@ async function createAccount(pool, tenantIdInput, account) {
 async function postJournal(pool, tenantIdInput, journal, authorityContext) {
   requirePool(pool);
   const tenantId = actorTenant(tenantIdInput);
-  return withTransaction(pool, async client => {\n    let authorityProof=null;\n    if(authorityContext){\n      const normalized=validateJournal({...journal,tenantId});\n      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];\n      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);\n      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();\n      authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});\n    }\n    const posted=await postJournalWithClient(client, tenantId, journal);\n    return authorityProof?{...posted,authorityProof}:posted;\n  }, tenantId);
+  return withTransaction(pool, async client => {
+    let authorityProof=null;
+    if(authorityContext){
+      const normalized=validateJournal({...journal,tenantId});
+      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
+      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);
+      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();
+      authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
+    }
+    const posted=await postJournalWithClient(client, tenantId, journal);
+    return authorityProof?{...posted,authorityProof}:posted;
+  }, tenantId);
 }
 
 // Atomically commit the ledger journal and its external instruction.
@@ -382,6 +393,7 @@ async function createReservation(pool, tenantIdInput, input, authorityContext) {
   if (expiresAt !== null && (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt)<=Date.now())) fail('reservation_expiry_invalid');
   return withTransaction(pool, async client => {
     const account = await lockAccount(client, tenantId, accountId);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:create',resourceId:'account:'+accountId,amountMinor:value.toString(),currency:account.currency,requestFingerprint:authorityPersistence.digest({reservationId,idempotencyKey:idem,accountId,amountMinor:value.toString(),purpose,expiresAt}),executionRef:reservationId}):null;
     if (!account.is_reservable) fail('ledger_account_not_reservable', 409);
     const replay=await client.query(
       'SELECT reservation_id,account_id,currency,amount_minor::text,purpose,status,expires_at FROM keel_ledger_reservations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
@@ -427,8 +439,9 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason, au
   if (typeof reservationId !== 'string' || !reservationId.trim()) fail('reservation_id_required');
   if (typeof reason !== 'string' || !reason.trim() || reason.length > 500) fail('reservation_release_reason_required');
   return withTransaction(pool, async client => {
-    const row=await client.query('SELECT reservation_id,status FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
+    const row=await client.query('SELECT reservation_id,status,account_id,currency,amount_minor::text FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
     if(!row.rowCount)fail('reservation_not_found',404);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:release',resourceId:'account:'+row.rows[0].account_id,amountMinor:row.rows[0].amount_minor,currency:row.rows[0].currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),reason}),executionRef:reservationId.trim()}):null;
     if(row.rows[0].status==='released')return {reservationId,status:'released',replay:true};
     if(row.rows[0].status!=='active')fail('reservation_not_active',409);
     const expiry=await client.query('SELECT expires_at IS NOT NULL AND expires_at<=NOW() AS expired FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim()]);
@@ -453,6 +466,7 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal, a
       fail('reservation_already_consumed',409);
     }
     if(reservation.status!=='active')fail('reservation_not_active',409);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:consume',resourceId:'account:'+reservation.account_id,amountMinor:reservation.amount_minor.toString(),currency:reservation.currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),journal:validatedJournal}),executionRef:validatedJournal.journalId}):null;
     const live=await client.query('SELECT ($1::timestamptz IS NULL OR $1::timestamptz>NOW()) AS live',[reservation.expires_at]);
     if(!live.rows[0].live){
       await client.query("UPDATE keel_ledger_reservations SET status='expired',closed_at=NOW(),close_reason='expired_before_consumption' WHERE tenant_id=$1 AND reservation_id=$2",[tenantId,reservationId.trim()]);
