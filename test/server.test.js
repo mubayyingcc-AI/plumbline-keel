@@ -176,7 +176,7 @@ test('assurance status exposes the contract consumed by the website', async () =
 });
 
 test('ledger status fails closed when no database is configured', async () => {
-  if (process.env.DATABASE_URL) return;
+  if (process.env.KEEL_RUNTIME_DATABASE_URL) return;
   const response = await fetch(base + '/api/ledger/status');
   const data = await response.json();
   assert.equal(response.status, 503);
@@ -347,4 +347,11 @@ test('tenant-scoped pool establishes transaction-local RLS context', async () =>
   assert.equal(calls[2].sql,'SELECT 1');
   assert.equal(calls[3].sql,'COMMIT');
   assert.throws(()=>tenantScopedPool(pool,'not-a-tenant'),/tenant_database_context_invalid/);
+});
+
+test('consumer identity and card APIs fail closed until tenant ownership is enforced', async () => {
+  const response = await fetch(base + '/api/consumer/cards');
+  const data = await response.json();
+  assert.equal(response.status,503);
+  assert.equal(data.error,'consumer_card_tenant_isolation_not_enabled');
 });

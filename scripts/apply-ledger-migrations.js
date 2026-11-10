@@ -50,7 +50,7 @@ async function main() {
 
     await client.query('SELECT pg_advisory_lock($1,$2)', [73654, 12]);
     locked = true;
-    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql', '014_accounting_books_and_periods.sql', '015_period_close_dual_control.sql', '016_global_tenant_rls_and_auth.sql']) {
+    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql', '014_accounting_books_and_periods.sql', '015_period_close_dual_control.sql', '016_global_tenant_rls_and_auth.sql', '017_provider_outbox_inbox_reconciliation.sql']) {
       const file = path.join(__dirname, '..', 'db', 'migrations', version);
       const sql = fs.readFileSync(file, 'utf8');
       const checksum = crypto.createHash('sha256').update(sql).digest('hex');
@@ -97,9 +97,22 @@ async function main() {
     const roleName = quoteIdentifier('keel_runtime');
     const ownerName = quoteIdentifier(owner);
     await client.query('GRANT USAGE ON SCHEMA public TO ' + roleName);
-    await client.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ' + roleName);
+    await client.query('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ' + roleName);
+    await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE ' + ownerName + ' IN SCHEMA public REVOKE ALL ON TABLES FROM ' + roleName);
+    const tenantTables = await client.query(`
+      SELECT c.relname FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='tenant_id'
+      WHERE n.nspname='public' AND c.relkind IN ('r','p')
+        AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped
+      ORDER BY c.relname
+    `);
+    for (const row of tenantTables.rows) {
+      await client.query('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.' + quoteIdentifier(row.relname) + ' TO ' + roleName);
+    }
+    await client.query('GRANT SELECT ON TABLE public.keel_schema_migrations TO ' + roleName);
+    await client.query('GRANT INSERT ON TABLE public.keel_leads TO ' + roleName);
     await client.query('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ' + roleName);
-    await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE ' + ownerName + ' IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ' + roleName);
     await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE ' + ownerName + ' IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ' + roleName);
 
     const check = await client.query("SELECT rolsuper AS is_superuser, rolcreatedb AS can_create_database, rolcreaterole AS can_create_roles, rolbypassrls AS can_bypass_rls FROM pg_roles WHERE rolname='keel_runtime'");

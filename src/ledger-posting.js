@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
+const providerLifecycle = require('./provider-lifecycle');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -296,6 +297,23 @@ async function postJournal(pool, tenantIdInput, journal) {
   const tenantId = actorTenant(tenantIdInput);
   return withTransaction(pool, client => postJournalWithClient(client, tenantId, journal), tenantId);
 }
+
+// Atomically commit the ledger journal and its external instruction.
+// A failed outbox write rolls back the journal; no network request occurs here.
+async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, instruction) {
+  requirePool(pool);
+  const tenantId = actorTenant(tenantIdInput);
+  if (!instruction || typeof instruction !== 'object') fail('provider_instruction_required');
+  return withTransaction(pool, async client => {
+    const posted = await postJournalWithClient(client, tenantId, journal);
+    const outbox = await providerLifecycle.enqueueInstruction(client, {
+      ...instruction,
+      tenantId,
+      journalId: posted.journalId
+    });
+    return { journal: posted, outbox };
+  }, tenantId);
+}
 async function listAccounts(pool,tenantIdInput) {
   requirePool(pool);
   const tenantId=actorTenant(tenantIdInput);
@@ -454,4 +472,4 @@ async function consumeReservation(pool, tenantIdInput, reservationId, journal) {
     return {reservationId,status:'consumed',journalId:posted.journalId,replay:posted.replay};
   }, tenantId);
 }
-module.exports={createAccount,postJournal,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,verifyLedgerEventChain,normalBalance,amount,withTransaction};
+module.exports={createAccount,postJournal,postJournalAndEnqueueInstruction,getAccountBalance,listAccounts,createReservation,releaseReservation,consumeReservation,verifyAccountProjection,verifyLedgerEventChain,normalBalance,amount,withTransaction};

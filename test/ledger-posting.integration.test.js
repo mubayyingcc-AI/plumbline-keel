@@ -23,6 +23,14 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     const authResult=await pool.query('SELECT * FROM public.keel_authenticate_tenant_key($1)',[authTokenHash]);
     assert.equal(authResult.rowCount,1);
     assert.equal(authResult.rows[0].tenant_id,tenantId);
+    const functionPrivileges=await pool.query(`
+      SELECT has_function_privilege(current_user,'public.keel_authenticate_tenant_key(text)','EXECUTE') AS can_authenticate,
+             has_function_privilege(current_user,'public.keel_ledger_reject_posted_mutation()','EXECUTE') AS can_execute_trigger_function
+    `);
+    assert.equal(functionPrivileges.rows[0].can_authenticate,true);
+    assert.equal(functionPrivileges.rows[0].can_execute_trigger_function,false,'runtime must not receive blanket function execution');
+    await adminPool.query('CREATE TABLE keel_unscoped_runtime_deny_test(id INTEGER PRIMARY KEY)');
+    await assert.rejects(()=>pool.query('SELECT id FROM keel_unscoped_runtime_deny_test'),/permission denied/,'new unscoped tables must not inherit runtime privileges');
     const hiddenKeys=await pool.query('SELECT key_id FROM keel_tenant_keys WHERE tenant_id=$1',[tenantId]);
     assert.equal(hiddenKeys.rowCount,0,'tenant key table must deny unscoped runtime reads');
     await pool.query('SELECT public.keel_touch_tenant_key($1,$2)',[authKeyId,tenantId]);
@@ -152,6 +160,7 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     const chainCheck=await posting.verifyLedgerEventChain(pool,tenantId);
     if(!chainCheck.valid)throw new Error('ledger_chain_check:'+JSON.stringify(chainCheck));
   } finally {
+    await adminPool.query('DROP TABLE IF EXISTS keel_unscoped_runtime_deny_test').catch(()=>{});
     await pool.end();
     await adminPool.end();
   }
