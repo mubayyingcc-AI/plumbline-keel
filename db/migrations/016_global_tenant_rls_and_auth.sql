@@ -66,7 +66,7 @@ AS $function$
 $function$;
 
 CREATE OR REPLACE FUNCTION public.keel_touch_tenant_key(p_key_id TEXT,p_tenant_id UUID)
-RETURNS INTEGER
+RETURNS SETOF INTEGER
 LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog,public
 AS $function$
   UPDATE public.keel_tenant_keys SET last_used_at=NOW()
