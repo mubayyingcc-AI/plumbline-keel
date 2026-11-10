@@ -17,5 +17,6 @@ test('invalid delegated amount cap fails closed',()=>assert.equal(evaluateAction
 test('provider instruction scope is a supported explicit authority, not wildcard',()=>{
  const {ACTIONS}=require('../src/authority-persistence');
  assert.equal(ACTIONS.has('provider:instruction:enqueue'),true);
+ assert.equal(ACTIONS.has('provider:instruction:dispatch'),true);
  assert.equal(ACTIONS.has('*'),false);
 });
