@@ -69,6 +69,7 @@ jobs:
           KEEL_BACKUP_AGE_IDENTITY_FILE: ${{ runner.temp }}/age-identity.txt
           KEEL_RESTORE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_ci
           KEEL_RESTORE_CONFIRM: RESTORE_TO_EMPTY_DATABASE
+          KEEL_RESTORE_EXPECTED_DATABASE_ID: ci-source
           PGPASSWORD: postgres
         run: |
           backup_file="$(find "$RUNNER_TEMP/keel-backups" -maxdepth 1 -name '*.dump.age' -print -quit)"
