@@ -451,9 +451,9 @@ async function releaseReservation(pool, tenantIdInput, reservationId, reason, au
   return withTransaction(pool, async client => {
     const row=await client.query('SELECT reservation_id,status,account_id,currency,amount_minor::text FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2 FOR UPDATE',[tenantId,reservationId.trim()]);
     if(!row.rowCount)fail('reservation_not_found',404);
-    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:release',resourceId:'account:'+row.rows[0].account_id,amountMinor:row.rows[0].amount_minor,currency:row.rows[0].currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),reason}),executionRef:reservationId.trim()}):null;
     if(row.rows[0].status==='released')return {reservationId,status:'released',replay:true};
     if(row.rows[0].status!=='active')fail('reservation_not_active',409);
+    const authorityProof=authorityContext?await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:reservation:release',resourceId:'account:'+row.rows[0].account_id,amountMinor:row.rows[0].amount_minor,currency:row.rows[0].currency,requestFingerprint:authorityPersistence.digest({reservationId:reservationId.trim(),reason}),executionRef:reservationId.trim()}):null;
     const expiry=await client.query('SELECT expires_at IS NOT NULL AND expires_at<=NOW() AS expired FROM keel_ledger_reservations WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim()]);
     const next=expiry.rows[0].expired?'expired':'released';
     await client.query('UPDATE keel_ledger_reservations SET status=$3,closed_at=NOW(),close_reason=$4 WHERE tenant_id=$1 AND reservation_id=$2',[tenantId,reservationId.trim(),next,reason.trim()]);
