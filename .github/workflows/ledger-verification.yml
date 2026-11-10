@@ -8,6 +8,7 @@ on:
       - main
       - 'ledger/**'
       - 'security/**'
+      - 'release/**'
 
 permissions:
   contents: read
