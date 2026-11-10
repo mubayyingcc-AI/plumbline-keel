@@ -169,6 +169,22 @@ async function postJournalWithClient(client, tenantId, input) {
   }
   const existing = await client.query('SELECT journal_id,fingerprint,status FROM keel_ledger_journals WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',[tenantId,journal.idempotencyKey]);
   if (existing.rowCount) { const prior=existing.rows[0]; if(prior.fingerprint!==journal.fingerprint||prior.journal_id!==journal.journalId)fail('ledger_idempotency_conflict',409); if(prior.status!=='posted')fail('ledger_idempotency_incomplete',409); return {journalId:prior.journal_id,fingerprint:journal.fingerprint,status:'posted',replay:true}; }
+  if (process.env.KEEL_REQUIRE_ACCOUNTING_PERIODS === 'true' && !journal.periodId) fail('accounting_period_required',409);
+  if (journal.periodId) {
+    const period = await client.query(
+      'SELECT status,period_start::text,period_end::text FROM keel_accounting_periods WHERE tenant_id=$1 AND book_id=$2 AND period_id=$3 FOR SHARE',
+      [tenantId,journal.bookId,journal.periodId]
+    );
+    if (!period.rowCount) fail('accounting_period_not_found',409);
+    if (period.rows[0].status !== 'open') fail('accounting_period_not_open',409);
+    if (journal.accountingDate < period.rows[0].period_start || journal.accountingDate > period.rows[0].period_end) fail('journal_accounting_date_outside_period',409);
+    const accountIds = [...new Set(journal.lines.map(line=>line.accountId))];
+    const mapped = await client.query(
+      "SELECT account_id FROM keel_accounting_book_accounts WHERE tenant_id=$1 AND book_id=$2 AND status='active' AND account_id=ANY($3::text[])",
+      [tenantId,journal.bookId,accountIds]
+    );
+    if (mapped.rowCount !== accountIds.length) fail('journal_account_not_mapped_to_book',409);
+  }
   // Lock accounts in stable lexical order to reduce deadlock risk.
   const ids = [...new Set(journal.lines.map(line => line.accountId))].sort();
   const accounts = new Map();
@@ -180,11 +196,11 @@ async function postJournalWithClient(client, tenantId, input) {
 
   const inserted = await client.query(
     `INSERT INTO keel_ledger_journals
-       (tenant_id,journal_id,idempotency_key,description,source_ref,effective_at,status,fingerprint,reversal_of_journal_id)
-     VALUES($1,$2,$3,$4,$5,$6,'draft',$7,$8)
+       (tenant_id,journal_id,idempotency_key,description,source_ref,effective_at,status,fingerprint,reversal_of_journal_id,book_id,period_id,accounting_date)
+     VALUES($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9,$10,$11)
      ON CONFLICT(tenant_id,idempotency_key) DO NOTHING
      RETURNING journal_id`,
-    [tenantId,journal.journalId,journal.idempotencyKey,journal.description,journal.sourceRef,journal.effectiveAt,journal.fingerprint,journal.reversalOfJournalId]
+    [tenantId,journal.journalId,journal.idempotencyKey,journal.description,journal.sourceRef,journal.effectiveAt,journal.fingerprint,journal.reversalOfJournalId,journal.bookId,journal.periodId,journal.accountingDate]
   );
   if (!inserted.rowCount) {
     const prior = await client.query(
