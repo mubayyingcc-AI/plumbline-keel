@@ -34,3 +34,13 @@ test('idempotent replay must match the exact journal fingerprint',()=>{
  const j=base();assert.equal(ledger.assertSameJournal(j,structuredClone(j)),true);
  const changed=base();changed.lines[0].amountMinor='12501';changed.lines[1].amountMinor='12501';assert.equal(ledger.assertSameJournal(j,changed),false);
 });
+
+test('period-bound journal identity is fingerprinted and accounting date is strict',()=>{
+  const journal=ledger.buildJournal({...base(),bookId:'book-1',periodId:'period-1'});
+  assert.equal(journal.bookId,'book-1');
+  assert.equal(journal.periodId,'period-1');
+  assert.equal(journal.accountingDate,'2026-11-09');
+  assert.throws(()=>ledger.buildJournal({...base(),bookId:'book-1'}),/must_be_bound_together/);
+  assert.throws(()=>ledger.buildJournal({...base(),periodId:'period-1'}),/must_be_bound_together/);
+  assert.throws(()=>ledger.buildJournal({...base(),bookId:'book-1',periodId:'period-1',accountingDate:'2026-02-31'}),/invalid_calendar_date/);
+});
