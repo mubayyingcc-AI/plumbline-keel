@@ -65,3 +65,8 @@ The mainline release candidate now requires a named delegated principal and sepa
 ## Authenticated provider worker API
 
 `POST /api/ledger/provider-instructions` atomically posts the period-bound journal and queues the provider instruction under two explicit authority checks. `POST /api/providers/outbox/claim` requires an integration-role key bound to a named principal plus a provider-scoped `provider:instruction:dispatch` envelope. The current HTTP worker allowlist is fixed to `bank-sandbox`; it does not dispatch to arbitrary provider IDs. `POST /api/providers/outbox/{outboxId}/outcome` requires the same principal to hold the lease and a separate `provider:instruction:outcome` grant. The worker reports accepted, unknown or definitive pre-send failure; unknown remains non-retriable. These endpoints coordinate a worker; they do not claim a live bank integration.
+
+
+## Automated recovery-state verification
+
+The PostgreSQL 16/18 CI matrix now runs `scripts/verify-recovery-state.js` after migrations and integration tests against a disposable database using the restricted `keel_runtime` role. A separate admin connection enumerates active tenants; every financial read is then executed with transaction-local tenant context. The verifier checks runtime role privileges, tenant isolation, exact ledger projections, trial-balance equality, provider uncertainty/open-case state and the hash-linked ledger event chain. This is a meaningful restore-target verification step, but it is not a substitute for taking an encrypted backup, restoring from WAL/PITR into a clean environment, measuring RPO/RTO and obtaining independent sign-off.
