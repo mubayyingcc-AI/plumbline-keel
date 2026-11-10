@@ -2,6 +2,12 @@
 
 Status: pre-production implementation; not proof that production DR is operational.
 
+## Implemented tooling
+- `scripts/backup-postgres-encrypted.sh` creates a custom-format PostgreSQL dump, encrypts it client-side with an age recipient, writes a SHA-256 sidecar and identity-bound manifest, and can upload all three artifacts to an S3-compatible destination.
+- Remote upload requires `KEEL_BACKUP_S3_BUCKET`, `KEEL_BACKUP_S3_ENDPOINT` (HTTPS outside isolated CI), `KEEL_BACKUP_S3_REGION`, and AWS-compatible credentials in `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+- `scripts/restore-postgres-encrypted.sh` requires a clean target, explicit confirmation, expected source database identity, mode-0600 decryption identity, valid checksum and manifest, and a matching recipient fingerprint before restoring.
+- `scripts/ci-pgbackrest-pitr.sh` plus the dedicated CI job exercise full backup, WAL archiving and named point-in-time restore against disposable S3-compatible storage. A passing CI test is not a production configuration.
+
 ## Required architecture
 - Separate recovery account/project and region with independent administration.
 - Encrypted base backups and continuous WAL archiving to versioned immutable object storage.
