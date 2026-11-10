@@ -265,3 +265,12 @@ test('reconciliation sandbox preserves match, duplicate, mismatch, missing, part
     assert.equal(data.execution,'DISABLED');
   }
 });
+
+test('favicon routes serve the real SVG asset', async () => {
+  for (const path of ['/favicon.svg','/favicon.ico']) {
+    const response=await fetch(base+path);
+    assert.equal(response.status,200);
+    assert.match(response.headers.get('content-type'),/image\/svg\+xml/);
+    assert.match(await response.text(),/<svg/);
+  }
+});
