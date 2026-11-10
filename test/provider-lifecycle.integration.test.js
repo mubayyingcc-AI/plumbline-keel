@@ -1,0 +1,73 @@
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const crypto=require('node:crypto');
+const url=process.env.KEEL_LEDGER_TEST_DATABASE_URL;
+const posting=require('../src/ledger-posting');
+const lifecycle=require('../src/provider-lifecycle');
+
+test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-017 applied'},async()=>{
+  const {Pool}=require('pg'),pool=new Pool({connectionString:url,max:5}),admin=new Pool({connectionString:process.env.PG_ADMIN_URL,max:2});
+  const tenantId=crypto.randomUUID(),suffix=crypto.randomUUID().replace(/-/g,'').slice(0,10);
+  try{
+    await admin.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,'Provider lifecycle '+suffix,'provider-'+suffix]);
+    const cash='provider-cash-'+suffix,liability='provider-liability-'+suffix;
+    await posting.createAccount(pool,tenantId,{accountId:cash,accountCode:'PC-'+suffix,accountName:'Provider clearing cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
+    await posting.createAccount(pool,tenantId,{accountId:liability,accountCode:'PL-'+suffix,accountName:'Provider payable',accountClass:'liability',currency:'USD',currencyExponent:2,normalSide:'credit'});
+    const bookId='provider-book-'+suffix,periodId='provider-period-'+suffix;
+    const periods=require('../src/accounting-periods');
+    await periods.createBook(pool,tenantId,{bookId,entityId:'entity-'+suffix,bookCode:'PROVIDER-'+suffix,bookName:'Provider test book',functionalCurrency:'USD',accountingBasis:'IFRS',timezone:'UTC'});
+    await periods.mapAccount(pool,tenantId,bookId,cash);await periods.mapAccount(pool,tenantId,bookId,liability);
+    await periods.createPeriod(pool,tenantId,{periodId,bookId,periodCode:'2026-11-'+suffix,periodStart:'2026-11-01',periodEnd:'2026-11-30'});
+    await periods.openPeriod(pool,tenantId,periodId);
+    const journalId='provider-journal-'+suffix;
+    await posting.postJournal(pool,tenantId,{journalId,idempotencyKey:'provider-ledger-'+suffix+'-000001',description:'Provider instruction funding',sourceRef:'test:provider:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
+      {accountId:cash,side:'debit',currency:'USD',amountMinor:'500'},
+      {accountId:liability,side:'credit',currency:'USD',amountMinor:'500'}
+    ]});
+    const client=await pool.connect();
+    let outboxId;
+    try{
+      await client.query('BEGIN');await client.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
+      const payload={amountMinor:'500',currency:'USD',beneficiaryRef:'beneficiary-'+suffix};
+      const created=await lifecycle.enqueueInstruction(client,{tenantId,journalId,providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-outbox-'+suffix+'-0001',payload});
+      outboxId=created.outbox_id;
+      const replay=await lifecycle.enqueueInstruction(client,{tenantId,journalId,providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-outbox-'+suffix+'-0001',payload});
+      assert.equal(replay.replay,true);assert.equal(replay.outbox_id,outboxId);
+      await client.query('COMMIT');
+    }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+    const claimed=await lifecycle.claimNextInstruction(pool,tenantId,'worker-'+suffix,30);
+    assert.equal(claimed.outbox_id,outboxId);assert.equal(claimed.attempts,1);
+    const unknown=await lifecycle.recordDispatchOutcome(pool,tenantId,{outboxId,workerId:'worker-'+suffix,outcome:'unknown',errorCode:'provider_timeout'});
+    assert.equal(unknown.status,'unknown');
+    assert.equal(await lifecycle.claimNextInstruction(pool,tenantId,'worker-retry-'+suffix,30),null,'unknown provider outcomes must not be automatically retried');
+    const eventClient=await pool.connect();
+    let inboxId;
+    try{
+      await eventClient.query('BEGIN');await eventClient.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
+      const event=await lifecycle.recordVerifiedProviderEvent(eventClient,{
+        tenantId,providerId:'bank-sandbox',providerEventId:'evt-'+suffix,idempotencyKey:'provider-outbox-'+suffix+'-0001',
+        eventType:'payment.status',status:'settled',occurredAt:'2026-11-10T10:01:00.000Z',
+        payload:{amountMinor:'500',currency:'USD'},
+        verification:{status:'verified',keyId:'sandbox-signing-key',verifiedAt:new Date().toISOString()}
+      });
+      inboxId=event.inbox_id;
+      const replay=await lifecycle.recordVerifiedProviderEvent(eventClient,{
+        tenantId,providerId:'bank-sandbox',providerEventId:'evt-'+suffix,idempotencyKey:'provider-outbox-'+suffix+'-0001',
+        eventType:'payment.status',status:'settled',occurredAt:'2026-11-10T10:01:00.000Z',
+        payload:{currency:'USD',amountMinor:'500'},
+        verification:{status:'verified',keyId:'sandbox-signing-key',verifiedAt:new Date().toISOString()}
+      });
+      assert.equal(replay.replay,true);assert.equal(replay.inbox_id,inboxId);
+      const reconciliation=await lifecycle.reconcileProviderEvent(eventClient,tenantId,inboxId);
+      assert.equal(reconciliation.status,'matched');assert.equal(reconciliation.execution,'DISABLED');
+      await eventClient.query('COMMIT');
+    }catch(e){await eventClient.query('ROLLBACK');throw e;}finally{eventClient.release();}
+    const unscoped=await pool.query('SELECT inbox_id FROM keel_provider_inbox WHERE tenant_id=$1',[tenantId]);
+    assert.equal(unscoped.rowCount,0,'provider inbox must be invisible without transaction-local tenant context');
+    const own=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT inbox_id FROM keel_provider_inbox WHERE tenant_id=$1',[tenantId]));
+    assert.equal(own.rowCount,1);
+    const cases=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status FROM keel_provider_reconciliation_cases WHERE tenant_id=$1',[tenantId]));
+    assert.equal(cases.rows[0].status,'matched');
+  }finally{await pool.end();await admin.end();}
+});
