@@ -14,10 +14,15 @@ permissions:
 
 jobs:
   ledger:
+    name: PostgreSQL ${{ matrix.postgres-version }} ledger verification
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [16, 18]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.postgres-version }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
