@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "provider:sandbox:once": "node scripts/provider-sandbox-worker.js"
+    "provider:sandbox:once": "node scripts/provider-sandbox-worker.js",
+    "proof:checkpoint:export": "node scripts/export-independent-checkpoints.js",
+    "proof:checkpoint:verify": "node scripts/verify-independent-checkpoint.js"
   },
   "engines": {
     "node": ">=18"
