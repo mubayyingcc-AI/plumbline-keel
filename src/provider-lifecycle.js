@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { canonical } = require('./authority-chain');
 const authorityPersistence = require('./authority-persistence');
+const { appendLedgerEvent } = require('./ledger-event-chain');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -113,7 +114,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
       const recoveryRequest={tenantId,journalId:row.journal_id,outboxId:row.outbox_id,providerId:row.provider_id,payloadFingerprint:row.payload_fingerprint,idempotencyKey:row.idempotency_key,recovery:'expired_lease_to_unknown'};
       const recoveryProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:recover_expired',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(recoveryRequest),executionRef:row.outbox_id});
       await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2 AND status='leased' AND lease_until<=NOW()",[tenantId,row.outbox_id]);
-      await client.query("INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,payload) VALUES($1,$2,'AUTHORITY_ACTION_PROVEN',$3,$4::jsonb)",[tenantId,crypto.randomUUID(),recoveryProof.proofId,JSON.stringify({action:'provider:instruction:recover_expired',envelopeId:recoveryProof.envelopeId,requestFingerprint:recoveryProof.requestFingerprint,executionRef:row.outbox_id})]);
+      await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',recoveryProof.proofId,{action:'provider:instruction:recover_expired',envelopeId:recoveryProof.envelopeId,requestFingerprint:recoveryProof.requestFingerprint,executionRef:row.outbox_id});
     }
     const claimed=await client.query(`SELECT outbox_id,journal_id,provider_id,aggregate_type,aggregate_id,instruction_type,idempotency_key,payload,payload_fingerprint,attempts
       FROM keel_provider_outbox WHERE tenant_id=$1 AND status='queued' AND available_at<=NOW() AND attempts<max_attempts
@@ -126,7 +127,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
     const updated=await client.query(`UPDATE keel_provider_outbox SET status='leased',attempts=attempts+1,lease_owner=$3,lease_until=NOW()+($4::integer*INTERVAL '1 second'),updated_at=NOW()
       WHERE tenant_id=$1 AND outbox_id=$2 AND status='queued' RETURNING attempts,lease_until`,[tenantId,row.outbox_id,worker,leaseSeconds]);
     if(!updated.rowCount)fail('provider_outbox_claim_race',409);
-    await client.query("INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,payload) VALUES($1,$2,'AUTHORITY_ACTION_PROVEN',$3,$4::jsonb)",[tenantId,crypto.randomUUID(),authorityProof.proofId,JSON.stringify({action:'provider:instruction:dispatch',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:row.outbox_id})]);
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'provider:instruction:dispatch',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:row.outbox_id});
     return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until,authorityProof};
   });
 }
@@ -162,7 +163,7 @@ async function recordDispatchOutcome(pool,tenantId,input,authorityContext){
        RETURNING outbox_id,status,attempts,provider_instruction_id,last_error_code`,
       [tenantId,outboxId,next,retryAfterSeconds,providerInstructionId,errorCode]
     );
-    await client.query("INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,payload) VALUES($1,$2,'AUTHORITY_ACTION_PROVEN',$3,$4::jsonb)",[tenantId,crypto.randomUUID(),proof.proofId,JSON.stringify({action:'provider:instruction:outcome',envelopeId:proof.envelopeId,requestFingerprint:proof.requestFingerprint,executionRef:outboxId})]);
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',proof.proofId,{action:'provider:instruction:outcome',envelopeId:proof.envelopeId,requestFingerprint:proof.requestFingerprint,executionRef:outboxId});
     return {...result.rows[0],authorityProof:proof};
   });
 }
