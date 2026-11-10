@@ -24,4 +24,5 @@ test('ledger migration runner refuses production even when migration flag is set
 test('guarded migration runner includes the accounting books and periods migration',()=>{
   const script=fs.readFileSync(path.join(__dirname,'..','scripts','apply-ledger-migrations.js'),'utf8');
   assert.match(script,/014_accounting_books_and_periods\.sql/);
+  assert.match(script,/015_period_close_dual_control\.sql/);
 });
