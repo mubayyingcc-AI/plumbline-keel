@@ -165,3 +165,47 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     await adminPool.end();
   }
 });
+
+test('KAAA authority envelopes gate real ledger mutations and bind immutable proofs', {skip:!url && 'Set KEEL_LEDGER_TEST_DATABASE_URL to a disposable PostgreSQL database with migrations 012-018 applied'}, async()=>{
+ const {Pool}=require('pg');
+ const posting=require('../src/ledger-posting');
+ const authority=require('../src/authority-persistence');
+ const pool=new Pool({connectionString:url,max:6}),adminPool=new Pool({connectionString:process.env.PG_ADMIN_URL,max:3});
+ const tenantId=crypto.randomUUID(),otherTenantId=crypto.randomUUID(),suffix=crypto.randomUUID().replace(/-/g,'').slice(0,12);
+ try{
+  await adminPool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active'),($4,$5,$6,'active')",[tenantId,'KAAA test '+suffix,'kaaa-'+suffix,otherTenantId,'KAAA other '+suffix,'kaaa-other-'+suffix]);
+  const grantor=crypto.randomUUID(),agent=crypto.randomUUID(),approver=crypto.randomUUID();
+  for(const [id,name,kind] of [[grantor,'KAAA Grantor','human'],[agent,'KAAA Agent','ai_agent'],[approver,'KAAA Approver','human']]){
+   await adminPool.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,identity_assurance,principal_kind) VALUES($1,$2,$3,$4,'externally_verified',$5)",[id,tenantId,name,id+'@example.test',kind]);
+  }
+  const keyId='kaaa-agent-'+suffix,tokenHash=crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex');
+  await adminPool.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,'KAAA agent','integration',$4)",[keyId,tenantId,tokenHash,agent]);
+  const actor={tenant_id:tenantId,principal_id:agent,key_id:keyId,role:'integration'};
+  const cash='kaaa-cash-'+suffix,liability='kaaa-liability-'+suffix,bookId='kaaa-book-'+suffix,periodId='kaaa-period-'+suffix;
+  await posting.createAccount(pool,tenantId,{accountId:cash,accountCode:'K100-'+suffix,accountName:'KAAA cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
+  await posting.createAccount(pool,tenantId,{accountId:liability,accountCode:'K200-'+suffix,accountName:'KAAA liability',accountClass:'liability',currency:'USD',currencyExponent:2,normalSide:'credit',isReservable:true});
+  const accounting=require('../src/accounting-periods');
+  await accounting.createBook(pool,tenantId,{bookId,entityId:'kaaa-entity-'+suffix,bookCode:'KAAA-'+suffix,bookName:'KAAA test book',functionalCurrency:'USD',accountingBasis:'IFRS',timezone:'UTC'});
+  await accounting.mapAccount(pool,tenantId,bookId,cash);await accounting.mapAccount(pool,tenantId,bookId,liability);
+  await accounting.createPeriod(pool,tenantId,{periodId,bookId,periodCode:'KAAA-'+suffix,periodStart:'2026-11-01',periodEnd:'2026-11-30'});await accounting.openPeriod(pool,tenantId,periodId);
+  const envelopeInput=authority.normalizeEnvelope({granteePrincipalId:agent,scopes:['ledger:journal:post'],resourceIds:['book:'+bookId],currency:'USD',maxAmountMinor:'500',expiresAt:new Date(Date.now()+30*86400000).toISOString()},grantor);
+  const envelopeId=crypto.randomUUID(),fingerprint=authority.digest(envelopeInput);
+  await adminPool.query("INSERT INTO keel_authority_envelopes(tenant_id,envelope_id,grantor_principal_id,grantee_principal_id,scopes,resource_ids,currency,max_amount_minor,approval_required,approver_principal_id,valid_from,expires_at,envelope_fingerprint) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)",[tenantId,envelopeId,grantor,agent,JSON.stringify(envelopeInput.scopes),JSON.stringify(envelopeInput.resourceIds),envelopeInput.currency,envelopeInput.maxAmountMinor,envelopeInput.approvalRequired,envelopeInput.approverPrincipalId,envelopeInput.validFrom,envelopeInput.expiresAt,fingerprint]);
+  const journal={journalId:'kaaa-journal-'+suffix,idempotencyKey:'kaaa-journal-key-'+suffix+'-0000',description:'KAAA authorized posting',sourceRef:'test:kaaa:'+suffix,effectiveAt:new Date().toISOString(),bookId,periodId,accountingDate:'2026-11-10',lines:[{accountId:cash,side:'debit',currency:'USD',amountMinor:'100'},{accountId:liability,side:'credit',currency:'USD',amountMinor:'100'}]};
+  const posted=await posting.postJournal(pool,tenantId,journal,{actor,envelopeId});
+  assert.equal(posted.status,'posted');assert.equal(posted.authorityProof.decision,'PERMIT');
+  const proof=await posting.withTransaction(pool,client=>client.query('SELECT * FROM keel_action_proof_objects WHERE tenant_id=$1 AND proof_id=$2',[tenantId,posted.authorityProof.proofId]),tenantId);
+  assert.equal(proof.rowCount,1);assert.equal(proof.rows[0].actor_principal_id,agent);
+  const event=await posting.withTransaction(pool,client=>client.query("SELECT event_type,payload FROM keel_ledger_events WHERE tenant_id=$1 AND event_type='AUTHORITY_ACTION_PROVEN' AND subject_id=$2",[tenantId,posted.authorityProof.proofId]),tenantId);
+  assert.equal(event.rowCount,1);
+  const tooLarge={...journal,journalId:'kaaa-too-large-'+suffix,idempotencyKey:'kaaa-too-large-key-'+suffix+'-00',lines:[{accountId:cash,side:'debit',currency:'USD',amountMinor:'600'},{accountId:liability,side:'credit',currency:'USD',amountMinor:'600'}]};
+  await assert.rejects(()=>posting.postJournal(pool,tenantId,tooLarge,{actor,envelopeId}),/AMOUNT_LIMIT_EXCEEDED/);
+  await assert.rejects(()=>posting.postJournal(pool,otherTenantId,journal,{actor,envelopeId}),/actor_principal_or_key_inactive/);
+  await adminPool.query("UPDATE keel_authority_envelopes SET scopes='[]'::jsonb WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId]);
+  await assert.rejects(()=>posting.postJournal(pool,tenantId,{...journal,journalId:'kaaa-tampered-'+suffix,idempotencyKey:'kaaa-tampered-key-'+suffix+'-00'},{actor,envelopeId}),/authority_envelope_fingerprint_mismatch/);
+  await adminPool.query("UPDATE keel_authority_envelopes SET status='revoked',revoked_at=NOW() WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId]);
+  await assert.rejects(()=>posting.postJournal(pool,tenantId,{...journal,journalId:'kaaa-revoked-'+suffix,idempotencyKey:'kaaa-revoked-key-'+suffix+'-00'},{actor,envelopeId}),/ENVELOPE_NOT_ACTIVE/);
+  await assert.rejects(()=>adminPool.query('UPDATE keel_action_proof_objects SET execution_ref=$3 WHERE tenant_id=$1 AND proof_id=$2',[tenantId,posted.authorityProof.proofId,'tampered']),/keel_kAAA_evidence_is_immutable/);
+  const chain=await posting.verifyLedgerEventChain(pool,tenantId);assert.equal(chain.valid,true);
+ }finally{await pool.end();await adminPool.end();}
+});
