@@ -832,6 +832,30 @@ const server = http.createServer(async (req,res) => {
       const impact=regulatoryAssurance.assessRegulatoryChange({oldVersion:b.oldVersion,newVersion:b.newVersion,obligations:oq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id})),controls:cq.rows.map(x=>x.payload)});
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
     }
+    if (req.method === 'GET' && route === '/api/ledger/status') {
+      const pool = await dbPool();
+      if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
+      const [migrations, role, rls] = await Promise.all([
+        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql']]),
+        pool.query("SELECT current_user AS role, r.rolsuper AS is_superuser, r.rolbypassrls AS bypasses_rls FROM pg_roles r WHERE r.rolname=current_user"),
+        pool.query("SELECT COUNT(*)::int AS ledger_tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS rls_enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS rls_forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']])
+      ]);
+      const runtime = role.rows[0] || {};
+      const controls = rls.rows[0] || {};
+      const migrationsReady = migrations.rowCount === 2;
+      const roleReady = runtime.role === 'keel_runtime' && runtime.is_superuser === false && runtime.bypasses_rls === false;
+      const rlsReady = controls.ledger_tables === 7 && controls.rls_enabled === 7 && controls.rls_forced === 7;
+      return send(res,(migrationsReady && roleReady && rlsReady)?200:503,{
+        ok:migrationsReady && roleReady && rlsReady,
+        status:(migrationsReady && roleReady && rlsReady)?'READY':'BLOCKED',
+        runtimeRole:runtime.role || 'unknown',
+        privilegedRuntime:runtime.is_superuser === true || runtime.bypasses_rls === true,
+        migrations:migrations.rows,
+        rowLevelSecurity:{ledgerTables:controls.ledger_tables,enabled:controls.rls_enabled,forced:controls.rls_forced},
+        boundary:'Ledger schema and tenant row-level security only; accounting periods, trial balance, reconciliation and external settlement are separate capabilities.'
+      });
+    }
+
     // Ledger APIs: tenant-scoped accounting records only; no external payment execution.
     if (route.startsWith('/api/ledger/')) {
       const actor=await authenticateTenant(req);
@@ -885,29 +909,6 @@ const server = http.createServer(async (req,res) => {
       return send(res,200,{
         scenarios:publicSandboxScenarios,
         notice:'Only scenarios marked EXECUTABLE are runnable in the public synthetic sandbox. Other financial test families remain outside this endpoint until their actual engines are integrated.'
-      });
-    }
-    if (req.method === 'GET' && route === '/api/ledger/status') {
-      const pool = await dbPool();
-      if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
-      const [migrations, role, rls] = await Promise.all([
-        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql']]),
-        pool.query("SELECT current_user AS role, r.rolsuper AS is_superuser, r.rolbypassrls AS bypasses_rls FROM pg_roles r WHERE r.rolname=current_user"),
-        pool.query("SELECT COUNT(*)::int AS ledger_tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS rls_enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS rls_forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']])
-      ]);
-      const runtime = role.rows[0] || {};
-      const controls = rls.rows[0] || {};
-      const migrationsReady = migrations.rowCount === 2;
-      const roleReady = runtime.role === 'keel_runtime' && runtime.is_superuser === false && runtime.bypasses_rls === false;
-      const rlsReady = controls.ledger_tables === 7 && controls.rls_enabled === 7 && controls.rls_forced === 7;
-      return send(res,(migrationsReady && roleReady && rlsReady)?200:503,{
-        ok:migrationsReady && roleReady && rlsReady,
-        status:(migrationsReady && roleReady && rlsReady)?'READY':'BLOCKED',
-        runtimeRole:runtime.role || 'unknown',
-        privilegedRuntime:runtime.is_superuser === true || runtime.bypasses_rls === true,
-        migrations:migrations.rows,
-        rowLevelSecurity:{ledgerTables:controls.ledger_tables,enabled:controls.rls_enabled,forced:controls.rls_forced},
-        boundary:'Ledger schema and tenant row-level security only; accounting periods, trial balance, reconciliation and external settlement are separate capabilities.'
       });
     }
     if (req.method === 'GET' && route === '/api/products') {
