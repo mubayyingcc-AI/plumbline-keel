@@ -31,6 +31,16 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
       {accountId:liability,side:'credit',currency:'USD',amountMinor:'1'}
     ]}),/accounting_period_not_open/);
     await accountingPeriods.openPeriod(pool,tenantId,periodId);
+    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'outside-'+suffix,idempotencyKey:'outside-period-key-'+suffix+'-0000',description:'Cannot post outside period',sourceRef:'test:outside:'+suffix,effectiveAt:'2026-12-01T10:00:00.000Z',bookId,periodId,accountingDate:'2026-12-01',lines:[
+      {accountId:cash,side:'debit',currency:'USD',amountMinor:'1'},
+      {accountId:liability,side:'credit',currency:'USD',amountMinor:'1'}
+    ]}),/journal_accounting_date_outside_period/);
+    const unmapped='unmapped-'+suffix;
+    await posting.createAccount(pool,tenantId,{accountId:unmapped,accountCode:'9000-'+suffix,accountName:'Unmapped account',accountClass:'expense',currency:'USD',currencyExponent:2,normalSide:'debit'});
+    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'unmapped-'+suffix,idempotencyKey:'unmapped-period-key-'+suffix+'-0000',description:'Cannot post unmapped account',sourceRef:'test:unmapped:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
+      {accountId:unmapped,side:'debit',currency:'USD',amountMinor:'1'},
+      {accountId:cash,side:'credit',currency:'USD',amountMinor:'1'}
+    ]}),/journal_account_not_mapped_to_book/);
     const funding={journalId:'fund-'+suffix,idempotencyKey:'funding-key-'+suffix+'-000000',description:'Integration funding',sourceRef:'test:funding:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
       {accountId:cash,side:'debit',currency:'USD',amountMinor:'1000'},
       {accountId:liability,side:'credit',currency:'USD',amountMinor:'1000'}
@@ -80,6 +90,10 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     assert.equal(trial.totalsByCurrency.USD.periodCreditsMinor,'1700');
     assert.equal(trial.accounts.find(x=>x.accountId===cash).closingBalanceMinor,'300');
     assert.equal(trial.accounts.find(x=>x.accountId===liability).closingBalanceMinor,'300');
+    await assert.rejects(()=>posting.withTransaction(pool,client=>client.query(
+      "UPDATE keel_accounting_periods SET status='closed',closed_at=NOW(),closed_by='test',close_hash=repeat('a',64) WHERE tenant_id=$1 AND period_id=$2",
+      [tenantId,periodId]
+    ),tenantId),/period close is disabled until dual-control close approval is implemented/);
 
     const reversalCash='reversal-cash-'+suffix, reversalEquity='reversal-equity-'+suffix;
     await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
