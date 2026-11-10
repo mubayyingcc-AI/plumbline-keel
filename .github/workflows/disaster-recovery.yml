@@ -61,7 +61,7 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z server /data --console-address ":9001"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
@@ -97,7 +97,10 @@ jobs:
           KEEL_RESTORE_EXPECTED_DATABASE_ID: ci-source
           PGPASSWORD: postgres
         run: |
-          backup_file="$(find "$RUNNER_TEMP/keel-backups" -maxdepth 1 -name '*.dump.age' -print -quit)"
+          remote_dir="$RUNNER_TEMP/keel-remote-roundtrip"
+          mkdir -p "$remote_dir"
+          aws --endpoint-url http://127.0.0.1:9000 --region us-east-1 s3 cp --recursive s3://keel-ci-backups/keel/ci-source/ "$remote_dir/"
+          backup_file="$(find "$remote_dir" -type f -name '*.dump.age' -print -quit)"
           test -n "$backup_file"
           test -s "$backup_file.manifest.json"
           node -e 'const fs=require("node:fs"),c=require("node:crypto");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const b=fs.readFileSync(process.argv[2]);if(m.sha256!==c.createHash("sha256").update(b).digest("hex")||m.databaseId!=="ci-source")process.exit(1)' "$backup_file.manifest.json" "$backup_file"
@@ -138,7 +141,7 @@ jobs:
       - name: Start S3-compatible test service and create disposable bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z server /data --console-address ":9001"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
