@@ -20,6 +20,7 @@ const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
 const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
+const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
 const PORT = Number(process.env.PORT || 3000);
@@ -90,7 +91,7 @@ async function bootstrapCoreSchema(pool) {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_proof_dockets_created_idx ON keel_proof_dockets(created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_assurance_events (event_id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), event_type TEXT NOT NULL CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED')), subject_id TEXT NOT NULL, event_fingerprint CHAR(64) NOT NULL, payload JSONB NOT NULL)");
       await pool.query("ALTER TABLE keel_assurance_events DROP CONSTRAINT IF EXISTS keel_assurance_events_event_type_check");
-      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED','CURRENCY_ACCOUNT_CREATED','CURRENCY_TRANSFER_PREPARED'))");
+      await pool.query("ALTER TABLE keel_assurance_events ADD CONSTRAINT keel_assurance_events_event_type_check CHECK (event_type IN ('MODEL_REGISTERED','DOCKET_CREATED','DRIFT_DETECTED','FALLBACK_RESTRICTED','WITNESS_RECORDED','PRINCIPAL_CREATED','DELEGATION_GRANTED','DELEGATION_REVOKED','FRACTURE_ASSESSED','CURRENCY_ACCOUNT_CREATED','CURRENCY_TRANSFER_PREPARED','AUTHORITY_ENVELOPE_GRANTED','AUTHORITY_ENVELOPE_REVOKED','AUTHORITY_ACTION_APPROVAL_RECORDED'))");
       await pool.query('CREATE INDEX IF NOT EXISTS keel_assurance_events_subject_idx ON keel_assurance_events(subject_id,created_at DESC)');
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenants (tenant_id UUID PRIMARY KEY, tenant_name TEXT NOT NULL, tenant_slug TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
       await pool.query("CREATE TABLE IF NOT EXISTS keel_tenant_keys (key_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), token_hash CHAR(64) NOT NULL UNIQUE, label TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('owner','admin','reviewer','analyst','integration')), status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ)");
@@ -488,7 +489,7 @@ const server = http.createServer(async (req,res) => {
         const expired=humanCardPairing.isExpired(expiryIso);
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
         const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
-        const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\n');
+        const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\\n');
 
         let fingerprintValid=false;try{fingerprintValid=humanCardPairing.fingerprintPublicKey(c.device_public_key)===String(c.key_fingerprint||'').trim();}catch{fingerprintValid=false;}
         const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&fingerprintValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
@@ -527,10 +528,12 @@ const server = http.createServer(async (req,res) => {
       const body=await readBody(req), principal=authorityIdentity.normalizePrincipal(body);
       const role=cleanString(body.role||'reviewer',30);
       if(!['admin','reviewer','analyst','integration'].includes(role)) return send(res,400,{error:'invalid_principal_role',allowed:['admin','reviewer','analyst','integration']});
+      const principalKind=cleanString(body.principalKind|| (role==='integration'?'service':'human'),20);
+      if(!['human','ai_agent','service','system'].includes(principalKind))return send(res,400,{error:'invalid_principal_kind'});
       const issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=tenantScopedPool(await dbPool(),actor.tenant_id), client=await pool.connect();
-      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await recordEventWithClient(client,actor,'PRINCIPAL_CREATED',principalId,{displayName:principal.displayName,email:principal.email,role,identityAssurance:'self_asserted'}); await client.query('COMMIT'); }
+      try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance,principal_kind) VALUES($1,$2,$3,$4,$5,'self_asserted',$6)",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject,principalKind]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await recordEventWithClient(client,actor,'PRINCIPAL_CREATED',principalId,{displayName:principal.displayName,email:principal.email,role,identityAssurance:'self_asserted',principalKind}); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-      return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role,apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
+      return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted',principalKind},keyId:issued.keyId,role,apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
     }
     if(req.method==='POST' && route==='/api/assurance/delegations/revoke'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
@@ -933,6 +936,46 @@ const server = http.createServer(async (req,res) => {
         boundary:'Double-entry ledger, book and period schema with tenant RLS and dual-control final close evidence. Period reopen approvals, durable provider reconciliation and external settlement remain separate capabilities.'
       });
     }
+    if(route==='/api/assurance/authority/envelopes' && req.method==='POST'){
+      if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id||!['owner','admin'].includes(actor.role))return send(res,403,{error:'named_tenant_admin_required'});
+      const body=await readBody(req),envelope=authorityPersistence.normalizeEnvelope(body,actor.principal_id);
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);if(!pool)return send(res,503,{error:'authority_storage_unavailable'});
+      const grantee=await pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,envelope.granteePrincipalId]);
+      if(!grantee.rowCount)return send(res,404,{error:'active_grantee_not_found'});
+      if(envelope.approverPrincipalId){const approver=await pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,envelope.approverPrincipalId]);if(!approver.rowCount)return send(res,404,{error:'active_approver_not_found'});}
+      const envelopeId=crypto.randomUUID(),fingerprint=authorityPersistence.digest(envelope),client=await pool.connect();
+      try{await client.query('BEGIN');await client.query('INSERT INTO keel_authority_envelopes(tenant_id,envelope_id,grantor_principal_id,grantee_principal_id,scopes,resource_ids,currency,max_amount_minor,approval_required,approver_principal_id,valid_from,expires_at,envelope_fingerprint) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)',[actor.tenant_id,envelopeId,actor.principal_id,envelope.granteePrincipalId,JSON.stringify(envelope.scopes),JSON.stringify(envelope.resourceIds),envelope.currency,envelope.maxAmountMinor,envelope.approvalRequired,envelope.approverPrincipalId,envelope.validFrom,envelope.expiresAt,fingerprint]);await recordEventWithClient(client,actor,'AUTHORITY_ENVELOPE_GRANTED',envelopeId,{...envelope,envelopeFingerprint:fingerprint});await client.query('COMMIT');}
+      catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      return send(res,201,{ok:true,envelope:{envelopeId,...envelope,envelopeFingerprint:fingerprint}});
+    }
+    if(route==='/api/assurance/authority/envelopes/revoke' && req.method==='POST'){
+      if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id||!['owner','admin'].includes(actor.role))return send(res,403,{error:'named_tenant_admin_required'});
+      const body=await readBody(req),envelopeId=cleanString(body.envelopeId,64),pool=tenantScopedPool(await dbPool(),actor.tenant_id);
+      if(!envelopeId)return send(res,400,{error:'envelope_id_required'});
+      const client=await pool.connect();
+      try{await client.query('BEGIN');const q=await client.query("UPDATE keel_authority_envelopes SET status='revoked',revoked_at=NOW() WHERE tenant_id=$1 AND envelope_id=$2 AND grantor_principal_id=$3 AND status='active' RETURNING grantee_principal_id,scopes",[actor.tenant_id,envelopeId,actor.principal_id]);if(!q.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'active_granted_envelope_not_found'});}await recordEventWithClient(client,actor,'AUTHORITY_ENVELOPE_REVOKED',envelopeId,{granteePrincipalId:q.rows[0].grantee_principal_id,scopes:q.rows[0].scopes});await client.query('COMMIT');}
+      catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      return send(res,200,{ok:true,revokedEnvelopeId:envelopeId});
+    }
+    if(route==='/api/assurance/authority/approvals' && req.method==='POST'){
+      if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(!actor.principal_id)return send(res,403,{error:'named_approver_principal_required'});
+      const body=await readBody(req),envelopeId=cleanString(body.envelopeId,64),requestFingerprint=cleanString(body.requestFingerprint,64),decision=cleanString(body.decision,16),rationale=cleanString(body.rationale,500);
+      if(!envelopeId||! /^[a-f0-9]{64}$/.test(requestFingerprint)||!['approve','reject'].includes(decision)||!rationale)return send(res,400,{error:'valid_envelope_request_fingerprint_decision_and_rationale_required'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
+      try{await client.query('BEGIN');const e=await client.query('SELECT grantee_principal_id,approver_principal_id,approval_required,status FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[actor.tenant_id,envelopeId]);if(!e.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'authority_envelope_not_found'});}if(e.rows[0].status!=='active'||!e.rows[0].approval_required||e.rows[0].approver_principal_id!==actor.principal_id||e.rows[0].grantee_principal_id===actor.principal_id){await client.query('ROLLBACK');return send(res,403,{error:'independent_envelope_approver_required'});}const id=crypto.randomUUID();await client.query('INSERT INTO keel_authority_action_approvals(tenant_id,approval_id,envelope_id,request_fingerprint,approver_principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,envelopeId,requestFingerprint,actor.principal_id,decision,rationale]);await recordEventWithClient(client,actor,'AUTHORITY_ACTION_APPROVAL_RECORDED',id,{envelopeId,requestFingerprint,decision});await client.query('COMMIT');return send(res,201,{ok:true,approvalId:id,envelopeId,requestFingerprint,decision});}
+      catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+    }
+    if(route==='/api/assurance/authority/proofs' && req.method==='GET'){
+      const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);const q=await pool.query('SELECT proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref,created_at FROM keel_action_proof_objects WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
+      return send(res,200,{count:q.rowCount,proofs:q.rows});
+    }
     if (route.startsWith('/api/ledger/')) {
       const actor=await authenticateTenant(req);
       if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
@@ -1051,14 +1094,18 @@ const server = http.createServer(async (req,res) => {
         if(rateLimited(req,'/api/ledger/journals'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
         const body=await readBody(req);
         if(!body.bookId||!body.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
-        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body);
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body,authorityContext);
         return send(res,result.replay?200:201,{ok:true,...result,notice:'Period-bound ledger posting only; this does not initiate or confirm an external payment or settlement.'});
       }
       if(req.method==='POST'&&route==='/api/ledger/reservations'){
         if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_reservation_role_required'});
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         if(rateLimited(req,'/api/ledger/reservations'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
-        const result=await ledgerPosting.createReservation(pool,actor.tenant_id,await readBody(req));
+        const body=await readBody(req);if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await ledgerPosting.createReservation(pool,actor.tenant_id,body,authorityContext);
         return send(res,201,{ok:true,...result});
       }
       const reservationMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/(release|consume)$/);
@@ -1067,12 +1114,16 @@ const server = http.createServer(async (req,res) => {
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         const reservationId=decodeURIComponent(reservationMatch[1]),body=await readBody(req);
         if(reservationMatch[2]==='release'){
-          const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,reservationId,body.reason);
+          if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+          const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+          const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,reservationId,body.reason,authorityContext);
           return send(res,200,{ok:true,...result});
         }
         if(!body.journal)return send(res,400,{error:'consumption_journal_required'});
         if(!body.journal.bookId||!body.journal.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
-        const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,reservationId,body.journal);
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,reservationId,body.journal,authorityContext);
         return send(res,200,{ok:true,...result});
       }
       if(req.method==='GET'&&route==='/api/ledger/events/verify'){

@@ -1,0 +1,10 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {normalizeEnvelope,digest,ACTIONS}=require('../src/authority-persistence');
+const grantor='00000000-0000-4000-8000-000000000001',grantee='00000000-0000-4000-8000-000000000002',approver='00000000-0000-4000-8000-000000000003';
+const valid={granteePrincipalId:grantee,scopes:['ledger:journal:post','ledger:reservation:create'],resourceIds:['book:global','account:cash'],currency:'USD',maxAmountMinor:'50000',expiresAt:'2026-12-01T00:00:00.000Z'};
+test('normalizes bounded authority envelope and denies subdelegation',()=>{const x=normalizeEnvelope(valid,grantor);assert.equal(x.allowSubdelegation,false);assert.equal(x.maxAmountMinor,'50000');assert.equal(x.currency,'USD');assert.ok(x.scopes.every(s=>ACTIONS.has(s)));});
+test('rejects self-delegation and unsupported scopes',()=>{assert.throws(()=>normalizeEnvelope({...valid,granteePrincipalId:grantor},grantor),/self_delegation_forbidden/);assert.throws(()=>normalizeEnvelope({...valid,scopes:['*']},grantor),/authority_envelope_scope_invalid/);});
+test('amount ceilings require explicit currency and exact integer strings',()=>{assert.throws(()=>normalizeEnvelope({...valid,currency:undefined},grantor),/authority_currency_required_for_amount_limit/);assert.throws(()=>normalizeEnvelope({...valid,maxAmountMinor:'1.2'},grantor),/authority_amount_limit_invalid/);});
+test('independent approver must not be the grantee',()=>{assert.throws(()=>normalizeEnvelope({...valid,approvalRequired:true,approverPrincipalId:grantee},grantor),/self_delegation_forbidden/);assert.equal(normalizeEnvelope({...valid,approvalRequired:true,approverPrincipalId:approver},grantor).approverPrincipalId,approver);});
+test('canonical fingerprints are deterministic across object key order',()=>assert.equal(digest({b:2,a:1}),digest({a:1,b:2})));

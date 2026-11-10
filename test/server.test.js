@@ -355,3 +355,13 @@ test('consumer identity and card APIs fail closed until tenant ownership is enfo
   assert.equal(response.status,503);
   assert.equal(data.error,'consumer_card_tenant_isolation_not_enabled');
 });
+
+test('KAAA authority endpoints reject unauthenticated envelope, approval and proof access',async()=>{
+ const cases=[
+  ['/api/assurance/authority/envelopes','POST'],
+  ['/api/assurance/authority/envelopes/revoke','POST'],
+  ['/api/assurance/authority/approvals','POST'],
+  ['/api/assurance/authority/proofs','GET']
+ ];
+ for(const [path,method] of cases){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:method==='POST'?'{}':undefined});assert.equal(r.status,401,path);}
+});
