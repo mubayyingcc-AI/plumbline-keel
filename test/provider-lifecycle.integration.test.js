@@ -60,7 +60,7 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
       });
       assert.equal(replay.replay,true);assert.equal(replay.inbox_id,inboxId);
       const reconciliation=await lifecycle.reconcileProviderEvent(eventClient,tenantId,inboxId);
-      assert.equal(reconciliation.status,'matched');assert.equal(reconciliation.execution,'DISABLED');
+      assert.equal(reconciliation.status,'matched');assert.equal(reconciliation.execution,'DISABLED');\n      const outboxState=await eventClient.query('SELECT status FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,outboxId]);\n      assert.equal(outboxState.rows[0].status,'reconciled');
       await eventClient.query('COMMIT');
     }catch(e){await eventClient.query('ROLLBACK');throw e;}finally{eventClient.release();}
     const unscoped=await pool.query('SELECT inbox_id FROM keel_provider_inbox WHERE tenant_id=$1',[tenantId]);
