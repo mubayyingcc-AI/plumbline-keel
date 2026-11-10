@@ -80,3 +80,50 @@ jobs:
           restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT value FROM dr_probe WHERE id=1")"
           test "$restored" = "keel-dr-proof"
           echo "Encrypted backup and isolated restore passed." >> "$GITHUB_STEP_SUMMARY"
+
+  pgbackrest-point-in-time-recovery:
+    name: S3-backed PostgreSQL point-in-time recovery
+    runs-on: ubuntu-24.04
+    services:
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: keelci
+          MINIO_ROOT_PASSWORD: keelci-test-password
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        command: server /data
+    env:
+      PGDATA: /var/lib/postgresql/16/main
+      PGUSER: postgres
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGPASSWORD: postgres
+      PGBACKREST_REPO1_S3_BUCKET: keel-ci-backups
+      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
+      PGBACKREST_REPO1_S3_REGION: us-east-1
+      PGBACKREST_REPO1_S3_KEY: keelci
+      PGBACKREST_REPO1_S3_KEY_SECRET: keelci-test-password
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 16 server and pgBackRest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16 postgresql-client-16 pgbackrest
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          sudo pg_ctlcluster 16 main start
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
+      - name: Create disposable S3 bucket
+        run: |
+          docker run --rm --network host minio/mc:latest alias set ci http://127.0.0.1:9000 keelci keelci-test-password
+          docker run --rm --network host minio/mc:latest mb --ignore-existing ci/keel-ci-backups
+      - name: Execute full backup, WAL archive and named restore-point test
+        run: |
+          bash -n scripts/ci-pgbackrest-pitr.sh
+          sudo --preserve-env=PGDATA,PGUSER,PGHOST,PGPORT,PGPASSWORD,PGBACKREST_REPO1_S3_BUCKET,PGBACKREST_REPO1_S3_ENDPOINT,PGBACKREST_REPO1_S3_REGION,PGBACKREST_REPO1_S3_KEY,PGBACKREST_REPO1_S3_KEY_SECRET PATH="$PATH" bash scripts/ci-pgbackrest-pitr.sh
+          echo "S3-backed PITR restore-point assertions passed." >> "$GITHUB_STEP_SUMMARY"
