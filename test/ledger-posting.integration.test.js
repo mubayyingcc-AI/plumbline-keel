@@ -201,7 +201,7 @@ test('KAAA authority envelopes gate real ledger mutations and bind immutable pro
   const tooLarge={...journal,journalId:'kaaa-too-large-'+suffix,idempotencyKey:'kaaa-too-large-key-'+suffix+'-00',lines:[{accountId:cash,side:'debit',currency:'USD',amountMinor:'600'},{accountId:liability,side:'credit',currency:'USD',amountMinor:'600'}]};
   await assert.rejects(()=>posting.postJournal(pool,tenantId,tooLarge,{actor,envelopeId}),/AMOUNT_LIMIT_EXCEEDED/);
   await assert.rejects(()=>posting.postJournal(pool,otherTenantId,journal,{actor,envelopeId}),/actor_principal_or_key_inactive/);
-  await adminPool.query("UPDATE keel_authority_envelopes SET resource_ids='["book:tampered"]'::jsonb WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId]);
+  await adminPool.query("UPDATE keel_authority_envelopes SET resource_ids=$3::jsonb WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId,JSON.stringify(['book:tampered'])]);
   await assert.rejects(()=>posting.postJournal(pool,tenantId,{...journal,journalId:'kaaa-tampered-'+suffix,idempotencyKey:'kaaa-tampered-key-'+suffix+'-00'},{actor,envelopeId}),/authority_envelope_fingerprint_mismatch/);
   await adminPool.query("UPDATE keel_authority_envelopes SET resource_ids=$3::jsonb WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId,JSON.stringify(['book:'+bookId])]);
   await adminPool.query("UPDATE keel_authority_envelopes SET status='revoked',revoked_at=NOW() WHERE tenant_id=$1 AND envelope_id=$2",[tenantId,envelopeId]);
