@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS keel_accounting_period_close_requests (
   CHECK(rejected_by_key_id IS NULL OR rejected_by_key_id<>requested_by_key_id),
   CHECK(rejected_by_principal_id IS NULL OR rejected_by_principal_id<>requested_by_principal_id),
   CHECK(
-    (status='pending' AND approved_by_key_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_at IS NULL AND resolved_at IS NULL)
+    (status='pending' AND approved_by_key_id IS NULL AND approved_by_principal_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_by_principal_id IS NULL AND rejected_at IS NULL AND resolved_at IS NULL)
     OR (status='approved' AND approved_by_key_id IS NOT NULL AND approved_by_principal_id IS NOT NULL AND approved_at IS NOT NULL AND rejected_by_key_id IS NULL AND rejected_by_principal_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
     OR (status='rejected' AND rejected_by_key_id IS NOT NULL AND rejected_by_principal_id IS NOT NULL AND rejected_at IS NOT NULL AND approved_by_key_id IS NULL AND approved_by_principal_id IS NULL AND approved_at IS NULL AND resolved_at IS NOT NULL)
     OR (status='stale' AND approved_by_key_id IS NULL AND approved_by_principal_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_by_principal_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
@@ -39,7 +39,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS keel_accounting_period_close_one_pending_idx
 ALTER TABLE keel_accounting_periods ADD COLUMN IF NOT EXISTS closed_by_principal_id TEXT;
 DO $do$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_accounting_period_closed_principal_check') THEN
-    ALTER TABLE keel_accounting_periods ADD CONSTRAINT keel_accounting_period_closed_principal_check CHECK(status<>'closed' OR closed_by_principal_id IS NOT NULL);
+    ALTER TABLE keel_accounting_periods ADD CONSTRAINT keel_accounting_period_closed_principal_check CHECK((status='closed' AND closed_by_principal_id IS NOT NULL) OR (status<>'closed' AND closed_by_principal_id IS NULL));
   END IF;
 END $do$;
 
