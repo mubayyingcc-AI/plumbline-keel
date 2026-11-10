@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS keel_provider_outbox (
   payload JSONB NOT NULL CHECK(jsonb_typeof(payload)='object'),
   payload_fingerprint CHAR(64) NOT NULL CHECK(payload_fingerprint ~ '^[a-f0-9]{64}$'),
   status TEXT NOT NULL DEFAULT 'queued'
-    CHECK(status IN ('queued','leased','accepted','unknown','failed')),
+    CHECK(status IN ('queued','leased','accepted','unknown','failed','reconciled')),
   attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
   max_attempts INTEGER NOT NULL DEFAULT 8 CHECK(max_attempts BETWEEN 1 AND 32),
   available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
