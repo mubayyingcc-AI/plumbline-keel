@@ -244,3 +244,24 @@ test('currency precision API rejects JSON numbers and excess decimal precision',
   const precision = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode:'USD',amount:'1.001'})});
   assert.equal(precision.status,400);
 });
+
+test('reconciliation sandbox catalog is backend supplied', async () => {
+  const response=await fetch(base+'/api/sandbox/reconciliation/scenarios');
+  const data=await response.json();
+  assert.equal(response.status,200);
+  assert.deepEqual(data.scenarios.map(x=>x.id),['REC-001','REC-002','REC-003','REC-004','REC-005','REC-006']);
+});
+
+test('reconciliation sandbox preserves match, duplicate, mismatch, missing, partial and late outcomes', async () => {
+  const cases=[['REC-001','MATCHED'],['REC-002','EXCEPTIONS'],['REC-003','EXCEPTIONS'],['REC-004','INCOMPLETE'],['REC-005','INCOMPLETE'],['REC-006','EXCEPTIONS']];
+  for(const [scenarioId,status] of cases){
+    const response=await fetch(base+'/api/sandbox/reconciliation/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenarioId})});
+    const data=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.result.status,status);
+    assert.equal(data.passed,true);
+    assert.equal(data.synthetic,true);
+    assert.equal(data.providerConnected,false);
+    assert.equal(data.execution,'DISABLED');
+  }
+});
