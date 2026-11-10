@@ -218,3 +218,29 @@ test('Payment Authority and Human Card scenario catalogues are backend supplied'
   assert.equal(hc.status,200);
   assert.deepEqual(hcData.scenarios.map(x=>x.id),['HC-001']);
 });
+
+test('currency precision catalogue exposes references without live settlement', async () => {
+  const response = await fetch(base + '/api/sandbox/currency/instruments');
+  const data = await response.json();
+  assert.equal(response.status,200);
+  assert.ok(data.instruments.some(x=>x.code==='NGN'&&x.scale===2));
+  assert.ok(data.instruments.every(x=>x.liveSettlement===false));
+  assert.equal(data.execution,'DISABLED');
+});
+
+test('currency precision API converts exact decimal strings to integer atomic units', async () => {
+  for (const [instrumentCode,amount,units] of [['USD','12.34','1234'],['NGN','123.45','12345'],['COMPUTE_CREDIT','0.000001','1']]) {
+    const response = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode,amount})});
+    const data = await response.json();
+    assert.equal(response.status,200);
+    assert.equal(data.atomicUnits,units);
+    assert.equal(data.execution,'DISABLED');
+  }
+});
+
+test('currency precision API rejects JSON numbers and excess decimal precision', async () => {
+  const numeric = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode:'USD',amount:0.1})});
+  assert.equal(numeric.status,400);
+  const precision = await fetch(base + '/api/sandbox/currency/precision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instrumentCode:'USD',amount:'1.001'})});
+  assert.equal(precision.status,400);
+});
