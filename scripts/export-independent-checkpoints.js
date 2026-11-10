@@ -15,7 +15,7 @@ async function main(){
  try{
   const role=await runtime.query("SELECT current_user AS role_name, r.rolsuper, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user");
   if(!role.rowCount||role.rows[0].rolsuper||role.rows[0].rolbypassrls)throw new Error('checkpoint_export_requires_restricted_runtime_role');
-  const tenants=await admin.query("SELECT tenant_id FROM keel_tenants WHERE status='active' ORDER BY tenant_id');
+  const tenants=await admin.query("SELECT tenant_id FROM keel_tenants WHERE status='active' ORDER BY tenant_id");
   if(!tenants.rowCount)throw new Error('no_active_tenants_for_checkpoint');
   fs.mkdirSync(output,{recursive:true,mode:0o700});
   const results=[];
@@ -23,7 +23,8 @@ async function main(){
    const verified=await ledger.verifyLedgerEventChain(runtime,row.tenant_id);
    if(!verified.valid)throw new Error('ledger_chain_invalid_for_tenant:'+row.tenant_id);
    const checkpoint=createCheckpoint({tenantId:row.tenant_id,verifiedEvents:verified.verifiedEvents,headFingerprint:verified.headFingerprint||null,keyId,privateKey,databaseIdentity});
-   const filename=path.join(output,row.tenant_id+'.checkpoint.json');
+   const stamp=checkpoint.createdAt.replace(/[:.]/g,'-');
+   const filename=path.join(output,row.tenant_id+'.'+stamp+'.checkpoint.json');
    fs.writeFileSync(filename,JSON.stringify(checkpoint,null,2)+'\n',{encoding:'utf8',mode:0o600,flag:'wx'});
    results.push({tenantId:row.tenant_id,verifiedEvents:verified.verifiedEvents,headFingerprint:verified.headFingerprint||null,file:filename});
   }
