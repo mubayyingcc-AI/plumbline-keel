@@ -4,7 +4,7 @@ const {verifyHmacSha256}=require('./provider-lifecycle');
 const {canonical}=require('./authority-chain');
 function fail(code,status=400){const e=new Error(code);e.code=code;e.status=status;throw e;}
 class ProviderSandboxAdapter{
- constructor({providerId='keel-sandbox-bank',transport, keyring,activeKeyId}={}){
+ constructor({providerId='keel-sandbox-bank',transport,keyring,activeKeyId}={}){
   if(!providerId||typeof transport!=='function'||!keyring||!activeKeyId)fail('sandbox_adapter_configuration_incomplete',503);
   this.providerId=providerId;this.transport=transport;this.keyring=new Map(Object.entries(keyring));this.activeKeyId=activeKeyId;
   if(!this.keyring.has(activeKeyId))fail('active_webhook_key_missing',503);
