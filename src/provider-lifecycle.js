@@ -3,9 +3,12 @@
 const crypto = require('node:crypto');
 const { canonical } = require('./authority-chain');
 const authorityPersistence = require('./authority-persistence');
+ security/kaa-verified-review
+
 security/global-financial-core-tenant-assurance
 
 const { appendLedgerEvent } = require('./ledger-event-chain');
+ main
  main
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -105,6 +108,12 @@ async function withTenantTransaction(pool,tenantId,work){
   fail('provider_lifecycle_transaction_retry_exhausted',409);
 }
 
+ security/kaa-verified-review
+async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,authorityContext){
+  const worker=required(workerId,'worker_id',120);
+  if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
+  if(!authorityContext)fail('provider_dispatch_authority_context_required',403);
+
  security/global-financial-core-tenant-assurance
 async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,authorityContext){
   const worker=required(workerId,'worker_id',120);
@@ -119,6 +128,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
   if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
   if(!authorityContext||!authorityContext.actor||!authorityContext.actor.principal_id||worker!==authorityContext.actor.principal_id)fail('provider_dispatch_authority_context_required',403);
   if(!Array.isArray(allowedProviderIds)||!allowedProviderIds.length||allowedProviderIds.some(x=>typeof x!=='string'||!x.trim()))fail('provider_allowlist_required',403);
+   main
   return withTenantTransaction(pool,tenantId,async client=>{
     const expired=await client.query("SELECT outbox_id,journal_id,provider_id,idempotency_key,payload,payload_fingerprint FROM keel_provider_outbox WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW() AND provider_id=ANY($2::text[]) ORDER BY lease_until FOR UPDATE SKIP LOCKED",[tenantId,allowedProviderIds]);
 >>  main
@@ -152,6 +162,8 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
       [tenantId,row.outbox_id,worker,leaseSeconds]
     );
     if(!updated.rowCount)fail('provider_outbox_claim_race',409);
+    security/kaa-verified-review
+
 ==
       const recoveryProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:recover_expired',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(recoveryRequest),executionRef:row.outbox_id});
       await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2 AND status='leased' AND lease_until<=NOW()",[tenantId,row.outbox_id]);
@@ -170,6 +182,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
     if(!updated.rowCount)fail('provider_outbox_claim_race',409);
     await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'provider:instruction:dispatch',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:row.outbox_id});
 >>  main
+    main
     return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until,authorityProof};
   });
 }

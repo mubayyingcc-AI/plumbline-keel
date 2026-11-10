@@ -313,7 +313,11 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
       const providerId=String(instruction.providerId||'').trim();
       const payload=instruction.payload&&typeof instruction.payload==='object'?instruction.payload:{};
       if(!providerId||typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_instruction_financial_amount_and_currency_required',400);
+      security/kaa-verified-review
+      const request={tenantId, journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+
       const request={tenantId,journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+       main
       providerAuthorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:enqueue',resourceId:'provider:'+providerId,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(request),executionRef:posted.journalId});
     }
     const outbox = await providerLifecycle.enqueueInstruction(client, {
@@ -323,6 +327,8 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
     });
     if(providerAuthorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
     return { journal: authorityProof?{...posted,authorityProof}:posted, outbox:providerAuthorityProof?{...outbox,authorityProof:providerAuthorityProof}:outbox };
+    security/kaa-verified-review
+
 
     if(!authorityContext)fail('provider_enqueue_authority_context_required',403);
     const normalized=validateJournal({...journal,tenantId});
@@ -341,6 +347,7 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
     await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
     return {journal:{...posted,authorityProof},outbox:{...outbox,authorityProof:providerAuthorityProof}};
         main
+       main
   }, tenantId);
 }
 async function listAccounts(pool,tenantIdInput) {

@@ -60,6 +60,9 @@ The initial bootstrap owner key has no named principal and therefore cannot post
 ## Explicit limitations
  security/global-financial-core-tenant-assurance
 This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. Provider dispatch worker enforcement must be added before enabling live external execution.
+ security/kaa-verified-review
+\n\n## Provider instruction authority gate\n\nKAAA now supports the explicit `provider:instruction:enqueue` scope. The atomic journal-plus-outbox posting path requires a separate authority decision for the provider instruction, bound to provider identity, journal, aggregate, instruction type, idempotency key, exact amount and currency. The authority proof is linked into the tenant ledger event chain and returned with the outbox result. This prevents a journal-post permission from silently implying authority to instruct an external provider. The downstream dispatch worker still requires its own workload identity and execution-time outbox integrity checks before live provider dispatch is enabled.\n
+
 
 
 ## Provider instruction and dispatch authority
@@ -83,3 +86,4 @@ The mainline release candidate now requires a named delegated principal and sepa
 
 The PostgreSQL 16/18 CI matrix now runs `scripts/verify-recovery-state.js` after migrations and integration tests against a disposable database using the restricted `keel_runtime` role. A separate admin connection enumerates active tenants; every financial read is then executed with transaction-local tenant context. The verifier checks runtime role privileges, tenant isolation, exact ledger projections, trial-balance equality, provider uncertainty/open-case state and the hash-linked ledger event chain. This is a meaningful restore-target verification step, but it is not a substitute for taking an encrypted backup, restoring from WAL/PITR into a clean environment, measuring RPO/RTO and obtaining independent sign-off.
  main
+main
