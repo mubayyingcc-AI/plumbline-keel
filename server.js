@@ -30,6 +30,7 @@ const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs':
 const rateBuckets = new Map();
 
 const products = [
+  { id:'ledger', name:'Keel Ledger & Accounting', category:'Global financial ledger foundation', stage:'Foundation · staging validated', description:'Tenant-scoped double-entry posting, idempotency, reservation controls, book-scoped charts of accounts, effective-dated accounting periods and exact multi-currency trial balances.', outputs:['Double-entry journal records','Period-bound posting controls','Book-scoped chart of accounts','Opening, movement and closing trial balance'], integration:'PostgreSQL 18 staging; restricted runtime role and forced tenant RLS; no production ledger or external settlement' },
   { id:'thread', name:'Keel Thread', category:'Collateral lineage', stage:'POC', description:'Map assets, claims, facilities and obligations across the records an institution connects.', outputs:['Relationship graph','Potential reuse flags','Source-level lineage'], integration:'REST API / structured CSV' },
   { id:'capacity', name:'Keel Capacity', category:'Policy-adjusted capacity', stage:'POC', description:'Calculate capacity against versioned eligibility, encumbrance, haircut and evidence-freshness rules.', outputs:['Gross and net values','Policy adjustments','Unknowns and holds'], integration:'REST API / structured CSV' },
   { id:'scenario', name:'Keel Scenario', category:'Stress propagation', stage:'Design partner', description:'Replay declared shocks through a defined dependency graph and inspect modeled downstream effects.', outputs:['Scenario assumptions','Dependency impact','Before-and-after state'], integration:'API / partner mapping' },
@@ -1035,7 +1036,7 @@ const server = http.createServer(async (req,res) => {
     }
     return send(res,404,{error:'not_found'});
   } catch (error) {
-    const status = error.status || (error.message && /required|must be|invalid|exceeds/.test(error.message) ? 400 : 500);
+    const status = error.status || (error.code === '23505' ? 409 : error.message && /required|must be|invalid|exceeds/.test(error.message) ? 400 : 500);
     if (status >= 500) console.error('request_failed', { route, status, name:error.name });
     return send(res,status,{error:status === 500 ? 'internal_error' : 'invalid_request',message:status === 500 ? 'The request could not be completed.' : error.message});
   }
