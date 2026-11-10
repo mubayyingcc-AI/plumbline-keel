@@ -34,7 +34,7 @@ jobs:
       KEEL_BACKUP_S3_REGION: us-east-1
       KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT: "true"
       AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_SECRET_ACCESS_KEY: testpassword
       AWS_DEFAULT_REGION: us-east-1
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_source
     steps:
@@ -124,9 +124,9 @@ jobs:
       PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
       PGBACKREST_REPO1_S3_REGION: us-east-1
       PGBACKREST_REPO1_S3_KEY: test
-      PGBACKREST_REPO1_S3_KEY_SECRET: test
+      PGBACKREST_REPO1_S3_KEY_SECRET: testpassword
       AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_SECRET_ACCESS_KEY: testpassword
       AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
