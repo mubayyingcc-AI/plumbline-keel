@@ -69,16 +69,16 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(expired.rows[0].status,'unknown');
     assert.equal(expired.rows[0].last_error_code,'DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN');
 
-    const secret='test-provider-webhook-secret-32-bytes-minimum',keyId='sandbox-signing-key';
-    const adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:createDeterministicSandboxTransport(),keyring:{[keyId]:secret},activeKeyId:keyId});
+    const secret='test-provider-webhook-secret-32-bytes-minimum',webhookKeyId='sandbox-signing-key';
+    const adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:createDeterministicSandboxTransport(),keyring:{[webhookKeyId]:secret},activeKeyId:webhookKeyId});
     const signedEvent={tenantId,providerId:'bank-sandbox',providerEventId:'evt-'+suffix,idempotencyKey:'provider-outbox-'+suffix+'-0001',eventType:'payment.status',status:'settled',occurredAt:'2026-11-10T10:01:00.000Z',payload:{amountMinor:'500',currency:'USD'}};
     const rawBody=JSON.stringify(signedEvent);
     const signature='sha256='+crypto.createHmac('sha256',secret).update(rawBody).digest('hex');
-    const callback=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId});
+    const callback=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:webhookKeyId});
     assert.equal(callback.replay,false);
     assert.equal(callback.reconciliation.status,'matched');
     assert.equal(callback.reconciliation.execution,'DISABLED');
-    const callbackReplay=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId});
+    const callbackReplay=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:webhookKeyId});
     assert.equal(callbackReplay.replay,true);
     assert.equal(callbackReplay.inboxId,callback.inboxId);
     const outboxState=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,outboxId]));
