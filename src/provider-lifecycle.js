@@ -91,6 +91,8 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45){
   const worker=required(workerId,'worker_id',120);
   if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
   return withTenantTransaction(pool,tenantId,async client=>{
+    // A worker may have sent the instruction before crashing. Expiry is therefore UNKNOWN, never an automatic resend.
+    await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW()",[tenantId]);
     const claimed=await client.query(
       `SELECT outbox_id,journal_id,provider_id,aggregate_type,aggregate_id,instruction_type,idempotency_key,payload,payload_fingerprint,attempts
          FROM keel_provider_outbox
