@@ -45,14 +45,15 @@ runuser -u postgres -- pgbackrest --stanza=keel --type=full backup
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (1, 'before-target')"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_create_restore_point('keel_pitr_target')"
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (2, 'after-target')"
+prior_wal="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal, '') FROM pg_stat_archiver")"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal()"
-# Wait for the post-target WAL segment to be archived; fail closed on timeout.
+# Wait for a new WAL segment (not merely any historical archive) to be archived.
 for _ in $(seq 1 90); do
   archived="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal,'') FROM pg_stat_archiver")"
-  [[ -n "$archived" ]] && break
+  [[ -n "$archived" && "$archived" != "$prior_wal" ]] && break
   sleep 2
 done
-[[ -n "${archived:-}" ]] || { echo "WAL archive did not advance" >&2; exit 1; }
+[[ -n "${archived:-}" && "$archived" != "$prior_wal" ]] || { echo "WAL archive did not advance" >&2; exit 1; }
 restore_dir=/var/lib/postgresql/pitr-restore
 rm -rf "$restore_dir"
 install -d -o postgres -g postgres -m 0700 "$restore_dir"
