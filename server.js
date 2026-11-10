@@ -1005,9 +1005,11 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='POST'&&route==='/api/providers/callback/bank-sandbox'){
       if(rateLimited(req,'/api/providers/callback/bank-sandbox'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
-      const secret=process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET,keyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID;
-      if(!secret||Buffer.byteLength(secret)<32||!keyId)return send(res,503,{error:'provider_callback_verification_not_configured'});
-      const rawBody=await readRawBody(req,MAX_BODY),adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:async()=>{throw new Error('callback_adapter_dispatch_disabled');},keyring:{[keyId]:secret},activeKeyId:keyId});
+      let keyring={},activeKeyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_ACTIVE_KEY_ID;
+      try{keyring=JSON.parse(process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEYRING||'{}');}catch(_){return send(res,503,{error:'provider_callback_keyring_configuration_invalid'});}
+      if(!Object.keys(keyring).length&&process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET&&process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID){activeKeyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID;keyring={[activeKeyId]:process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET};}
+      if(!activeKeyId||!keyring[activeKeyId]||Object.values(keyring).some(secret=>typeof secret!=='string'||Buffer.byteLength(secret)<32))return send(res,503,{error:'provider_callback_verification_not_configured'});
+      const rawBody=await readRawBody(req,MAX_BODY),adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:async()=>{throw new Error('callback_adapter_dispatch_disabled');},keyring,activeKeyId});
       const signature=req.headers['x-keel-signature'],receivedKeyId=req.headers['x-keel-key-id'];
       if(typeof signature!=='string'||typeof receivedKeyId!=='string')return send(res,403,{error:'provider_signature_headers_required'});
       const pool=await dbPool();if(!pool)return send(res,503,{error:'provider_callback_storage_unavailable'});
