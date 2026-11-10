@@ -1,0 +1,24 @@
+name: Backup worker image
+on:
+  pull_request:
+    paths:
+      - "ops/backup/**"
+      - "scripts/backup-postgres-encrypted.sh"
+      - ".github/workflows/backup-worker.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ops/backup/**"
+      - "scripts/backup-postgres-encrypted.sh"
+      - ".github/workflows/backup-worker.yml"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate backup script syntax
+        run: bash -n scripts/backup-postgres-encrypted.sh
+      - name: Build isolated backup worker image
+        run: docker build --pull -f ops/backup/Dockerfile -t keel-backup-worker:ci .
