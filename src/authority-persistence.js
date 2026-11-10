@@ -10,8 +10,9 @@ function normalizeEnvelope(input,grantorPrincipalId){
  const scopes=Array.isArray(input.scopes)?[...new Set(input.scopes)]:[];
  if(!granteePrincipalId||!scopes.length||scopes.some(s=>typeof s!=='string'||!ACTIONS.has(s)))fail('authority_envelope_scope_invalid',400);
  const validFrom=input.validFrom||new Date().toISOString(),expiresAt=input.expiresAt;
- if(!Number.isFinite(Date.parse(validFrom))||!Number.isFinite(Date.parse(expiresAt))||Date.parse(expiresAt)<=Date.parse(validFrom))fail('authority_envelope_time_invalid',400);
- const resourceIds=Array.isArray(input.resourceIds)?[...new Set(input.resourceIds.map(String))]:[];
+ if(!Number.isFinite(Date.parse(validFrom))||!Number.isFinite(Date.parse(expiresAt))||Date.parse(expiresAt)<=Date.parse(validFrom)||Date.parse(expiresAt)-Date.parse(validFrom)>90*86400000)fail('authority_envelope_time_invalid_or_over_90_days',400);
+ if(input.resourceIds!==undefined&&(!Array.isArray(input.resourceIds)||input.resourceIds.some(x=>typeof x!=='string'||!x.trim()||x.length>180)))fail('authority_resource_scope_invalid',400);
+ const resourceIds=Array.isArray(input.resourceIds)?[...new Set(input.resourceIds.map(x=>x.trim()))]:[];
  const currency=input.currency?String(input.currency).toUpperCase():null;
  if(currency&&!/^[A-Z]{3}$/.test(currency))fail('authority_currency_invalid',400);
  let maxAmountMinor=null;if(input.maxAmountMinor!==undefined&&input.maxAmountMinor!==null){if(typeof input.maxAmountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(input.maxAmountMinor))fail('authority_amount_limit_invalid',400);maxAmountMinor=input.maxAmountMinor;}
