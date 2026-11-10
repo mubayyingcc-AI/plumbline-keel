@@ -2,13 +2,14 @@ name: Keel ledger verification
 
 on:
   pull_request:
-    branches: [main, 'security/**']
+    branches: [main, 'security/**', 'recovery/**']
   push:
     branches:
       - main
       - 'ledger/**'
       - 'security/**'
       - 'provider/**'
+      - 'recovery/**'
 
 permissions:
   contents: read
@@ -36,9 +37,9 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/keel_test
+      PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_test
       PGSSLMODE: disable
-      KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@localhost:5432/keel_test
+      KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,8 +54,42 @@ jobs:
         run: node scripts/apply-ledger-migrations.js
       - name: Run unit and PostgreSQL integration tests
         run: npm test
-      - name: Verify tenant-scoped restored-state projections and ledger event chains
+      - name: Verify tenant-scoped ledger state before backup
         env:
           KEEL_RECOVERY_TARGET: isolated
-          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@localhost:5432/keel_test
+          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_test
+        run: node scripts/verify-recovery-state.js
+      - name: Create isolated logical backup and restore into a clean database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keel-backup"
+          docker run --rm --network host \
+            -e PGPASSWORD=postgres \
+            -v "$RUNNER_TEMP/keel-backup:/backup" \
+            postgres:${{ matrix.postgres-version }} \
+            pg_dump -h 127.0.0.1 -U postgres -d keel_test \
+              --format=custom --no-owner --file=/backup/keel-pre-restore.dump
+          test -s "$RUNNER_TEMP/keel-backup/keel-pre-restore.dump"
+          sha256sum "$RUNNER_TEMP/keel-backup/keel-pre-restore.dump" | tee "$RUNNER_TEMP/keel-backup/SHA256SUMS"
+          docker run --rm --network host \
+            -e PGPASSWORD=postgres \
+            postgres:${{ matrix.postgres-version }} \
+            createdb -h 127.0.0.1 -U postgres keel_restore_test
+          docker run --rm --network host \
+            -e PGPASSWORD=postgres \
+            -v "$RUNNER_TEMP/keel-backup:/backup" \
+            postgres:${{ matrix.postgres-version }} \
+            pg_restore --exit-on-error --no-owner \
+              --dbname=postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_test \
+              /backup/keel-pre-restore.dump
+          echo "### Isolated PostgreSQL backup/restore" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PostgreSQL version: ${{ matrix.postgres-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backup SHA-256: $(cut -d ' ' -f 1 "$RUNNER_TEMP/keel-backup/SHA256SUMS")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Restore target: keel_restore_test (fresh database)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify restored tenant isolation, ledger projections and event chains
+        env:
+          KEEL_RECOVERY_TARGET: isolated
+          PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_test
+          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_restore_test
         run: node scripts/verify-recovery-state.js
