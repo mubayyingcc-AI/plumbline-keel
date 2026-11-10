@@ -34,6 +34,15 @@ The consequence map flags hazardous combinations: beneficiary read + payment ini
 
 Keel now persists Authority Envelopes, scoped resource/action grants, expiry and revocation state, designated independent approvals, and append-only Action Proof Objects. The authenticated ledger journal and reservation create/release/consume routes invoke the authority check inside the same database transaction as the financial write. Successful proofs are linked into the ledger event chain and returned to the caller. Integration-role keys without a named principal are denied financial execution. The current execution adapter supports single-currency delegated journals; delegated multi-currency journal posting is explicitly denied until a multi-currency envelope model is implemented. The KAAA HTTP API creates/revokes envelopes, records approvals and lists proofs. Denied attempts are returned as deterministic errors but are not yet written as durable denied Action Proof Objects; that remains an audit enhancement.
 
+## KAAA API and execution contract
+1. A tenant owner/admin first creates a named principal through `POST /api/assurance/principals`. Use `principalKind: "ai_agent"` and `role: "integration"` for an AI agent; the returned API key is bound to that principal. Identity is still self-asserted until an external identity provider is integrated.
+2. A named human admin grants an envelope through `POST /api/assurance/authority/envelopes`. The allowed scopes are `ledger:journal:post`, `ledger:reservation:create`, `ledger:reservation:release`, and `ledger:reservation:consume`. Resource identifiers are exact values such as `book:<bookId>` and `account:<accountId>`. Set currency and a minor-unit amount ceiling for financial actions. Expiry cannot exceed 90 days.
+3. A delegated financial request supplies the envelope ID in `X-Keel-Authority-Envelope` (or `authorityEnvelopeId` in its JSON body). The ledger transaction revalidates the active tenant key and principal, locks and verifies the envelope fingerprint, checks action/resource/amount/currency/expiry/revocation and required approval, then writes the Action Proof Object and financial event atomically.
+4. Where approval is required, the designated independent principal records an approve/reject decision at `POST /api/assurance/authority/approvals`, bound to the exact 64-character SHA-256 request fingerprint. Approval of a different request fingerprint cannot authorize the actual execution.
+5. Revoke with `POST /api/assurance/authority/envelopes/revoke`; inspect durable proofs with `GET /api/assurance/authority/proofs`.
+
+The initial bootstrap owner key has no named principal and therefore cannot post journals or mutate reservations. It must create a named human principal and use that principal-bound key to grant authority. This intentionally removes implicit owner-key financial execution.
+
 ## Adversarial release gates
 - Compromised agent denied across tenants, outside action/resource scope, after expiry, above amount/currency limits, or when attempting self-approval.
 - Revoked/suspended delegation denied at execution time.
