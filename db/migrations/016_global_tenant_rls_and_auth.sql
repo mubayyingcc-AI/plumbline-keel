@@ -24,7 +24,7 @@ BEGIN
     IF null_rows=0 THEN
       EXECUTE format('ALTER TABLE public.%I ALTER COLUMN tenant_id SET NOT NULL',t.relname);
     ELSE
-      constraint_name := left(t.relname,45)||'_tenant_id_required';
+      constraint_name := left(t.relname,40)||'_tenant_id_required';
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=constraint_name AND conrelid=format('public.%I',t.relname)::regclass) THEN
         EXECUTE format('ALTER TABLE public.%I ADD CONSTRAINT %I CHECK (tenant_id IS NOT NULL) NOT VALID',t.relname,constraint_name);
       END IF;
