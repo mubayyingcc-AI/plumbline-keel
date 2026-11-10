@@ -96,10 +96,10 @@ CREATE TRIGGER keel_accounting_period_close_request_no_delete_trigger
   BEFORE DELETE ON keel_accounting_period_close_requests
   FOR EACH ROW EXECUTE FUNCTION keel_accounting_period_close_request_no_delete();
 
-CREATE OR REPLACE FUNCTION keel_accounting_period_closure_immutable() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE OR REPLACE FUNCTION keel_accounting_period_closure_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
   RAISE EXCEPTION 'accounting period closure evidence is append-only';
-END; $$;
+END; $fn$;
 DROP TRIGGER IF EXISTS keel_accounting_period_closure_immutable_trigger ON keel_accounting_period_closures;
 CREATE TRIGGER keel_accounting_period_closure_immutable_trigger
   BEFORE UPDATE OR DELETE ON keel_accounting_period_closures
