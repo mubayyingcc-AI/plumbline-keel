@@ -873,123 +873,32 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && route === '/api/ledger/status') {
       const pool = await dbPool();
       if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
-      const [migrations, role, rls] = await Promise.all([
-        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql']]),
+      const [migrations, role, ledgerRls, accountingRls] = await Promise.all([
+        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql']]),
         pool.query("SELECT current_user AS role, r.rolsuper AS is_superuser, r.rolbypassrls AS bypasses_rls FROM pg_roles r WHERE r.rolname=current_user"),
-        pool.query("SELECT COUNT(*)::int AS ledger_tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS rls_enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS rls_forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']])
+        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']]),
+        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods']])
       ]);
       const runtime = role.rows[0] || {};
-      const controls = rls.rows[0] || {};
-      const migrationsReady = migrations.rowCount === 2;
+      const ledger = ledgerRls.rows[0] || {};
+      const accounting = accountingRls.rows[0] || {};
+      const migrationsReady = migrations.rowCount === 3;
       const roleReady = runtime.role === 'keel_runtime' && runtime.is_superuser === false && runtime.bypasses_rls === false;
-      const rlsReady = controls.ledger_tables === 7 && controls.rls_enabled === 7 && controls.rls_forced === 7;
-      return send(res,(migrationsReady && roleReady && rlsReady)?200:503,{
-        ok:migrationsReady && roleReady && rlsReady,
-        status:(migrationsReady && roleReady && rlsReady)?'READY':'BLOCKED',
+      const rlsReady = ledger.tables === 7 && ledger.enabled === 7 && ledger.forced === 7 && accounting.tables === 3 && accounting.enabled === 3 && accounting.forced === 3;
+      const ready = migrationsReady && roleReady && rlsReady;
+      return send(res,ready?200:503,{
+        ok:ready,
+        status:ready?'READY':'BLOCKED',
         runtimeRole:runtime.role || 'unknown',
         privilegedRuntime:runtime.is_superuser === true || runtime.bypasses_rls === true,
         migrations:migrations.rows,
-        rowLevelSecurity:{ledgerTables:controls.ledger_tables,enabled:controls.rls_enabled,forced:controls.rls_forced},
-        boundary:'Ledger schema and tenant row-level security only; accounting periods, trial balance, reconciliation and external settlement are separate capabilities.'
-      });
-    }
-
-    // Ledger APIs: tenant-scoped accounting records only; no external payment execution.
-    if (route.startsWith('/api/ledger/')) {
-      const actor=await authenticateTenant(req);
-      if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const pool=await dbPool();
-      if(!pool)return send(res,503,{error:'ledger_storage_unavailable'});
-      const canWrite=['owner','admin','integration'].includes(actor.role);
-      if(req.method==='POST'&&!canWrite)return send(res,403,{error:'ledger_write_role_required'});
-      if(req.method==='POST'&&!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
-      if(req.method==='GET'&&route==='/api/ledger/books'){
-        const books=await accountingPeriods.listBooks(pool,actor.tenant_id);
-        return send(res,200,{count:books.length,books});
-      }
-      if(req.method==='POST'&&route==='/api/ledger/books'){
-        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
-        const book=await accountingPeriods.createBook(pool,actor.tenant_id,await readBody(req));
-        return send(res,201,{ok:true,book});
-      }
-      const bookAccountsMatch=route.match(/^\/api\/ledger\/books\/([^/]+)\/accounts$/);
-      if(bookAccountsMatch&&req.method==='GET'){
-        const accounts=await accountingPeriods.listBookAccounts(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]));
-        return send(res,200,{count:accounts.length,accounts});
-      }
-      if(bookAccountsMatch&&req.method==='POST'){
-        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
-        const body=await readBody(req);
-        const mapping=await accountingPeriods.mapAccount(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]),body.accountId);
-        return send(res,201,{ok:true,mapping});
-      }
-      if(req.method==='GET'&&route==='/api/ledger/periods'){
-        const periods=await accountingPeriods.listPeriods(pool,actor.tenant_id,url.searchParams.get('bookId'));
-        return send(res,200,{count:periods.length,periods});
-      }
-      if(req.method==='POST'&&route==='/api/ledger/periods'){
-        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
-        const period=await accountingPeriods.createPeriod(pool,actor.tenant_id,await readBody(req));
-        return send(res,201,{ok:true,period});
-      }
-      const openPeriodMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/open$/);
-      if(openPeriodMatch&&req.method==='POST'){
-        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
-        const result=await accountingPeriods.openPeriod(pool,actor.tenant_id,decodeURIComponent(openPeriodMatch[1]));
-        return send(res,200,{ok:true,...result});
-      }
-      if(req.method==='GET'&&route==='/api/ledger/trial-balance'){
-        const bookId=url.searchParams.get('bookId'),periodId=url.searchParams.get('periodId');
-        if(!bookId||!periodId)return send(res,400,{error:'book_id_and_period_id_required'});
-        const result=await accountingPeriods.trialBalance(pool,actor.tenant_id,bookId,periodId);
-        return send(res,result.balanced?200:409,{ok:result.balanced,trialBalance:result});
-      }
-      if(req.method==='POST'&&route==='/api/ledger/accounts'){
-        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'ledger_account_admin_required'});
-        const account=await ledgerPosting.createAccount(pool,actor.tenant_id,await readBody(req));
-        return send(res,201,{ok:true,account});
-      }
-      if(req.method==='GET'&&route==='/api/ledger/events/verify'){
-        const verification=await ledgerPosting.verifyLedgerEventChain(pool,actor.tenant_id);
-        return send(res,verification.valid?200:409,{ok:verification.valid,verification});
-      }
-      if(req.method==='GET'&&route==='/api/ledger/accounts'){
-        const accounts=await ledgerPosting.listAccounts(pool,actor.tenant_id);
-        return send(res,200,{count:accounts.length,accounts});
-      }
-      if(req.method==='POST'&&route==='/api/ledger/journals'){
-        const body=await readBody(req);
-        if(!body.bookId||!body.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
-        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body);
-        return send(res,result.replay?200:201,{ok:true,...result,notice:'Period-bound ledger posting only; this does not initiate or confirm an external payment or settlement.'});
-      }
-      const balanceMatch=route.match(/^\/api\/ledger\/accounts\/([^/]+)\/balance$/);
-      if(req.method==='GET'&&balanceMatch){
-        const balance=await ledgerPosting.getAccountBalance(pool,actor.tenant_id,decodeURIComponent(balanceMatch[1]));
-        return send(res,200,{ok:true,balance});
-      }
-      if(req.method==='POST'&&route==='/api/ledger/reservations'){
-        const result=await ledgerPosting.createReservation(pool,actor.tenant_id,await readBody(req));
-        return send(res,result.replay?200:201,{ok:true,...result});
-      }
-      const releaseMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/release$/);
-      if(req.method==='POST'&&releaseMatch){
-        const b=await readBody(req);
-        const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,decodeURIComponent(releaseMatch[1]),b.reason);
-        return send(res,200,{ok:true,...result});
-      }
-      const consumeMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/consume$/);
-      if(req.method==='POST'&&consumeMatch){
-        const b=await readBody(req);
-        const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,decodeURIComponent(consumeMatch[1]),b.journal);
-        return send(res,result.status==='expired'?409:(result.replay?200:201),{ok:result.status!=='expired',...result});
-      }
-      return send(res,404,{error:'ledger_route_not_found'});
-    }
-    if (req.method === 'GET' && route === '/api/sandbox/scenarios') {
-      return send(res,200,{
-        scenarios:publicSandboxScenarios,
-        notice:'Only scenarios marked EXECUTABLE are runnable in the public synthetic sandbox. Other financial test families remain outside this endpoint until their actual engines are integrated.'
+        rowLevelSecurity:{
+          ledgerTables:ledger.tables,ledgerEnabled:ledger.enabled,ledgerForced:ledger.forced,
+          accountingTables:accounting.tables,accountingEnabled:accounting.enabled,accountingForced:accounting.forced,
+          totalTables:(ledger.tables||0)+(accounting.tables||0),
+          totalForced:(ledger.forced||0)+(accounting.forced||0)
+        },
+        boundary:'Double-entry ledger, book and period schema with tenant RLS only. Accounting close/reopen approvals, provider reconciliation persistence and external settlement remain separate capabilities.'
       });
     }
     if (req.method === 'GET' && route === '/api/products') {
