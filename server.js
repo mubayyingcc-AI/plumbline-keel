@@ -526,7 +526,7 @@ const server = http.createServer(async (req,res) => {
       const body=await readBody(req), principal=authorityIdentity.normalizePrincipal(body);
       const role=cleanString(body.role||'reviewer',30);
       if(!['admin','reviewer','analyst','integration'].includes(role)) return send(res,400,{error:'invalid_principal_role',allowed:['admin','reviewer','analyst','integration']});
-      const issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=await dbPool(), client=await pool.connect();
+      const issued=tenantSecurity.issueTenantKey(), principalId=crypto.randomUUID(), pool=tenantScopedPool(await dbPool(),actor.tenant_id), client=await pool.connect();
       try { await client.query('BEGIN'); await client.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,external_subject,identity_assurance) VALUES($1,$2,$3,$4,$5,'self_asserted')",[principalId,actor.tenant_id,principal.displayName,principal.email,principal.externalSubject]); await client.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,$4,$5,$6)",[issued.keyId,actor.tenant_id,issued.tokenHash,principal.displayName,role,principalId]); await recordEventWithClient(client,actor,'PRINCIPAL_CREATED',principalId,{displayName:principal.displayName,email:principal.email,role,identityAssurance:'self_asserted'}); await client.query('COMMIT'); }
       catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
       return send(res,201,{ok:true,principal:{principalId,displayName:principal.displayName,email:principal.email,identityAssurance:'self_asserted'},keyId:issued.keyId,role,apiKey:issued.token,warning:'Key shown once. Identity remains self-asserted until external identity verification is integrated.'});
@@ -546,7 +546,7 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id || !['owner','admin'].includes(actor.role)) return send(res,403,{error:'named_admin_principal_required'});
-      const body=await readBody(req), delegation=authorityIdentity.normalizeDelegation(body,actor.principal_id), pool=await dbPool();
+      const body=await readBody(req), delegation=authorityIdentity.normalizeDelegation(body,actor.principal_id), pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const grantee=await pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,delegation.granteePrincipalId]);
       if(!grantee.rowCount) return send(res,404,{error:'active_grantee_not_found'});
       const id=crypto.randomUUID(), client=await pool.connect();
@@ -562,10 +562,10 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id) return send(res,403,{error:'named_reviewer_required'});
       if(!['owner','admin','reviewer'].includes(actor.role)) {
-        const delegated=await (await dbPool()).query("SELECT 1 FROM keel_delegations WHERE tenant_id=$1 AND grantee_principal_id=$2 AND status='active' AND expires_at>NOW() AND scopes ? 'docket:approve' LIMIT 1",[actor.tenant_id,actor.principal_id]);
+        const delegated=await (tenantScopedPool(await dbPool(),actor.tenant_id)).query("SELECT 1 FROM keel_delegations WHERE tenant_id=$1 AND grantee_principal_id=$2 AND status='active' AND expires_at>NOW() AND scopes ? 'docket:approve' LIMIT 1",[actor.tenant_id,actor.principal_id]);
         if(!delegated.rowCount) return send(res,403,{error:'docket_approval_authority_required'});
       }
-      const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=await dbPool(), docketId=decodeURIComponent(approvalMatch[1]);
+      const body=await readBody(req), decision=authorityIdentity.approvalDecision(body), pool=tenantScopedPool(await dbPool(),actor.tenant_id), docketId=decodeURIComponent(approvalMatch[1]);
       const docket=await pool.query('SELECT docket_id FROM keel_proof_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,docketId]);
       if(!docket.rowCount) return send(res,404,{error:'tenant_docket_not_found'});
       const client=await pool.connect(); let count=0, rejected=false;
@@ -639,7 +639,7 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!['owner','admin','integration'].includes(actor.role)) return send(res,403,{error:'tenant_role_insufficient',requiredRole:'integration'});
-      const object=financialState.normalizeFinancialObject(await readBody(req)), pool=await dbPool();
+      const object=financialState.normalizeFinancialObject(await readBody(req)), pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!pool) return send(res,503,{error:'financial_state_storage_unavailable'});
       const client=await pool.connect();
       try {
@@ -664,7 +664,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/currency/accounts'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const body=await readBody(req), account=currencyEngine.newAccount(body), pool=await dbPool();
+      const body=await readBody(req), account=currencyEngine.newAccount(body), pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
       const client=await pool.connect();
       try { await client.query('BEGIN'); await client.query('INSERT INTO keel_currency_accounts(account_id,tenant_id,owner_ref,instrument_code,account_type) VALUES($1,$2,$3,$4,$5)',[account.accountId,actor.tenant_id,account.ownerRef,account.instrumentCode,account.accountType]); await recordEventWithClient(client,actor,'CURRENCY_ACCOUNT_CREATED',account.accountId,{instrumentCode:account.instrumentCode,accountType:account.accountType,ledgerMode:account.ledgerMode}); await client.query('COMMIT'); }
@@ -680,7 +680,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/currency/transfers/prepare'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const body=await readBody(req), intent=currencyEngine.prepareTransfer(body), pool=await dbPool();
+      const body=await readBody(req), intent=currencyEngine.prepareTransfer(body), pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!pool) return send(res,503,{error:'currency_storage_unavailable'});
       const client=await pool.connect();
       try {
@@ -702,7 +702,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/fracture/assessments'){
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req); if(!actor) return send(res,401,{error:'valid_tenant_api_key_required'});
-      const input=await readBody(req), result=fractureEngine.assessFracture(input), pool=await dbPool();
+      const input=await readBody(req), result=fractureEngine.assessFracture(input), pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!pool) return send(res,503,{error:'fracture_storage_unavailable'});
       const client=await pool.connect();
       try { await client.query('BEGIN'); await client.query('INSERT INTO keel_fracture_assessments(assessment_id,tenant_id,status,scenario_id,input_fingerprint,result_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7)',[result.assessmentId,actor.tenant_id,result.status,result.scenarioId,result.inputFingerprint,result.resultFingerprint,JSON.stringify(result)]); await recordEventWithClient(client,actor,'FRACTURE_ASSESSED',result.assessmentId,{status:result.status,scenarioId:result.scenarioId,resultFingerprint:result.resultFingerprint,systemicFlags:result.systemicFlags}); await client.query('COMMIT'); }
@@ -764,7 +764,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/applicability/evaluate'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const b=await readBody(req),pool=await dbPool();
+      const b=await readBody(req),pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const q=await pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1 AND obligation_id=$2 AND source_version=$3',[actor.tenant_id,b.obligationId,b.obligationVersion]);
       if(!q.rowCount)return send(res,404,{error:'tenant_obligation_version_not_found'});
       const decision=regulatoryAssurance.evaluateApplicability(q.rows[0].payload,b.context,b.asOf||new Date());
@@ -787,14 +787,14 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!['owner','admin','reviewer'].includes(actor.role))return send(res,403,{error:'tenant_role_insufficient'});
-      const obligation=regulatoryAssurance.normalizeObligation(await readBody(req)),pool=await dbPool(),client=await pool.connect();
+      const obligation=regulatoryAssurance.normalizeObligation(await readBody(req)),pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_obligations(tenant_id,obligation_id,source_id,source_version,locator,regulated_role,effective_from,effective_to,payload,version_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[actor.tenant_id,obligation.obligationId,obligation.sourceId,obligation.sourceVersion,obligation.locator,obligation.regulatedRole,obligation.effectiveFrom,obligation.effectiveTo,JSON.stringify(obligation),obligation.versionFingerprint]);await recordEventWithClient(client,actor,'REGULATORY_OBLIGATION_VERSIONED',obligation.obligationId,{sourceVersion:obligation.sourceVersion,fingerprint:obligation.versionFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,obligation});
     }
     if(req.method==='POST' && route==='/api/regulatory/controls'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const control=regulatoryAssurance.normalizeControl(await readBody(req)),pool=await dbPool(),client=await pool.connect();
+      const control=regulatoryAssurance.normalizeControl(await readBody(req)),pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_controls(tenant_id,control_id,version,state,owner_principal_id,payload,control_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,control.controlId,control.version,control.state,control.ownerPrincipalId,JSON.stringify(control),control.controlFingerprint]);await recordEventWithClient(client,actor,'REGULATORY_CONTROL_VERSIONED',control.controlId,{version:control.version,state:control.state,fingerprint:control.controlFingerprint});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,control});
     }
@@ -811,7 +811,7 @@ const server = http.createServer(async (req,res) => {
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!['owner','admin','reviewer'].includes(actor.role))return send(res,403,{error:'tenant_role_insufficient'});
-      const b=await readBody(req),id=crypto.randomUUID(),pool=await dbPool(),client=await pool.connect();
+      const b=await readBody(req),id=crypto.randomUUID(),pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       try{await client.query('BEGIN');await client.query('INSERT INTO keel_regulatory_mappings(tenant_id,mapping_id,obligation_id,obligation_version,control_id,control_version,evidence_ids,approved_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[actor.tenant_id,id,b.obligationId,b.obligationVersion,b.controlId,b.controlVersion,JSON.stringify(b.evidenceIds||[]),actor.principal_id||null]);await recordEventWithClient(client,actor,'REGULATORY_MAPPING_CREATED',id,{obligationId:b.obligationId,controlId:b.controlId});await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
       return send(res,201,{ok:true,mappingId:id});
     }
@@ -848,14 +848,14 @@ const server = http.createServer(async (req,res) => {
     }
     if(req.method==='GET' && route.startsWith('/api/regulatory/dockets/') && route.endsWith('/export')){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const id=decodeURIComponent(route.slice('/api/regulatory/dockets/'.length,-'/export'.length)),pool=await dbPool();
+      const id=decodeURIComponent(route.slice('/api/regulatory/dockets/'.length,-'/export'.length)),pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const row=await pool.query('SELECT snapshot FROM keel_conformity_dockets WHERE tenant_id=$1 AND docket_id=$2',[actor.tenant_id,id]);if(!row.rowCount)return send(res,404,{error:'regulatory_docket_not_found'});
       return send(res,200,{export:row.rows[0].snapshot,notice:'Evidence assessment only; not certification, legal advice or a declaration of conformity.'});
     }
     if(req.method==='POST' && route==='/api/regulatory/actions'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const b=await readBody(req),id=cleanString(b.actionId,120)||crypto.randomUUID(),ownerId=cleanString(b.ownerPrincipalId,80),dueAt=b.dueAt||null,pool=await dbPool();
+      const b=await readBody(req),id=cleanString(b.actionId,120)||crypto.randomUUID(),ownerId=cleanString(b.ownerPrincipalId,80),dueAt=b.dueAt||null,pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       if(!b.findingId||!ownerId||!/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(ownerId))return send(res,400,{error:'finding_id_and_valid_owner_principal_required'});
       if(dueAt&&!Number.isFinite(Date.parse(dueAt)))return send(res,400,{error:'invalid_action_due_date'});
       const [finding,owner]=await Promise.all([pool.query('SELECT finding_id FROM keel_regulatory_findings WHERE tenant_id=$1 AND finding_id=$2',[actor.tenant_id,b.findingId]),pool.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,ownerId])]);
@@ -867,13 +867,13 @@ const server = http.createServer(async (req,res) => {
 
     if(req.method==='GET' && route==='/api/regulatory/actions'){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const rows=await (await dbPool()).query('SELECT action_id,finding_id,owner_principal_id,due_at,status,payload,created_at FROM keel_regulatory_actions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,actions:rows.rows});
+      const rows=await (tenantScopedPool(await dbPool(),actor.tenant_id)).query('SELECT action_id,finding_id,owner_principal_id,due_at,status,payload,created_at FROM keel_regulatory_actions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 250',[actor.tenant_id]);return send(res,200,{count:rows.rowCount,actions:rows.rows});
     }
     if(req.method==='POST' && route==='/api/regulatory/actions/transition'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       if(!actor.principal_id||!['owner','admin','reviewer'].includes(actor.role))return send(res,403,{error:'named_independent_reviewer_required'});
-      const b=await readBody(req),id=cleanString(b.actionId,120),next=cleanString(b.status,30),pool=await dbPool(),client=await pool.connect();
+      const b=await readBody(req),id=cleanString(b.actionId,120),next=cleanString(b.status,30),pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       if(!id||!['in_progress','implemented','verified','rejected'].includes(next))return send(res,400,{error:'invalid_action_transition'});
       try{
        await client.query('BEGIN');
@@ -896,7 +896,7 @@ const server = http.createServer(async (req,res) => {
     if(req.method==='POST' && route==='/api/regulatory/changes/impact-assessments'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
-      const b=await readBody(req),pool=await dbPool();
+      const b=await readBody(req),pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const [oq,mq,cq]=await Promise.all([pool.query('SELECT payload FROM keel_regulatory_obligations WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT obligation_id,control_id FROM keel_regulatory_mappings WHERE tenant_id=$1',[actor.tenant_id]),pool.query('SELECT payload FROM keel_regulatory_controls WHERE tenant_id=$1',[actor.tenant_id])]);
       const impact=regulatoryAssurance.assessRegulatoryChange({oldVersion:b.oldVersion,newVersion:b.newVersion,obligations:oq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id})),controls:cq.rows.map(x=>x.payload)});
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
