@@ -68,6 +68,7 @@ jobs:
           PGPASSWORD: postgres
       - name: Create isolated S3 test bucket
         run: |
+          aws configure set default.s3.addressing_style path
           for attempt in $(seq 1 60); do
             curl -fsS http://127.0.0.1:4567/_localstack/health >/dev/null && break
             sleep 2
