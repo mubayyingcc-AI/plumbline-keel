@@ -139,19 +139,33 @@ jobs:
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           sudo pg_ctlcluster 16 main start
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
-      - name: Start S3-compatible test service and create disposable bucket
+      - name: Start TLS-enabled S3-compatible test service and create disposable bucket
         run: |
+          set -euo pipefail
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z server /data --console-address ":9001"
+          cert_dir="$RUNNER_TEMP/minio-certs"
+          mkdir -p "$cert_dir"
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout "$cert_dir/private.key" -out "$cert_dir/public.crt" \
+            -subj "/CN=127.0.0.1" \
+            -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+          chmod 600 "$cert_dir/private.key"
+          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 \
+            -v "$cert_dir:/certs:ro" \
+            -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword \
+            ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data --certs-dir /certs --console-address ":9001"
+          export AWS_CA_BUNDLE="$cert_dir/public.crt"
+          echo "AWS_CA_BUNDLE=$cert_dir/public.crt" >> "$GITHUB_ENV"
           ready=false
           for attempt in $(seq 1 30); do
-            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
+            code="$(curl --cacert "$cert_dir/public.crt" --max-time 2 -s -o /dev/null -w '%{http_code}' https://127.0.0.1:9000/ || true)"
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
           [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
-          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://keel-ci-backups
-          aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+          aws --endpoint-url https://127.0.0.1:9000 s3 mb s3://keel-ci-backups
+          aws --endpoint-url https://127.0.0.1:9000 s3 ls s3://keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
