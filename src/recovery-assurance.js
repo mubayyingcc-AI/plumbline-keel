@@ -1,11 +1,11 @@
 'use strict';
 function compareLedgerProjection({accounts,lines}){
- const totals=new Map();
+ const totals=new Map();let globalDebit=0n,globalCredit=0n;
  for(const line of lines){
   const key=line.account_id;if(!totals.has(key))totals.set(key,{debit:0n,credit:0n});
   const t=totals.get(key),amount=BigInt(line.amount_minor);
   if(amount<0n)throw new Error('negative_ledger_line_amount');
-  if(line.side==='debit')t.debit+=amount;else if(line.side==='credit')t.credit+=amount;else throw new Error('unknown_ledger_line_side');
+  if(line.side==='debit'){t.debit+=amount;globalDebit+=amount;}else if(line.side==='credit'){t.credit+=amount;globalCredit+=amount;}else throw new Error('unknown_ledger_line_side');
  }
  const findings=[];
  for(const a of accounts){
@@ -18,7 +18,7 @@ function compareLedgerProjection({accounts,lines}){
    actual:{debitTotalMinor:actualDebit.toString(),creditTotalMinor:actualCredit.toString(),balanceMinor:actualBalance.toString()}
   });
  }
- return {valid:findings.length===0,accountCount:accounts.length,postedLineCount:lines.length,findings};
+ if(globalDebit!==globalCredit)findings.push({code:'TRIAL_BALANCE_OUT_OF_BALANCE',debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString()});\n return {valid:findings.length===0,accountCount:accounts.length,postedLineCount:lines.length,trialBalance:{debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString(),balanced:globalDebit===globalCredit},findings};
 }
 function assessRecoveryState({ledger,providerOutbox=[],providerCases=[]}){
  const warnings=[];
