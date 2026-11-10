@@ -306,7 +306,7 @@ async function postJournal(pool, tenantIdInput, journal, authorityContext) {
       authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
     }
     const posted=await postJournalWithClient(client, tenantId, journal);
-    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityPersistence.digest(journal),executionRef:posted.journalId});
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityProof.requestFingerprint,executionRef:posted.journalId});
     return authorityProof?{...posted,authorityProof}:posted;
   }, tenantId);
 }
