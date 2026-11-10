@@ -5,8 +5,9 @@ const crypto=require('node:crypto');
 const url=process.env.KEEL_LEDGER_TEST_DATABASE_URL;
 const posting=require('../src/ledger-posting');
 const ledger=require('../src/ledger-engine');
+const accountingPeriods=require('../src/accounting-periods');
 
-test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url && 'Set KEEL_LEDGER_TEST_DATABASE_URL to a disposable PostgreSQL database with migrations 012 and 013 applied'}, async()=>{
+test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url && 'Set KEEL_LEDGER_TEST_DATABASE_URL to a disposable PostgreSQL database with migrations 012, 013 and 014 applied'}, async()=>{
   const {Pool}=require('pg');
   const pool=new Pool({connectionString:url,max:8});
   const tenantId=crypto.randomUUID();
@@ -18,7 +19,19 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     await assert.rejects(()=>posting.createAccount(pool,tenantId,{accountId:'bad-scale-'+suffix,accountCode:'9000-'+suffix,accountName:'Invalid scale',accountClass:'asset',currency:'USD',currencyExponent:7,normalSide:'debit'}),/ledger_account_currency_exponent_invalid/);
     assert.equal((await posting.listAccounts(pool,tenantId)).every(a=>a.currencyExponent===2),true);
     const cash='cash-'+suffix,liability='customer-liability-'+suffix;
-    const funding={journalId:'fund-'+suffix,idempotencyKey:'funding-key-'+suffix+'-000000',description:'Integration funding',sourceRef:'test:funding:'+suffix,effectiveAt:new Date().toISOString(),lines:[
+    const bookId='book-'+suffix,periodId='period-'+suffix,plannedPeriodId='planned-period-'+suffix;
+    await accountingPeriods.createBook(pool,tenantId,{bookId,entityId:'entity-'+suffix,bookCode:'GENERAL-'+suffix,bookName:'General Ledger '+suffix,functionalCurrency:'USD',accountingBasis:'IFRS',timezone:'UTC'});
+    await accountingPeriods.mapAccount(pool,tenantId,bookId,cash);
+    await accountingPeriods.mapAccount(pool,tenantId,bookId,liability);
+    await accountingPeriods.createPeriod(pool,tenantId,{periodId,bookId,periodCode:'2026-11-'+suffix,periodStart:'2026-11-01',periodEnd:'2026-11-30'});
+    await assert.rejects(()=>accountingPeriods.createPeriod(pool,tenantId,{periodId:'overlap-'+suffix,bookId,periodCode:'2026-11-overlap-'+suffix,periodStart:'2026-11-15',periodEnd:'2026-12-15'}),/accounting_period_overlaps_existing_period/);
+    await accountingPeriods.createPeriod(pool,tenantId,{periodId:plannedPeriodId,bookId,periodCode:'2026-12-'+suffix,periodStart:'2026-12-01',periodEnd:'2026-12-31'});
+    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'planned-'+suffix,idempotencyKey:'planned-period-key-'+suffix+'-0000',description:'Cannot post to planned period',sourceRef:'test:planned:'+suffix,effectiveAt:'2026-12-01T10:00:00.000Z',bookId,periodId:plannedPeriodId,accountingDate:'2026-12-01',lines:[
+      {accountId:cash,side:'debit',currency:'USD',amountMinor:'1'},
+      {accountId:liability,side:'credit',currency:'USD',amountMinor:'1'}
+    ]}),/accounting_period_not_open/);
+    await accountingPeriods.openPeriod(pool,tenantId,periodId);
+    const funding={journalId:'fund-'+suffix,idempotencyKey:'funding-key-'+suffix+'-000000',description:'Integration funding',sourceRef:'test:funding:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
       {accountId:cash,side:'debit',currency:'USD',amountMinor:'1000'},
       {accountId:liability,side:'credit',currency:'USD',amountMinor:'1000'}
     ]};
@@ -43,12 +56,12 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     assert.equal(before.reservedMinor,'700');
     assert.equal(before.availableMinor,'300');
 
-    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'overdraw-'+suffix,idempotencyKey:'overdraw-key-'+suffix+'-000000',description:'Must not breach reservation',sourceRef:'test:overdraw:'+suffix,effectiveAt:new Date().toISOString(),lines:[
+    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'overdraw-'+suffix,idempotencyKey:'overdraw-key-'+suffix+'-000000',description:'Must not breach reservation',sourceRef:'test:overdraw:'+suffix,effectiveAt:'2026-11-10T11:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
       {accountId:liability,side:'debit',currency:'USD',amountMinor:'301'},
       {accountId:cash,side:'credit',currency:'USD',amountMinor:'301'}
     ]}),/ledger_posting_would_breach_active_reservations/);
 
-    const spend={journalId:'spend-'+suffix,idempotencyKey:'spend-key-'+suffix+'-000000',description:'Consume reserved funds',sourceRef:'test:spend:'+suffix,effectiveAt:new Date().toISOString(),lines:[
+    const spend={journalId:'spend-'+suffix,idempotencyKey:'spend-key-'+suffix+'-000000',description:'Consume reserved funds',sourceRef:'test:spend:'+suffix,effectiveAt:'2026-11-10T12:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
       {accountId:liability,side:'debit',currency:'USD',amountMinor:'700'},
       {accountId:cash,side:'credit',currency:'USD',amountMinor:'700'}
     ]};
@@ -60,6 +73,13 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     assert.equal(after.availableMinor,'300');
 
     assert.equal((await posting.verifyAccountProjection(pool,tenantId,liability)).matches,true);
+    const trial=await accountingPeriods.trialBalance(pool,tenantId,bookId,periodId);
+    assert.equal(trial.balanced,true);
+    assert.equal(trial.status,'BALANCED');
+    assert.equal(trial.totalsByCurrency.USD.periodDebitsMinor,'1700');
+    assert.equal(trial.totalsByCurrency.USD.periodCreditsMinor,'1700');
+    assert.equal(trial.accounts.find(x=>x.accountId===cash).closingBalanceMinor,'300');
+    assert.equal(trial.accounts.find(x=>x.accountId===liability).closingBalanceMinor,'300');
 
     const reversalCash='reversal-cash-'+suffix, reversalEquity='reversal-equity-'+suffix;
     await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
