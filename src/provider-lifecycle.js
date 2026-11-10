@@ -160,7 +160,9 @@ async function recordVerifiedProviderEvent(client,input){
   if(typeof occurredAt!=='string'||!Number.isFinite(Date.parse(occurredAt)))fail('provider_event_timestamp_invalid');
   const payload=object(input.payload);
   const verification=input.verification;
-  if(!verification||verification.status!=='verified'||typeof verification.keyId!=='string'||!verification.keyId.trim()||typeof verification.verifiedAt!=='string'||!Number.isFinite(Date.parse(verification.verifiedAt)))fail('provider_event_signature_verification_required',403);
+  if(!verification||!verifiedAttestations.has(verification)||typeof input.rawBody!=='string'||verification.rawBodyFingerprint!==crypto.createHash('sha256').update(input.rawBody).digest('hex'))fail('provider_event_signature_verification_required',403);
+  let signedBody;try{signedBody=JSON.parse(input.rawBody);}catch(_){fail('provider_signed_body_invalid',403);}
+  if(signedBody.providerEventId!==providerEventId||signedBody.idempotencyKey!==key||signedBody.eventType!==eventType||String(signedBody.status).toLowerCase()!==status||signedBody.occurredAt!==occurredAt||canonical(signedBody.payload)!==canonical(payload))fail('provider_signed_body_event_mismatch',403);
   const payloadFingerprint=digest({providerId,providerEventId,key,eventType,status,occurredAt,payload});
   const inboxId=input.inboxId||crypto.randomUUID();
   if(!UUID.test(inboxId))fail('inbox_id_invalid');
@@ -218,12 +220,14 @@ async function reconcileProviderEvent(client,tenantId,inboxId){
       instruction.rowCount?instruction.rows[0].payload_fingerprint:null,e.payload_fingerprint]
   );
   await client.query("UPDATE keel_provider_inbox SET processing_status=CASE WHEN $3='exception' THEN 'quarantined' ELSE 'processed' END WHERE tenant_id=$1 AND inbox_id=$2 AND processing_status='received'",[tenantId,inboxId,status]);
+  if(instruction.rowCount&&status==='matched')await client.query("UPDATE keel_provider_outbox SET status='reconciled',lease_owner=NULL,lease_until=NULL,updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2",[tenantId,instruction.rows[0].outbox_id]);
+  if(instruction.rowCount&&e.event_status==='failed')await client.query("UPDATE keel_provider_outbox SET status='failed',lease_owner=NULL,lease_until=NULL,last_error_code='PROVIDER_REPORTED_FAILURE',updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2",[tenantId,instruction.rows[0].outbox_id]);
   const prior=await client.query('SELECT case_id,status,reason_codes FROM keel_provider_reconciliation_cases WHERE tenant_id=$1 AND inbox_id=$2',[tenantId,inboxId]);
   return {...prior.rows[0],execution:'DISABLED',notice:'Provider event was matched against a durable instruction only. No ledger posting, settlement assertion, reversal or write-off was performed.'};
 }
 
 module.exports={
   enqueueInstruction,claimNextInstruction,recordDispatchOutcome,
-  recordVerifiedProviderEvent,reconcileProviderEvent,withTenantTransaction,
+  verifyHmacSha256,recordVerifiedProviderEvent,reconcileProviderEvent,withTenantTransaction,
   digest
 };
