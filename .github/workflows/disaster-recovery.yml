@@ -1,0 +1,80 @@
+name: Keel disaster recovery verification
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, 'feat/production-disaster-recovery-foundation']
+
+permissions:
+  contents: read
+
+jobs:
+  encrypted-backup-restore:
+    name: Encrypted PostgreSQL backup and restore
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel_source
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d keel_source"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGSSLMODE: disable
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_source
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install PostgreSQL client and age
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client age
+      - name: Validate shell syntax
+        run: |
+          bash -n scripts/backup-postgres-encrypted.sh
+          bash -n scripts/restore-postgres-encrypted.sh
+      - name: Prepare synthetic source database and isolated restore target
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE TABLE dr_probe (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO dr_probe VALUES (1, 'keel-dr-proof');"
+          createdb -h 127.0.0.1 -U postgres -e keel_restore_ci
+        env:
+          PGPASSWORD: postgres
+      - name: Generate ephemeral test encryption identity
+        id: age
+        run: |
+          age-keygen -o "$RUNNER_TEMP/age-identity.txt" 2> "$RUNNER_TEMP/age-recipient.txt"
+          chmod 600 "$RUNNER_TEMP/age-identity.txt"
+          RECIPIENT="$(awk '/^# public key:/ {print $4}' "$RUNNER_TEMP/age-recipient.txt")"
+          test -n "$RECIPIENT"
+          echo "recipient=$RECIPIENT" >> "$GITHUB_OUTPUT"
+      - name: Create encrypted backup
+        env:
+          KEEL_BACKUP_DIR: ${{ runner.temp }}/keel-backups
+          KEEL_BACKUP_AGE_RECIPIENT: ${{ steps.age.outputs.recipient }}
+          KEEL_BACKUP_DATABASE_ID: ci-source
+        run: bash scripts/backup-postgres-encrypted.sh
+      - name: Verify backup metadata and restore into clean database
+        env:
+          KEEL_BACKUP_FILE: ${{ runner.temp }}/keel-backups/$(ls "$RUNNER_TEMP/keel-backups" | grep '\.dump\.age$' | head -1)
+          KEEL_BACKUP_AGE_IDENTITY_FILE: ${{ runner.temp }}/age-identity.txt
+          KEEL_RESTORE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_ci
+          KEEL_RESTORE_CONFIRM: RESTORE_TO_EMPTY_DATABASE
+          PGPASSWORD: postgres
+        run: |
+          backup_file="$(find "$RUNNER_TEMP/keel-backups" -maxdepth 1 -name '*.dump.age' -print -quit)"
+          test -n "$backup_file"
+          export KEEL_BACKUP_FILE="$backup_file"
+          bash scripts/restore-postgres-encrypted.sh
+          restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT value FROM dr_probe WHERE id=1")"
+          test "$restored" = "keel-dr-proof"
+          echo "Encrypted backup and isolated restore passed." >> "$GITHUB_STEP_SUMMARY"
