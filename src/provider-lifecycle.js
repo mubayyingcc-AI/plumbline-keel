@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { canonical } = require('./authority-chain');
+const authorityPersistence = require('./authority-persistence');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
@@ -100,7 +101,7 @@ async function withTenantTransaction(pool,tenantId,work){
   fail('provider_lifecycle_transaction_retry_exhausted',409);
 }
 
-async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45){
+async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,authorityContext){
   const worker=required(workerId,'worker_id',120);
   if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
   return withTenantTransaction(pool,tenantId,async client=>{
@@ -116,6 +117,11 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45){
     );
     if(!claimed.rowCount)return null;
     const row=claimed.rows[0];
+    if(!authorityContext)fail('provider_dispatch_authority_context_required',403);
+    const payload=row.payload||{};
+    if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_dispatch_financial_amount_and_currency_required',400);
+    const dispatchRequest={tenantId,journalId:row.journal_id,outboxId:row.outbox_id,providerId:row.provider_id,payloadFingerprint:row.payload_fingerprint,idempotencyKey:row.idempotency_key};
+    const authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:dispatch',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(dispatchRequest),executionRef:row.outbox_id});
     const updated=await client.query(
       `UPDATE keel_provider_outbox SET status='leased',attempts=attempts+1,lease_owner=$3,
               lease_until=NOW()+($4::integer * INTERVAL '1 second'),updated_at=NOW()
@@ -124,7 +130,7 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45){
       [tenantId,row.outbox_id,worker,leaseSeconds]
     );
     if(!updated.rowCount)fail('provider_outbox_claim_race',409);
-    return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until};
+    return {...row,attempts:updated.rows[0].attempts,leaseUntil:updated.rows[0].lease_until,authorityProof};
   });
 }
 
