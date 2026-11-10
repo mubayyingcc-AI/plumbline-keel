@@ -95,15 +95,17 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
       [tenantId,periodId]
     ),tenantId),/approved dual-control closure record required/);
     await accountingPeriods.softClosePeriod(pool,tenantId,periodId);
-    const closeRequest=await accountingPeriods.requestPeriodClose(pool,tenantId,periodId,'maker-key-'+suffix);
-    await assert.rejects(()=>accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'maker-key-'+suffix),/checker_must_be_independent/);
-    const closed=await accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'checker-key-'+suffix);
+    const closeRequest=await accountingPeriods.requestPeriodClose(pool,tenantId,periodId,'maker-key-'+suffix,'maker-principal-'+suffix);
+    await assert.rejects(()=>accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'maker-key-'+suffix,'maker-principal-'+suffix),/checker_must_be_independent/);
+    await assert.rejects(()=>accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'second-key-'+suffix,'maker-principal-'+suffix),/checker_must_be_independent/);
+    const closed=await accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'checker-key-'+suffix,'checker-principal-'+suffix);
     assert.equal(closed.closed,true);
     assert.equal(closed.status,'closed');
     assert.ok(/^[0-9a-f]{64}$/.test(closed.closeHash));
     const closure=await accountingPeriods.getPeriodClosure(pool,tenantId,periodId);
     assert.equal(closure.close_hash,closed.closeHash);
     assert.equal(closure.closed_by_key_id,'checker-key-'+suffix);
+    assert.equal(closure.closed_by_principal_id,'checker-principal-'+suffix);
     const requests=await accountingPeriods.listPeriodCloseRequests(pool,tenantId,periodId);
     assert.equal(requests.length,1);
     assert.equal(requests[0].status,'approved');
