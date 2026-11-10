@@ -1,5 +1,6 @@
 'use strict';
 const {Pool}=require('pg');
+const crypto=require('node:crypto');
 const lifecycle=require('../src/provider-lifecycle');
 const {ProviderSandboxAdapter,createDeterministicSandboxTransport}=require('../src/provider-sandbox-adapter');
 
@@ -30,10 +31,9 @@ async function main(){
   const tenantId=requiredEnv('KEEL_WORKER_TENANT_ID');
   const actor={tenant_id:tenantId,principal_id:requiredEnv('KEEL_WORKER_PRINCIPAL_ID'),key_id:requiredEnv('KEEL_WORKER_KEY_ID'),role:'integration'};
   const envelopeId=requiredEnv('KEEL_WORKER_AUTHORITY_ENVELOPE_ID');
-  const secret=requiredEnv('KEEL_PROVIDER_WEBHOOK_SECRET');
-  if(Buffer.byteLength(secret)<32)throw new Error('KEEL_PROVIDER_WEBHOOK_SECRET_must_be_at_least_32_bytes');
-  const keyId=requiredEnv('KEEL_PROVIDER_WEBHOOK_KEY_ID');
-  const adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:createDeterministicSandboxTransport({outcome:process.env.KEEL_SANDBOX_OUTCOME||'accepted'}),keyring:{[keyId]:secret},activeKeyId:keyId});
+  const ephemeralKeyId='sandbox-worker-ephemeral';
+  const ephemeralSecret=crypto.randomBytes(32).toString('hex');
+  const adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:createDeterministicSandboxTransport({outcome:process.env.KEEL_SANDBOX_OUTCOME||'accepted'}),keyring:{[ephemeralKeyId]:ephemeralSecret},activeKeyId:ephemeralKeyId});
   const pool=new Pool({connectionString:requiredEnv('DATABASE_URL'),max:2,connectionTimeoutMillis:10000});
   try{
     const result=await runOnce({pool,tenantId,actor,envelopeId,adapter});
