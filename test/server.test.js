@@ -330,3 +330,21 @@ test('core schema bootstrap is isolated from the web runtime pool', () => {
   assert.match(dbPool.toString(),/KEEL_RUNTIME_DATABASE_URL/);
   assert.match(dbPool.toString(),/runtime_database_role_boundary_failed/);
 });
+
+test('tenant-scoped pool establishes transaction-local RLS context', async () => {
+  const { tenantScopedPool }=require('../server');
+  const calls=[];
+  const client={
+    async query(sql,values){calls.push({sql,values});return {rows:[],rowCount:0};},
+    release(){}
+  };
+  const pool={async connect(){return client;}};
+  const scoped=tenantScopedPool(pool,'123e4567-e89b-42d3-a456-426614174000');
+  await scoped.query('SELECT 1');
+  assert.equal(calls[0].sql,'BEGIN');
+  assert.match(calls[1].sql,/set_config/);
+  assert.equal(calls[1].values[0],'123e4567-e89b-42d3-a456-426614174000');
+  assert.equal(calls[2].sql,'SELECT 1');
+  assert.equal(calls[3].sql,'COMMIT');
+  assert.throws(()=>tenantScopedPool(pool,'not-a-tenant'),/tenant_database_context_invalid/);
+});
