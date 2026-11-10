@@ -201,7 +201,7 @@ async function approvePeriodClose(pool,tenantInput,periodIdInput,requestIdInput,
     const p=await client.query('SELECT book_id,status FROM keel_accounting_periods WHERE tenant_id=$1 AND period_id=$2 FOR UPDATE',[tenant,periodIdValue]);
     if(!p.rowCount)fail('accounting_period_not_found',404);
     if(p.rows[0].status!=='soft_closed')fail('accounting_period_must_be_soft_closed_to_approve_close',409);
-    const r=await client.query('SELECT requested_by_key_id,trial_balance_hash,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
+    const r=await client.query('SELECT requested_by_key_id,requested_by_principal_id,trial_balance_hash,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
     if(!r.rowCount)fail('period_close_request_not_found',404);
     if(r.rows[0].status!=='pending')fail('period_close_request_not_pending',409);
     if(r.rows[0].requested_by_key_id===approvedBy||r.rows[0].requested_by_principal_id===approvedPrincipal)fail('period_close_checker_must_be_independent',403);
@@ -231,7 +231,7 @@ async function rejectPeriodClose(pool,tenantInput,periodIdInput,requestIdInput,r
     const p=await client.query('SELECT status FROM keel_accounting_periods WHERE tenant_id=$1 AND period_id=$2 FOR UPDATE',[tenant,periodIdValue]);
     if(!p.rowCount)fail('accounting_period_not_found',404);
     if(p.rows[0].status!=='soft_closed')fail('accounting_period_must_be_soft_closed_to_reject_close',409);
-    const r=await client.query('SELECT requested_by_key_id,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
+    const r=await client.query('SELECT requested_by_key_id,requested_by_principal_id,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
     if(!r.rowCount)fail('period_close_request_not_found',404);
     if(r.rows[0].status!=='pending')fail('period_close_request_not_pending',409);
     if(r.rows[0].requested_by_key_id===rejectedBy||r.rows[0].requested_by_principal_id===rejectedPrincipal)fail('period_close_checker_must_be_independent',403);
