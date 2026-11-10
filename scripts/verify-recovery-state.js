@@ -6,7 +6,7 @@ async function main(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required for the isolated restore target');
  const pool=new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.PGSSLMODE==='require'?{rejectUnauthorized:true}:undefined});
  try{
-  const accounts=(await pool.query(`SELECT a.account_id,a.normal_side,b.debit_total::text,b.credit_total::text,b.normal_balance_minor::text
+  const accounts=(await client.query(`SELECT a.account_id,a.normal_side,b.debit_total::text,b.credit_total::text,b.normal_balance_minor::text
    FROM keel_ledger_accounts a JOIN keel_ledger_account_balances b USING(tenant_id,account_id) WHERE a.status<>'deleted' ORDER BY a.tenant_id,a.account_id`)).rows;
   const lines=(await pool.query(`SELECT l.account_id,l.side,l.amount_minor::text FROM keel_ledger_lines l JOIN keel_ledger_journals j USING(tenant_id,journal_id) WHERE j.status='posted'`)).rows;
   const outbox=(await pool.query('SELECT status FROM keel_provider_outbox')).rows;
