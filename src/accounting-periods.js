@@ -178,8 +178,8 @@ async function softClosePeriod(pool,tenantInput,periodIdInput){
     return {periodId:periodIdValue,bookId:r.rows[0].book_id,status:'soft_closed'};
   },tenant);
 }
-async function requestPeriodClose(pool,tenantInput,periodIdInput,requestedByInput){
-  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestedBy=required(requestedByInput,'requested_by_key_id');
+async function requestPeriodClose(pool,tenantInput,periodIdInput,requestedByInput,requestedPrincipalInput){
+  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestedBy=required(requestedByInput,'requested_by_key_id'),requestedPrincipal=required(requestedPrincipalInput,'requested_by_principal_id');
   const requestId=crypto.randomUUID();
   return withTransaction(pool,async client=>{
     const p=await client.query('SELECT book_id,status FROM keel_accounting_periods WHERE tenant_id=$1 AND period_id=$2 FOR UPDATE',[tenant,periodIdValue]);
@@ -190,13 +190,13 @@ async function requestPeriodClose(pool,tenantInput,periodIdInput,requestedByInpu
     const snapshot=await trialBalanceWithClient(client,tenant,p.rows[0].book_id,periodIdValue);
     if(!snapshot.balanced)fail('accounting_period_trial_balance_not_balanced',409);
     const snapshotJson=JSON.stringify(snapshot),snapshotHash=crypto.createHash('sha256').update(snapshotJson).digest('hex');
-    await client.query("INSERT INTO keel_accounting_period_close_requests(tenant_id,request_id,period_id,requested_by_key_id,trial_balance_hash,trial_balance_snapshot) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
-      [tenant,requestId,periodIdValue,requestedBy,snapshotHash,snapshotJson]);
-    return {requestId,periodId:periodIdValue,status:'pending',requestedByKeyId:requestedBy,trialBalanceHash:snapshotHash,trialBalance:snapshot};
+    await client.query("INSERT INTO keel_accounting_period_close_requests(tenant_id,request_id,period_id,requested_by_key_id,requested_by_principal_id,trial_balance_hash,trial_balance_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",
+      [tenant,requestId,periodIdValue,requestedBy,requestedPrincipal,snapshotHash,snapshotJson]);
+    return {requestId,periodId:periodIdValue,status:'pending',requestedByKeyId:requestedBy,requestedByPrincipalId:requestedPrincipal,trialBalanceHash:snapshotHash,trialBalance:snapshot};
   },tenant);
 }
-async function approvePeriodClose(pool,tenantInput,periodIdInput,requestIdInput,approvedByInput){
-  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestId=required(requestIdInput,'request_id'),approvedBy=required(approvedByInput,'approved_by_key_id');
+async function approvePeriodClose(pool,tenantInput,periodIdInput,requestIdInput,approvedByInput,approvedPrincipalInput){
+  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestId=required(requestIdInput,'request_id'),approvedBy=required(approvedByInput,'approved_by_key_id'),approvedPrincipal=required(approvedPrincipalInput,'approved_by_principal_id');
   return withTransaction(pool,async client=>{
     const p=await client.query('SELECT book_id,status FROM keel_accounting_periods WHERE tenant_id=$1 AND period_id=$2 FOR UPDATE',[tenant,periodIdValue]);
     if(!p.rowCount)fail('accounting_period_not_found',404);
@@ -204,7 +204,7 @@ async function approvePeriodClose(pool,tenantInput,periodIdInput,requestIdInput,
     const r=await client.query('SELECT requested_by_key_id,trial_balance_hash,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
     if(!r.rowCount)fail('period_close_request_not_found',404);
     if(r.rows[0].status!=='pending')fail('period_close_request_not_pending',409);
-    if(r.rows[0].requested_by_key_id===approvedBy)fail('period_close_checker_must_be_independent',403);
+    if(r.rows[0].requested_by_key_id===approvedBy||r.rows[0].requested_by_principal_id===approvedPrincipal)fail('period_close_checker_must_be_independent',403);
     const drafts=await client.query("SELECT COUNT(*)::int AS count FROM keel_ledger_journals WHERE tenant_id=$1 AND book_id=$2 AND period_id=$3 AND status='draft'",[tenant,p.rows[0].book_id,periodIdValue]);
     if(drafts.rows[0].count>0)fail('accounting_period_has_unposted_journals',409);
     const snapshot=await trialBalanceWithClient(client,tenant,p.rows[0].book_id,periodIdValue);
@@ -216,17 +216,17 @@ async function approvePeriodClose(pool,tenantInput,periodIdInput,requestIdInput,
     }
     const count=await client.query("SELECT COUNT(*)::bigint AS count FROM keel_ledger_journals WHERE tenant_id=$1 AND book_id=$2 AND period_id=$3 AND status='posted'",[tenant,p.rows[0].book_id,periodIdValue]);
     const journalCount=String(count.rows[0].count),closedAt=new Date().toISOString();
-    const closeHash=crypto.createHash('sha256').update(JSON.stringify({tenantId:tenant,periodId:periodIdValue,requestId,trialBalanceHash:snapshotHash,journalCount,closedByKeyId:approvedBy,closedAt})).digest('hex');
-    await client.query("UPDATE keel_accounting_period_close_requests SET status='approved',approved_by_key_id=$3,approved_at=$4::timestamptz,resolved_at=$4::timestamptz WHERE tenant_id=$1 AND request_id=$2",[tenant,requestId,approvedBy,closedAt]);
-    await client.query("INSERT INTO keel_accounting_period_closures(tenant_id,period_id,request_id,close_hash,trial_balance_hash,journal_count,trial_balance_snapshot,closed_at,closed_by_key_id) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::timestamptz,$9)",
-      [tenant,periodIdValue,requestId,closeHash,snapshotHash,journalCount,snapshotJson,closedAt,approvedBy]);
-    await client.query("UPDATE keel_accounting_periods SET status='closed',closed_at=$3::timestamptz,closed_by=$4,close_hash=$5 WHERE tenant_id=$1 AND period_id=$2",
-      [tenant,periodIdValue,closedAt,approvedBy,closeHash]);
-    return {periodId:periodIdValue,requestId,status:'closed',closed:true,closedAt,closedByKeyId:approvedBy,closeHash,trialBalanceHash:snapshotHash,journalCount,trialBalance:snapshot};
+    const closeHash=crypto.createHash('sha256').update(JSON.stringify({tenantId:tenant,periodId:periodIdValue,requestId,trialBalanceHash:snapshotHash,journalCount,closedByKeyId:approvedBy,closedByPrincipalId:approvedPrincipal,closedAt})).digest('hex');
+    await client.query("UPDATE keel_accounting_period_close_requests SET status='approved',approved_by_key_id=$3,approved_by_principal_id=$4,approved_at=$5::timestamptz,resolved_at=$5::timestamptz WHERE tenant_id=$1 AND request_id=$2",[tenant,requestId,approvedBy,approvedPrincipal,closedAt]);
+    await client.query("INSERT INTO keel_accounting_period_closures(tenant_id,period_id,request_id,close_hash,trial_balance_hash,journal_count,trial_balance_snapshot,closed_at,closed_by_key_id,closed_by_principal_id) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::timestamptz,$9,$10)",
+      [tenant,periodIdValue,requestId,closeHash,snapshotHash,journalCount,snapshotJson,closedAt,approvedBy,approvedPrincipal]);
+    await client.query("UPDATE keel_accounting_periods SET status='closed',closed_at=$3::timestamptz,closed_by=$4,close_hash=$5,closed_by_principal_id=$6 WHERE tenant_id=$1 AND period_id=$2",
+      [tenant,periodIdValue,closedAt,approvedBy,closeHash,approvedPrincipal]);
+    return {periodId:periodIdValue,requestId,status:'closed',closed:true,closedAt,closedByKeyId:approvedBy,closedByPrincipalId:approvedPrincipal,closeHash,trialBalanceHash:snapshotHash,journalCount,trialBalance:snapshot};
   },tenant);
 }
-async function rejectPeriodClose(pool,tenantInput,periodIdInput,requestIdInput,rejectedByInput,reasonInput){
-  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestId=required(requestIdInput,'request_id'),rejectedBy=required(rejectedByInput,'rejected_by_key_id'),reason=required(reasonInput,'rejection_reason',500);
+async function rejectPeriodClose(pool,tenantInput,periodIdInput,requestIdInput,rejectedByInput,rejectedPrincipalInput,reasonInput){
+  const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id'),requestId=required(requestIdInput,'request_id'),rejectedBy=required(rejectedByInput,'rejected_by_key_id'),rejectedPrincipal=required(rejectedPrincipalInput,'rejected_by_principal_id'),reason=required(reasonInput,'rejection_reason',500);
   return withTransaction(pool,async client=>{
     const p=await client.query('SELECT status FROM keel_accounting_periods WHERE tenant_id=$1 AND period_id=$2 FOR UPDATE',[tenant,periodIdValue]);
     if(!p.rowCount)fail('accounting_period_not_found',404);
@@ -234,22 +234,22 @@ async function rejectPeriodClose(pool,tenantInput,periodIdInput,requestIdInput,r
     const r=await client.query('SELECT requested_by_key_id,status FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 AND request_id=$3 FOR UPDATE',[tenant,periodIdValue,requestId]);
     if(!r.rowCount)fail('period_close_request_not_found',404);
     if(r.rows[0].status!=='pending')fail('period_close_request_not_pending',409);
-    if(r.rows[0].requested_by_key_id===rejectedBy)fail('period_close_checker_must_be_independent',403);
-    await client.query("UPDATE keel_accounting_period_close_requests SET status='rejected',rejected_by_key_id=$3,rejected_at=NOW(),resolved_at=NOW(),resolution_reason=$4 WHERE tenant_id=$1 AND request_id=$2",[tenant,requestId,rejectedBy,reason]);
-    return {periodId:periodIdValue,requestId,status:'rejected',rejectedByKeyId:rejectedBy};
+    if(r.rows[0].requested_by_key_id===rejectedBy||r.rows[0].requested_by_principal_id===rejectedPrincipal)fail('period_close_checker_must_be_independent',403);
+    await client.query("UPDATE keel_accounting_period_close_requests SET status='rejected',rejected_by_key_id=$3,rejected_by_principal_id=$4,rejected_at=NOW(),resolved_at=NOW(),resolution_reason=$5 WHERE tenant_id=$1 AND request_id=$2",[tenant,requestId,rejectedBy,rejectedPrincipal,reason]);
+    return {periodId:periodIdValue,requestId,status:'rejected',rejectedByKeyId:rejectedBy,rejectedByPrincipalId:rejectedPrincipal};
   },tenant);
 }
 async function listPeriodCloseRequests(pool,tenantInput,periodIdInput){
   const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id');
   return withTransaction(pool,async client=>{
-    const r=await client.query('SELECT request_id,period_id,requested_by_key_id,trial_balance_hash,status,created_at,approved_by_key_id,approved_at,rejected_by_key_id,rejected_at,resolution_reason,resolved_at FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 ORDER BY created_at DESC',[tenant,periodIdValue]);
+    const r=await client.query('SELECT request_id,period_id,requested_by_key_id,requested_by_principal_id,trial_balance_hash,status,created_at,approved_by_key_id,approved_by_principal_id,approved_at,rejected_by_key_id,rejected_by_principal_id,rejected_at,resolution_reason,resolved_at FROM keel_accounting_period_close_requests WHERE tenant_id=$1 AND period_id=$2 ORDER BY created_at DESC',[tenant,periodIdValue]);
     return r.rows;
   },tenant);
 }
 async function getPeriodClosure(pool,tenantInput,periodIdInput){
   const tenant=tenantId(tenantInput),periodIdValue=required(periodIdInput,'period_id');
   return withTransaction(pool,async client=>{
-    const r=await client.query('SELECT period_id,request_id,close_hash,trial_balance_hash,journal_count,trial_balance_snapshot,closed_at,closed_by_key_id FROM keel_accounting_period_closures WHERE tenant_id=$1 AND period_id=$2',[tenant,periodIdValue]);
+    const r=await client.query('SELECT period_id,request_id,close_hash,trial_balance_hash,journal_count,trial_balance_snapshot,closed_at,closed_by_key_id,closed_by_principal_id FROM keel_accounting_period_closures WHERE tenant_id=$1 AND period_id=$2',[tenant,periodIdValue]);
     return r.rows[0]||null;
   },tenant);
 }
