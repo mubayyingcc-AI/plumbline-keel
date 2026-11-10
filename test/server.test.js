@@ -285,3 +285,23 @@ test('tenant accounting APIs require an authenticated tenant key', async () => {
   const create=await fetch(base+'/api/ledger/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
   assert.equal(create.status,401);
 });
+
+test('dual-control period close endpoints are tenant-authenticated', async () => {
+  const paths=[
+    '/api/ledger/periods/p-1/close-requests',
+    '/api/ledger/periods/p-1/closure'
+  ];
+  for(const path of paths){
+    const response=await fetch(base+path);
+    assert.equal(response.status,401);
+  }
+  for(const path of [
+    '/api/ledger/periods/p-1/soft-close',
+    '/api/ledger/periods/p-1/close-requests',
+    '/api/ledger/periods/p-1/close-requests/r-1/approve',
+    '/api/ledger/periods/p-1/close-requests/r-1/reject'
+  ]){
+    const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    assert.equal(response.status,401);
+  }
+});
