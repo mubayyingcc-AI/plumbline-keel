@@ -74,6 +74,7 @@ AS $function$
    RETURNING 1
 $function$;
 
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
 ALTER FUNCTION public.keel_authenticate_tenant_key(TEXT) OWNER TO keel_auth_owner;
 ALTER FUNCTION public.keel_touch_tenant_key(TEXT,UUID) OWNER TO keel_auth_owner;
 REVOKE ALL ON FUNCTION public.keel_authenticate_tenant_key(TEXT) FROM PUBLIC;
