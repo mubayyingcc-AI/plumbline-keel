@@ -78,9 +78,9 @@ function reconcile({ expectedTransfers, providerEvents, now = new Date().toISOSt
     }
     const reasons = [];
     if (matches.length > 1) reasons.push('MULTIPLE_PROVIDER_EVENTS_FOR_EXPECTED_TRANSFER');
+    matches.forEach(match=>consumed.add(match.index));
     const chosen = matches[0];
     const event = chosen.event;
-    consumed.add(chosen.index);
     if (eventIdCounts.get(event.eventId)>1) reasons.push('DUPLICATE_PROVIDER_EVENT_ID');
     if (idempotencyCounts.get(event.idempotencyKey)>1) reasons.push('DUPLICATE_IDEMPOTENCY_KEY');
     if (event.providerId!==item.providerId) reasons.push('PROVIDER_MISMATCH');
@@ -89,6 +89,7 @@ function reconcile({ expectedTransfers, providerEvents, now = new Date().toISOSt
     if (occurredAt>nowMs) reasons.push('FUTURE_PROVIDER_EVENT');
     if (occurredAt>timestamp(item.dueBy,'dueBy')) reasons.push('LATE_PROVIDER_EVENT');
     const actual = BigInt(event.amountMinor), expectedAmount = BigInt(item.amountMinor);
+    if (event.status==='failed' || event.status==='reversed') reasons.push('PROVIDER_EVENT_NOT_SETTLED');
     if (actual>expectedAmount) reasons.push('AMOUNT_OVERSTATEMENT');
     if (reasons.length) {
       results.push({transferId:item.transferId,status:'EXCEPTION',eventId:event.eventId,reasons});
@@ -106,8 +107,9 @@ function reconcile({ expectedTransfers, providerEvents, now = new Date().toISOSt
   }
 
   events.forEach((event,index)=>{
-    if (!consumed.has(index) && !expectedIds.has(event.transferId)) {
-      results.push({transferId:event.transferId,status:'EXCEPTION',eventId:event.eventId,reasons:['UNEXPECTED_PROVIDER_EVENT']});
+    if (!consumed.has(index)) {
+      const target=expected.find(item=>item.transferId===event.transferId);
+      results.push({transferId:event.transferId,status:'EXCEPTION',eventId:event.eventId,reasons:[target?'UNEXPECTED_PROVIDER_EVENT_TYPE':'UNEXPECTED_PROVIDER_EVENT']});
     }
   });
 
