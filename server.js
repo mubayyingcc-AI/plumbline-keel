@@ -36,6 +36,11 @@ const products = [
   { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'Architecture + schema foundation', description:'Trace remittance origin, funding, FX, payout, wallet credit and card spend as distinct provider events, with reconciliation and recovery evidence.', outputs:['Canonical transfer identity','Provider event ingestion model','Wallet availability controls','Discrepancy and recovery model'], integration:'Provider-neutral schema foundation; no MTO or wallet adapter connected' }
 ];
 
+const publicSandboxScenarios = [
+  { id:'KFS-001', version:'1.0.0', name:'Fresh evidence and policy evaluation', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Fresh synthetic evidence only; no external institution or financial system is queried.' },
+  { id:'KFS-002', version:'1.0.0', name:'Stale evidence must not pass cleanly', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Stale synthetic evidence only; no external institution or financial system is queried.' }
+];
+
 let poolPromise;
 async function dbPool() {
   if (!process.env.DATABASE_URL) return null;
@@ -854,6 +859,12 @@ const server = http.createServer(async (req,res) => {
         return send(res,result.status==='expired'?409:(result.replay?200:201),{ok:result.status!=='expired',...result});
       }
       return send(res,404,{error:'ledger_route_not_found'});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/scenarios') {
+      return send(res,200,{
+        scenarios:publicSandboxScenarios,
+        notice:'Only scenarios marked EXECUTABLE are runnable in the public synthetic sandbox. Other financial test families remain outside this endpoint until their actual engines are integrated.'
+      });
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
