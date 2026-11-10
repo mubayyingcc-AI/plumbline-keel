@@ -55,3 +55,8 @@ The initial bootstrap owner key has no named principal and therefore cannot post
 
 ## Explicit limitations
 This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. Provider dispatch worker enforcement must be added before enabling live external execution.
+
+
+## Mainline provider authority controls
+
+The mainline release candidate now requires a named delegated principal and separate, exact resource-scoped authority for provider instruction enqueue, dispatch, expired-lease recovery and dispatch outcome recording. The outbox lease owner must equal the delegated principal ID. Each authority decision is persisted as an Action Proof Object and linked to the ledger event chain in the same transaction as the corresponding state change. Missing context, empty resource grants, unsupported amount/currency and cross-principal worker claims fail closed. Provider callback processing remains separately gated by exact raw-body HMAC verification and provider identity matching.
