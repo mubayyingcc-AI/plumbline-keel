@@ -1094,8 +1094,8 @@ const server = http.createServer(async (req,res) => {
         if(rateLimited(req,'/api/ledger/journals'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
         const body=await readBody(req);
         if(!body.bookId||!body.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
-        if(actor.role==='integration'&&!actor.principal_id)return send(res,403,{error:'named_agent_principal_required'});
-        const authorityContext=actor.principal_id?{actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId}:null;
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
         const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body,authorityContext);
         return send(res,result.replay?200:201,{ok:true,...result,notice:'Period-bound ledger posting only; this does not initiate or confirm an external payment or settlement.'});
       }
@@ -1103,8 +1103,8 @@ const server = http.createServer(async (req,res) => {
         if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_reservation_role_required'});
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         if(rateLimited(req,'/api/ledger/reservations'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
-        const body=await readBody(req);if(actor.role==='integration'&&!actor.principal_id)return send(res,403,{error:'named_agent_principal_required'});
-        const authorityContext=actor.principal_id?{actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId}:null;
+        const body=await readBody(req);if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
         const result=await ledgerPosting.createReservation(pool,actor.tenant_id,body,authorityContext);
         return send(res,201,{ok:true,...result});
       }
@@ -1114,8 +1114,8 @@ const server = http.createServer(async (req,res) => {
         if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         const reservationId=decodeURIComponent(reservationMatch[1]),body=await readBody(req);
         if(reservationMatch[2]==='release'){
-          if(actor.role==='integration'&&!actor.principal_id)return send(res,403,{error:'named_agent_principal_required'});
-          const authorityContext=actor.principal_id?{actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId}:null;
+          if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_financial_execution'});
+          const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
           const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,reservationId,body.reason,authorityContext);
           return send(res,200,{ok:true,...result});
         }
