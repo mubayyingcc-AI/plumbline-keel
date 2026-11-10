@@ -18,7 +18,8 @@ function compareLedgerProjection({accounts,lines}){
    actual:{debitTotalMinor:actualDebit.toString(),creditTotalMinor:actualCredit.toString(),balanceMinor:actualBalance.toString()}
   });
  }
- if(globalDebit!==globalCredit)findings.push({code:'TRIAL_BALANCE_OUT_OF_BALANCE',debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString()});\n return {valid:findings.length===0,accountCount:accounts.length,postedLineCount:lines.length,trialBalance:{debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString(),balanced:globalDebit===globalCredit},findings};
+ if(globalDebit!==globalCredit)findings.push({code:'TRIAL_BALANCE_OUT_OF_BALANCE',debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString()});
+ return {valid:findings.length===0,accountCount:accounts.length,postedLineCount:lines.length,trialBalance:{debitTotalMinor:globalDebit.toString(),creditTotalMinor:globalCredit.toString(),balanced:globalDebit===globalCredit},findings};
 }
 function assessRecoveryState({ledger,providerOutbox=[],providerCases=[]}){
  const warnings=[];
