@@ -18,11 +18,13 @@ const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
+const paymentAuthority = require('./src/payment-authority');
+const cardControl = require('./src/card-control');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20 };
 const rateBuckets = new Map();
 
 const products = [
@@ -40,6 +42,17 @@ const publicSandboxScenarios = [
   { id:'KFS-001', version:'1.0.0', name:'Fresh evidence and policy evaluation', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Fresh synthetic evidence only; no external institution or financial system is queried.' },
   { id:'KFS-002', version:'1.0.0', name:'Stale evidence must not pass cleanly', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Stale synthetic evidence only; no external institution or financial system is queried.' }
 ];
+
+const publicPaymentAuthorityScenarios = [
+  { id:'PA-001', name:'Within mandate and verified capacity', expectedDecision:'ALLOW_WITHIN_MANDATE' },
+  { id:'PA-002', name:'Human approval threshold exceeded', expectedDecision:'HUMAN_APPROVAL_REQUIRED' },
+  { id:'PA-003', name:'Stale funding availability', expectedDecision:'HOLD' },
+  { id:'PA-004', name:'Payee outside mandate scope', expectedDecision:'DENY' }
+];
+const publicHumanCardScenarios = [
+  { id:'HC-001', name:'Sandbox profile with unverified funding boundary', availabilityExpected:'HOLD' }
+];
+
 
 let poolPromise;
 async function dbPool() {
@@ -284,6 +297,9 @@ const apiDescription = {
     '/api/health':{get:{summary:'Service and database readiness'}},
     '/api/products':{get:{summary:'Current product catalogue'}},
     '/api/sandbox/scenarios':{get:{summary:'Executable public synthetic sandbox scenarios'}},
+    '/api/sandbox/payment-authority/scenarios':{get:{summary:'Executable synthetic Payment Authority scenarios'}},
+    '/api/sandbox/payment-authority/runs':{post:{summary:'Evaluate a synthetic payment intent against a human-issued mandate; no execution'}},
+    '/api/sandbox/human-card/runs':{post:{summary:'Run a synthetic Human Card profile and unverified funding-boundary test'}},
     '/api/ledger/status':{get:{summary:'Ledger migration, runtime-role and row-level security readiness'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
@@ -920,6 +936,34 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && route === '/api/demo') {
       const payload = demoPayload();
       return send(res,200,{synthetic:true,result:evaluateAction(payload)});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/payment-authority/scenarios') {
+      return send(res,200,{scenarios:publicPaymentAuthorityScenarios,notice:'Deterministic synthetic mandate tests only. No payment instruction, reservation, debit or settlement is created.'});
+    }
+    if (req.method === 'POST' && route === '/api/sandbox/payment-authority/runs') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const body=await readBody(req),scenario=publicPaymentAuthorityScenarios.find(x=>x.id===body.scenarioId);
+      if(!scenario)return send(res,400,{error:'sandbox_scenario_invalid'});
+      const tenantId='tenant-public-synthetic',now=new Date().toISOString();
+      const mandate={tenantId,mandateId:'mandate-public-synthetic-001',version:1,status:'active',granteeId:'agent-public-synthetic',validFrom:'2026-01-01T00:00:00.000Z',validUntil:'2027-01-01T00:00:00.000Z',currency:'USD',channels:['card'],purposes:['supplier'],payeeIds:['payee-public-synthetic-001'],merchantIds:['merchant-public-synthetic-001'],fundingSourceIds:['funding-public-synthetic-001'],maxSingleMinor:'500000',periodLimitMinor:'1000000'};
+      const intent={id:'intent-'+scenario.id,agentId:'agent-public-synthetic',amountMinor:scenario.id==='PA-002'?'30000':'10000',currency:'USD',purpose:'supplier',payeeId:scenario.id==='PA-004'?'payee-out-of-scope':'payee-public-synthetic-001',merchantId:'merchant-public-synthetic-001',channel:'card',fundingSourceId:'funding-public-synthetic-001',periodCommittedMinor:'10000'};
+      const availability={currency:'USD',status:'reconciled',fresh:scenario.id!=='PA-003',restricted:false,eligibleBalanceMinor:'100000',restrictedMinor:'5000',obligationsReserveMinor:'10000',policyReserveMinor:'5000',activeReservationsMinor:'10000',providerHoldsMinor:'0'};
+      const policy={policyId:'PA-PUBLIC-001',version:'1.0.0',status:'active',humanApprovalAboveMinor:'25000'};
+      try{
+        const result=paymentAuthority.evaluatePayment({tenantId,mandate,intent,availability,policy,now});
+        return send(res,200,{ok:true,synthetic:true,scenario,expectedDecision:scenario.expectedDecision,passed:result.decision===scenario.expectedDecision,result,execution:'DISABLED',boundary:'Evaluation only. No reservation, approval, provider instruction, debit or settlement occurred.'});
+      }catch(error){return send(res,400,{error:'payment_authority_scenario_invalid',message:error.message});}
+    }
+    if (req.method === 'POST' && route === '/api/sandbox/human-card/runs') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const body=await readBody(req);
+      if(body.scenarioId!=='HC-001')return send(res,400,{error:'sandbox_scenario_invalid'});
+      const now=new Date(),card=cardControl.createCardProfile({cardId:'keel-sandbox-card-0001',principalId:'principal-public-synthetic',programmeId:'keel-public-sandbox',mandateId:'mandate-public-synthetic-001',mandateVersion:1,currency:'USD',channel:'virtual',issuanceMode:'sandbox'});
+      const position={currency:'USD',verificationClass:'self_asserted',signatureVerified:false,reconciliationState:'unreconciled',observedAt:new Date(now.getTime()-60000).toISOString(),expiresAt:new Date(now.getTime()+300000).toISOString(),eligibleBalanceMinor:'100000',restrictedMinor:'0',obligationsMinor:'0',policyReserveMinor:'0',providerHoldsMinor:'0'};
+      const fundingAvailability=cardControl.calculateAvailable(position,[],now);
+      return send(res,200,{ok:true,synthetic:true,scenario:publicHumanCardScenarios[0],card,fundingAvailability,execution:'DISABLED',boundary:'Synthetic profile only. No issuer, PAN, CVV, payment token, real funds or card issuance.'});
     }
     if (req.method === 'POST' && route === '/api/sandbox/runs') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
