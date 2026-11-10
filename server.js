@@ -437,6 +437,7 @@ const server = http.createServer(async (req,res) => {
       });
     }
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
+    if (route.startsWith('/api/consumer/') || route.startsWith('/api/partners/card-')) return send(res,503,{error:'consumer_card_tenant_isolation_not_enabled',message:'Consumer identity and card services are temporarily disabled until tenant-bound ownership and provider authority are enforced.'});
     if (await consumerCardSecurityApi.handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser})) return;
     if (await consumerIdentityApi.handle({req,res,route,send,dbPool,crypto,readBody,sameOriginIfBrowser})) return;
     if (req.method === 'POST' && route === '/api/human-card/pairing/challenge') {
