@@ -55,3 +55,8 @@ The initial bootstrap owner key has no named principal and therefore cannot post
 
 ## Explicit limitations
 This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. Provider dispatch worker enforcement must be added before enabling live external execution.
+
+
+## Provider instruction and dispatch authority
+
+KAAA distinguishes authority to enqueue a provider instruction from authority to claim it for dispatch. Enqueue binds the journal, provider, aggregate, instruction type, idempotency key, exact amount and currency. Dispatch requires a named worker principal, an explicit provider-scoped dispatch envelope and an exact outbox payload fingerprint before any lease/housekeeping state transition. Missing authority context fails closed. This code does not itself enable a live provider integration.
