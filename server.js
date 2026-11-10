@@ -20,11 +20,12 @@ const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
 const paymentAuthority = require('./src/payment-authority');
 const cardControl = require('./src/card-control');
+const reconciliationEngine = require('./src/reconciliation-engine');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20 };
 const rateBuckets = new Map();
 
 const products = [
@@ -35,7 +36,7 @@ const products = [
   { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' },
   { id:'payment-authority', name:'Keel Payment Authority & Agent Control', category:'Mandates and payment lifecycle', stage:'Foundation · non-executing', description:'Evaluate human-issued mandates, purpose and payee scope, spend limits and evidence-backed availability before any authorised provider workflow.', outputs:['Versioned mandates','Spend envelopes','Human approval boundary','Availability-aware decision','Lifecycle and recovery model'], integration:'Internal deterministic evaluator; persistent API integration pending' },
   { id:'card-control', name:'Keel Human Card & Institutional Card Control', category:'Consumer identity, card authority and spend control', stage:'Consumer identity foundation · partner issuance pending', description:'Build a physical-first human card journey with verified consumer identity, partner card-order requests, delivery proof, secure-element pairing, independent recovery and issuer-gated virtual activation.', outputs:['Consumer identity and short-lived session foundation','Physical card order request lifecycle','Delivery and hardware pairing gates','Recovery and issuer-eligibility controls'], integration:'PostgreSQL schema and signed provider-event API; no identity provider, manufacturer or issuer connected' },
-  { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'Architecture + schema foundation', description:'Trace remittance origin, funding, FX, payout, wallet credit and card spend as distinct provider events, with reconciliation and recovery evidence.', outputs:['Canonical transfer identity','Provider event ingestion model','Wallet availability controls','Discrepancy and recovery model'], integration:'Provider-neutral schema foundation; no MTO or wallet adapter connected' }
+  { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'POC · synthetic reconciliation only', description:'Compare expected transfer records with declared provider events, preserving exact amounts, event identity, duplicate detection, partial payouts, missing events and late arrivals.', outputs:['Canonical transfer matching','Idempotency and duplicate detection','Partial and late-event exceptions','Provider evidence boundary'], integration:'Synthetic reconciliation API; no MTO, bank, wallet or issuer adapter connected' }
 ];
 
 const publicSandboxScenarios = [
@@ -52,6 +53,16 @@ const publicPaymentAuthorityScenarios = [
 const publicHumanCardScenarios = [
   { id:'HC-001', name:'Sandbox profile with unverified funding boundary', availabilityExpected:'HOLD' }
 ];
+
+const publicReconciliationScenarios = [
+  { id:'REC-001', name:'Exact provider payout match', expectedStatus:'MATCHED' },
+  { id:'REC-002', name:'Duplicate provider idempotency key', expectedStatus:'EXCEPTIONS' },
+  { id:'REC-003', name:'Provider amount overstatement', expectedStatus:'EXCEPTIONS' },
+  { id:'REC-004', name:'Missing provider event', expectedStatus:'INCOMPLETE' },
+  { id:'REC-005', name:'Partial payout', expectedStatus:'INCOMPLETE' },
+  { id:'REC-006', name:'Late provider event', expectedStatus:'EXCEPTIONS' }
+];
+
 
 
 let poolPromise;
@@ -303,6 +314,8 @@ const apiDescription = {
     '/api/sandbox/human-card/runs':{post:{summary:'Run a synthetic Human Card profile and unverified funding-boundary test'}},
     '/api/sandbox/currency/instruments':{get:{summary:'List global currency and service-credit precision references'}},
     '/api/sandbox/currency/precision':{post:{summary:'Validate exact decimal-to-atomic-unit precision without transferring value'}},
+    '/api/sandbox/reconciliation/scenarios':{get:{summary:'Executable synthetic provider-event reconciliation scenarios'}},
+    '/api/sandbox/reconciliation/runs':{post:{summary:'Reconcile declared synthetic provider events against expected transfer records'}},
     '/api/ledger/status':{get:{summary:'Ledger migration, runtime-role and row-level security readiness'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
@@ -942,6 +955,28 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'GET' && route === '/api/sandbox/payment-authority/scenarios') {
       return send(res,200,{scenarios:publicPaymentAuthorityScenarios,notice:'Deterministic synthetic mandate tests only. No payment instruction, reservation, debit or settlement is created.'});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/reconciliation/scenarios') {
+      return send(res,200,{scenarios:publicReconciliationScenarios,notice:'Synthetic event matching only. No bank, MTO, wallet or issuer feed is connected.'});
+    }
+    if (req.method === 'POST' && route === '/api/sandbox/reconciliation/runs') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const body=await readBody(req),scenario=publicReconciliationScenarios.find(x=>x.id===body.scenarioId);
+      if(!scenario)return send(res,400,{error:'reconciliation_scenario_invalid'});
+      const transferId='transfer-'+scenario.id;
+      const expected={transferId,providerId:'mto-synthetic',eventType:'payout_settled',currency:'NGN',amountMinor:'100000',dueBy:'2026-11-10T12:00:00.000Z'};
+      const baseEvent={eventId:'event-'+scenario.id,idempotencyKey:'idempotency-'+scenario.id,transferId,providerId:'mto-synthetic',eventType:'payout_settled',currency:'NGN',amountMinor:'100000',status:'settled',occurredAt:'2026-11-10T11:59:00.000Z'};
+      let providerEvents=[baseEvent];
+      if(scenario.id==='REC-002')providerEvents=[baseEvent,{...baseEvent,eventId:'event-'+scenario.id+'-duplicate'}];
+      if(scenario.id==='REC-003')providerEvents=[{...baseEvent,amountMinor:'108000'}];
+      if(scenario.id==='REC-004')providerEvents=[];
+      if(scenario.id==='REC-005')providerEvents=[{...baseEvent,amountMinor:'40000'}];
+      if(scenario.id==='REC-006')providerEvents=[{...baseEvent,occurredAt:'2026-11-10T12:05:00.000Z'}];
+      try{
+        const result=reconciliationEngine.reconcile({expectedTransfers:[expected],providerEvents,now:'2026-11-10T13:00:00.000Z'});
+        return send(res,200,{ok:true,synthetic:true,providerConnected:false,scenario,expectedStatus:scenario.expectedStatus,passed:result.status===scenario.expectedStatus,result,execution:'DISABLED'});
+      }catch(error){return send(res,400,{error:'reconciliation_scenario_invalid',message:error.message});}
     }
     if (req.method === 'GET' && route === '/api/sandbox/currency/instruments') {
       return send(res,200,{instruments:currencyEngine.INSTRUMENTS,execution:'DISABLED',notice:'Reference precision only. No FX conversion, transfer, redemption or settlement is performed.'});
