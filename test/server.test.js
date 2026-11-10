@@ -207,3 +207,14 @@ test('Human Card sandbox profile contains no payment credentials and unverified 
   assert.equal(data.fundingAvailability.status,'HOLD');
   assert.equal(data.execution,'DISABLED');
 });
+
+test('Payment Authority and Human Card scenario catalogues are backend supplied', async () => {
+  const pa = await fetch(base + '/api/sandbox/payment-authority/scenarios');
+  const paData = await pa.json();
+  assert.equal(pa.status,200);
+  assert.deepEqual(paData.scenarios.map(x=>x.id),['PA-001','PA-002','PA-003','PA-004']);
+  const hc = await fetch(base + '/api/sandbox/human-card/scenarios');
+  const hcData = await hc.json();
+  assert.equal(hc.status,200);
+  assert.deepEqual(hcData.scenarios.map(x=>x.id),['HC-001']);
+});
