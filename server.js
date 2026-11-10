@@ -26,7 +26,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10 };
 const rateBuckets = new Map();
 
 const products = [
@@ -324,6 +324,10 @@ const apiDescription = {
     '/api/ledger/periods':{get:{summary:'List accounting periods'},post:{summary:'Create a planned accounting period'}},
     '/api/ledger/periods/{periodId}/open':{post:{summary:'Open a planned accounting period'}},
     '/api/ledger/trial-balance':{get:{summary:'Calculate opening, movement and closing trial balance by currency'}},
+    '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
+    '/api/ledger/journals':{post:{summary:'Post an idempotent balanced journal bound to an open accounting period'}},
+    '/api/ledger/reservations':{post:{summary:'Create a tenant-scoped funds reservation'}},
+    '/api/ledger/events/verify':{get:{summary:'Verify the append-only ledger event chain'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
@@ -902,6 +906,112 @@ const server = http.createServer(async (req,res) => {
         boundary:'Double-entry ledger, book and period schema with tenant RLS only. Accounting close/reopen approvals, provider reconciliation persistence and external settlement remain separate capabilities.'
       });
     }
+    if (route.startsWith('/api/ledger/')) {
+      const actor=await authenticateTenant(req);
+      if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      const pool=await dbPool();
+      if(!pool)return send(res,503,{error:'ledger_storage_unavailable'});
+      if(req.method==='GET'&&route==='/api/ledger/books'){
+        const books=await accountingPeriods.listBooks(pool,actor.tenant_id);
+        return send(res,200,{count:books.length,books});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/books'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/books'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const book=await accountingPeriods.createBook(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,book});
+      }
+      const bookAccountsMatch=route.match(/^\/api\/ledger\/books\/([^/]+)\/accounts$/);
+      if(bookAccountsMatch&&req.method==='GET'){
+        const accounts=await accountingPeriods.listBookAccounts(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]));
+        return send(res,200,{count:accounts.length,accounts});
+      }
+      if(bookAccountsMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_book_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        const body=await readBody(req);
+        const mapping=await accountingPeriods.mapAccount(pool,actor.tenant_id,decodeURIComponent(bookAccountsMatch[1]),body.accountId);
+        return send(res,201,{ok:true,mapping});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/periods'){
+        const periods=await accountingPeriods.listPeriods(pool,actor.tenant_id,url.searchParams.get('bookId'));
+        return send(res,200,{count:periods.length,periods});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/periods'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/periods'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const period=await accountingPeriods.createPeriod(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,period});
+      }
+      const openPeriodMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/open$/);
+      if(openPeriodMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        const result=await accountingPeriods.openPeriod(pool,actor.tenant_id,decodeURIComponent(openPeriodMatch[1]));
+        return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/trial-balance'){
+        const bookId=url.searchParams.get('bookId'),periodId=url.searchParams.get('periodId');
+        if(!bookId||!periodId)return send(res,400,{error:'book_id_and_period_id_required'});
+        const result=await accountingPeriods.trialBalance(pool,actor.tenant_id,bookId,periodId);
+        return send(res,result.balanced?200:409,{ok:result.balanced,trialBalance:result});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/accounts'){
+        const accounts=await ledgerPosting.listAccounts(pool,actor.tenant_id);
+        return send(res,200,{count:accounts.length,accounts});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/accounts'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'ledger_account_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        const account=await ledgerPosting.createAccount(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,account});
+      }
+      const accountMatch=route.match(/^\/api\/ledger\/accounts\/([^/]+)\/(balance|verify)$/);
+      if(accountMatch&&req.method==='GET'){
+        const accountId=decodeURIComponent(accountMatch[1]);
+        const result=accountMatch[2]==='balance'
+          ? await ledgerPosting.getAccountBalance(pool,actor.tenant_id,accountId)
+          : await ledgerPosting.verifyAccountProjection(pool,actor.tenant_id,accountId);
+        return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/journals'){
+        if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_posting_role_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/journals'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const body=await readBody(req);
+        if(!body.bookId||!body.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
+        const result=await ledgerPosting.postJournal(pool,actor.tenant_id,body);
+        return send(res,result.replay?200:201,{ok:true,...result,notice:'Period-bound ledger posting only; this does not initiate or confirm an external payment or settlement.'});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/reservations'){
+        if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_reservation_role_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/reservations'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const result=await ledgerPosting.createReservation(pool,actor.tenant_id,await readBody(req));
+        return send(res,201,{ok:true,...result});
+      }
+      const reservationMatch=route.match(/^\/api\/ledger\/reservations\/([^/]+)\/(release|consume)$/);
+      if(reservationMatch&&req.method==='POST'){
+        if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_reservation_role_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        const reservationId=decodeURIComponent(reservationMatch[1]),body=await readBody(req);
+        if(reservationMatch[2]==='release'){
+          const result=await ledgerPosting.releaseReservation(pool,actor.tenant_id,reservationId,body.reason);
+          return send(res,200,{ok:true,...result});
+        }
+        if(!body.journal)return send(res,400,{error:'consumption_journal_required'});
+        if(!body.journal.bookId||!body.journal.periodId)return send(res,400,{error:'accounting_book_and_open_period_required'});
+        const result=await ledgerPosting.consumeReservation(pool,actor.tenant_id,reservationId,body.journal);
+        return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='GET'&&route==='/api/ledger/events/verify'){
+        const result=await ledgerPosting.verifyLedgerEventChain(pool,actor.tenant_id);
+        return send(res,result.matches?200:409,{ok:result.matches,...result});
+      }
+      return send(res,404,{error:'ledger_endpoint_not_found'});
+    }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
     }
@@ -979,6 +1089,9 @@ const server = http.createServer(async (req,res) => {
       const position={currency:'USD',verificationClass:'self_asserted',signatureVerified:false,reconciliationState:'unreconciled',observedAt:new Date(now.getTime()-60000).toISOString(),expiresAt:new Date(now.getTime()+300000).toISOString(),eligibleBalanceMinor:'100000',restrictedMinor:'0',obligationsMinor:'0',policyReserveMinor:'0',providerHoldsMinor:'0'};
       const fundingAvailability=cardControl.calculateAvailable(position,[],now);
       return send(res,200,{ok:true,synthetic:true,scenario:publicHumanCardScenarios[0],card,fundingAvailability,execution:'DISABLED',boundary:'Synthetic profile only. No issuer, PAN, CVV, payment token, real funds or card issuance.'});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/scenarios') {
+      return send(res,200,{scenarios:publicSandboxScenarios,notice:'Only scenarios with an executable backend evaluator are listed. Other catalogue scenarios remain not tested.'});
     }
     if (req.method === 'POST' && route === '/api/sandbox/runs') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
