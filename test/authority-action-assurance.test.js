@@ -13,3 +13,5 @@ test('self delegation denied',()=>assert.equal(evaluateAction({envelope:{...enve
 
 test('toxic capabilities split across grants are still detected',()=>assert.equal(detectConsequenceConflicts([{actorId:'agent-1',resourceId:'acct-1',capabilities:['read_beneficiaries']},{actorId:'agent-1',resourceId:'acct-1',capabilities:['initiate_payment']}]).length,1));
 test('invalid delegated amount cap fails closed',()=>assert.equal(evaluateAction({envelope:{...envelope,maxAmountMinor:'not-a-number'},actorId:'agent-1',tenantId,action:'initiate',now}).outcome,'DENY'));
+
+test('provider enqueue dispatch recovery and outcome require explicit authority scopes',()=>{const {ACTIONS}=require('../src/authority-persistence');for(const action of ['provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired','provider:instruction:outcome'])assert.equal(ACTIONS.has(action),true);assert.equal(ACTIONS.has('*'),false);});
