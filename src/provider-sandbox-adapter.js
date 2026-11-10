@@ -1,5 +1,6 @@
 'use strict';
-const crypto=require('node:crypto');const {verifyHmacSha256}=require('./provider-lifecycle');\nconst {canonical}=require('./authority-chain');
+const crypto=require('node:crypto');const {verifyHmacSha256}=require('./provider-lifecycle');
+const {canonical}=require('./authority-chain');
 function fail(code,status=400){const e=new Error(code);e.code=code;e.status=status;throw e;}
 class ProviderSandboxAdapter{
  constructor({providerId='keel-sandbox-bank',transport,keyring,activeKeyId}={}){
