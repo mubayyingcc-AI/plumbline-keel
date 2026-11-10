@@ -108,6 +108,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PGDATA: /var/lib/postgresql/16/main
+      PGCONF: /etc/postgresql/16/main/postgresql.conf
       PGUSER: postgres
       PGHOST: 127.0.0.1
       PGPORT: "5432"
@@ -142,5 +143,5 @@ jobs:
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
-          sudo --preserve-env=PGDATA,PGUSER,PGHOST,PGPORT,PGPASSWORD,PGBACKREST_REPO1_S3_BUCKET,PGBACKREST_REPO1_S3_ENDPOINT,PGBACKREST_REPO1_S3_REGION,PGBACKREST_REPO1_S3_KEY,PGBACKREST_REPO1_S3_KEY_SECRET,PATH bash scripts/ci-pgbackrest-pitr.sh
+          sudo --preserve-env=PGDATA,PGCONF,PGUSER,PGHOST,PGPORT,PGPASSWORD,PGBACKREST_REPO1_S3_BUCKET,PGBACKREST_REPO1_S3_ENDPOINT,PGBACKREST_REPO1_S3_REGION,PGBACKREST_REPO1_S3_KEY,PGBACKREST_REPO1_S3_KEY_SECRET,PATH bash scripts/ci-pgbackrest-pitr.sh
           echo "S3-backed PITR restore-point assertions passed." >> "$GITHUB_STEP_SUMMARY"
