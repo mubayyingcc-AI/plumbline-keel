@@ -139,10 +139,14 @@ jobs:
         run: |
           aws configure set default.s3.addressing_style path
           docker run -d --name keel-s3-test -p 8333:8333 chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
-          for attempt in $(seq 1 60); do
-            if aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups >/dev/null 2>&1; then break; fi
+          ready=false
+          for attempt in $(seq 1 30); do
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)"
+            if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
+          [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
+          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
           aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
