@@ -10,8 +10,8 @@ All fixtures are synthetic unless a private institution workspace explicitly dec
 | KFS-004 | Ledger balancing | Multi-line journal with balanced debits/credits per currency | Balanced journal posts atomically; imbalance rejected | Backend PostgreSQL integration tests pass; migrations 012/013 applied to staging PostgreSQL 18; no public journal runner yet |
 | KFS-005 | Ledger idempotency | Replay same request/idempotency key | Exactly one logical posting | Backend PostgreSQL integration tests pass; public sandbox runner pending |
 | KFS-006 | Ledger concurrency | Concurrent reservations/postings on same account | No overspend; bounded retry; deterministic final state | Backend PostgreSQL integration tests pass; public sandbox runner pending |
-| KFS-007 | Accounting period | Attempt posting to closed period and controlled backdate | Rejected or routed to approved adjustment policy | Not tested — period engine and migration pending |
-| KFS-008 | Trial balance | Recompute balances from posted journal facts | Debits/credits and account balances agree | Not tested — reporting engine pending |
+| KFS-007 | Accounting period | Create books and effective-dated periods; prevent overlaps; post only to open periods and within period dates | Planned periods reject posting; period-bound journal must map to book chart | Tenant-authenticated API and PostgreSQL integration tests pass in staging; dual-control close/reopen remains blocked pending approval workflow |
+| KFS-008 | Trial balance | Recompute opening, period movement and closing balances by account and currency | Exact integer minor units; debit/credit equality per currency; no cross-currency netting | Tenant-authenticated trial-balance API and PostgreSQL integration tests pass; no anonymous public ledger write demo |
 | KFS-009 | Reconciliation | Duplicate, missing, late, partial, overstated and wrong-type provider events | Differences classified; no false match/finality | Executable synthetic POC via POST /api/sandbox/reconciliation/runs; no durable inbox/outbox or provider feed |
 | KFS-010 | Treasury state | Same cash represented as reported, pending, settled, restricted, reserved | No double counting; availability derived under explicit policy | Not tested — treasury engine pending |
 | KFS-011 | Collateral integrity | Conflicting ownership, encumbrance, priority and valuation evidence | Facts remain distinct; unknown is not clean | Existing collateral evaluator POC; full institutional source/reconciliation suite pending |
@@ -20,6 +20,7 @@ All fixtures are synthetic unless a private institution workspace explicitly dec
 | KFS-014 | Human Card security | Credential-free sandbox profile with unverified funding source | No PAN/token; unverified, unsigned or unreconciled funds remain HOLD | Executable synthetic profile test via POST /api/sandbox/human-card/runs; no issuer or hardware partner |
 | KFS-015 | DH-ATM assurance | Sponsor envelope exists but agent cash is unavailable | No cash-out capacity falsely reported | Not tested — DH-ATM engine pending |
 | KFS-016 | Offline conflict | Same bounded offline allocation presented to disconnected terminals | Conflict is detected after sync; liability/dispute path retained | Not tested — offline protocol pending |
+| KFS-017 | Period close dual control | Close a balanced period with maker and independent checker | Close hash pins trial balance; requester cannot approve own close; closed period is immutable | Not enabled — close/reopen approval workflow intentionally blocked |
 
 ## Acceptance rules
 
@@ -43,5 +44,5 @@ All fixtures are synthetic unless a private institution workspace explicitly dec
 - **Human Card:** HC-001 creates a credential-free sandbox profile and confirms that self-asserted, unsigned and unreconciled funding is held.
 - **Remittance reconciliation:** REC-001 through REC-006 exercise exact match, duplicate idempotency key, amount overstatement, missing event, partial payout and late provider event.
 
-All public synthetic runs are stateless, rate-limited and non-executing. No external bank, MTO, wallet, issuer, custodian or registry feed is connected. The ledger schema and forced RLS foundation are deployed in the isolated Railway staging database; the public site exposes readiness, not a public write path to institutional ledgers.
+All public synthetic runs are stateless, rate-limited and non-executing. No external bank, MTO, wallet, issuer, custodian or registry feed is connected. The ledger schema, book-scoped chart of accounts, effective-dated periods and forced RLS foundation are deployed in the isolated Railway PostgreSQL 18 staging database. Tenant-authenticated APIs expose book, period, journal and trial-balance operations; no public anonymous write path to institutional ledgers exists. Period close is deliberately disabled until dual-control approval is implemented.
 
