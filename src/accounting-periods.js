@@ -25,7 +25,7 @@ function validateBook(input){
     accountingBasis:required(input.accountingBasis,'accounting_basis',24),
     timezone:input.timezone==null?'UTC':required(input.timezone,'timezone',80)
   };
-  if(!ID.test(book.bookId)||!ID.test(book.entityId)||!/^[A-Z]{3}$/.test(book.functionalCurrency))fail('accounting_book_identity_invalid');
+  if(!ID.test(book.bookId)||!ID.test(book.entityId)||!ID.test(book.bookCode)||!/^[A-Z]{3}$/.test(book.functionalCurrency))fail('accounting_book_identity_invalid');
   if(!BASES.has(book.accountingBasis))fail('accounting_basis_invalid');
   try{new Intl.DateTimeFormat('en-US',{timeZone:book.timezone});}catch(_){fail('accounting_timezone_invalid');}
   return book;
