@@ -128,7 +128,26 @@ async function dbPool() {
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_applicability_decisions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), decision_id UUID NOT NULL, obligation_id TEXT NOT NULL, obligation_version TEXT NOT NULL, applicable BOOLEAN NOT NULL, rationale JSONB NOT NULL, reviewer_principal_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,decision_id), FOREIGN KEY(tenant_id,obligation_id,obligation_version) REFERENCES keel_regulatory_obligations(tenant_id,obligation_id,source_version), FOREIGN KEY(tenant_id,reviewer_principal_id) REFERENCES keel_principals(tenant_id,principal_id))`);
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_findings_tenant_idx ON keel_regulatory_findings(tenant_id,status,severity)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
-      return pool;
+      const runtimeUrl = process.env.KEEL_RUNTIME_DATABASE_URL;
+      if (!runtimeUrl) return pool;
+      const runtimePool = new Pool({
+        connectionString: runtimeUrl,
+        ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 8000,
+        query_timeout: 10000
+      });
+      try {
+        await runtimePool.query('SELECT 1');
+        await pool.end();
+        return runtimePool;
+      } catch (error) {
+        await runtimePool.end().catch(() => {});
+        await pool.end().catch(() => {});
+        throw error;
+      }
     })().catch(err => { poolPromise = null; throw err; });
   }
   return poolPromise;
