@@ -5,7 +5,7 @@ const { canonical } = require('./authority-chain');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/;
-const EVENT_STATUSES = new Set(['accepted','pending','cleared','settled','reversed','failed','unknown']);
+const EVENT_STATUSES = new Set(['accepted','pending','cleared','settled','reversed','failed','unknown']);\nconst verifiedAttestations = new WeakSet();
 
 function fail(code,status=400){const e=new Error(code);e.status=status;throw e;}
 function required(v,name,max=160){
@@ -20,7 +20,7 @@ function object(v){
   if(!copy||Array.isArray(copy)||typeof copy!=='object')fail('payload_object_required');
   return copy;
 }
-function digest(v){return crypto.createHash('sha256').update(canonical(v)).digest('hex');}
+function digest(v){return crypto.createHash('sha256').update(canonical(v)).digest('hex');}\nfunction verifyHmacSha256({rawBody,signature,secret,keyId,verifiedAt=new Date().toISOString()}){\n  if(typeof rawBody!=='string'||!rawBody.length||Buffer.byteLength(rawBody)>1024*1024)fail('provider_raw_body_invalid');\n  if(typeof secret!=='string'||Buffer.byteLength(secret)<32)fail('provider_webhook_secret_too_short');\n  const id=required(keyId,'verification_key_id',160);\n  if(typeof signature!=='string'||!/^sha256=[a-f0-9]{64}$/i.test(signature))fail('provider_signature_format_invalid',403);\n  if(!Number.isFinite(Date.parse(verifiedAt)))fail('provider_signature_verification_time_invalid');\n  const expected=crypto.createHmac('sha256',secret).update(rawBody,'utf8').digest();\n  const supplied=Buffer.from(signature.slice(7),'hex');\n  if(supplied.length!==expected.length||!crypto.timingSafeEqual(expected,supplied))fail('provider_signature_invalid',403);\n  const attestation=Object.freeze({status:'verified',keyId:id,verifiedAt,algorithm:'hmac-sha256',rawBodyFingerprint:crypto.createHash('sha256').update(rawBody).digest('hex')});\n  verifiedAttestations.add(attestation);return attestation;\n}
 function assertTenantContext(client,tenantId){
   return client.query("SELECT current_setting('keel.tenant_id',true) AS tenant_id").then(r=>{
     if(!r.rowCount||r.rows[0].tenant_id!==tenantId)fail('provider_lifecycle_tenant_context_mismatch',403);
