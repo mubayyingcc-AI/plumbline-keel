@@ -85,7 +85,7 @@ jobs:
     name: S3-backed PostgreSQL point-in-time recovery
     runs-on: ubuntu-24.04
     services:
-      minio:
+      s3:
         image: localstack/localstack:latest
         env:
           SERVICES: s3
