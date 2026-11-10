@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1724">
 <meta name="description" content="Plumbline Keel — financial state, collateral integrity, human-controlled payment authority, agent spending controls and evidence assurance.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>Plumbline Keel | Financial State Assurance</title>
 <link rel="preconnect" href="https://images.unsplash.com"><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -48,7 +49,7 @@ section{padding:84px 0}.white{background:white}.dark{background:var(--navy);colo
 </div>
 <div class="heading" style="margin:38px 0 18px"><div class="eyebrow">Global test catalogue</div><h2 style="font-size:27px">What institutions will be able to test</h2><p>Execution status is explicit. Planned tests are not represented as working features before their engines are integrated.</p></div>
 <div class="grid3">
-<article class="tile"><div class="num">LEDGER & ACCOUNTING</div><h3>Currency · Journals · Periods · Trial balance</h3><p>Precision, double-entry invariants, idempotency, concurrency, reversals, closed-period controls and independent balance checks.</p><span class="pill">Not tested · engine integration pending</span></article>
+<article class="tile"><div class="num">LEDGER & ACCOUNTING</div><h3>Currency · Journals · Periods · Trial balance</h3><p>Precision, double-entry invariants, idempotency, concurrency, reversals, closed-period controls and independent balance checks.</p><span class="pill" id="ledgerRuntimeStatus">Checking PostgreSQL ledger…</span><p class="sub">Accounting periods, trial balance and close controls remain not tested.</p></article>
 <article class="tile"><div class="num">RECONCILIATION & TREASURY</div><h3>Settlement and liquidity truth</h3><p>Missing, duplicate, partial and late statements; restricted, pending, settled, reserved and available balances without double counting.</p><span class="pill">Not tested · engine integration pending</span></article>
 <article class="tile"><div class="num">COLLATERAL & CONTINUITY</div><h3>Collateral integrity · Cards · DH-ATM</h3><p>Ownership evidence, encumbrance, priority, authority revocation, sponsor-backed cash envelopes and offline conflict handling.</p><span class="pill">Not tested · engine integration pending</span></article>
 </div>
@@ -118,4 +119,6 @@ async function assuranceHealth(){try{const r=await fetch('/api/assurance/status'
 assuranceHealth();
 async function health(){try{const r=await fetch('/api/health'),d=await r.json();$('apiStatus').textContent=d.ok?'API online · Database '+d.database:'API health check needs attention · Database '+d.database}catch{$('apiStatus').textContent='API health status unavailable'}}
 health();
+async function ledgerHealth(){try{const r=await fetch('/api/ledger/status'),d=await r.json();const el=$('ledgerRuntimeStatus');if(!r.ok||!d.ok){el.textContent='Ledger blocked · '+(d.reason||'security checks incomplete');return}el.textContent='Ledger schema ready · '+d.migrations.length+' migrations · '+d.rowLevelSecurity.forced+'/'+d.rowLevelSecurity.ledgerTables+' RLS enforced · '+d.runtimeRole}catch{$('ledgerRuntimeStatus').textContent='Ledger readiness unavailable'}}
+ledgerHealth();
 </script></body></html>
