@@ -176,7 +176,7 @@ test('assurance status exposes the contract consumed by the website', async () =
 });
 
 test('ledger status fails closed when no database is configured', async () => {
-  if (process.env.DATABASE_URL) return;
+  if (process.env.KEEL_RUNTIME_DATABASE_URL) return;
   const response = await fetch(base + '/api/ledger/status');
   const data = await response.json();
   assert.equal(response.status, 503);
