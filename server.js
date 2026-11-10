@@ -24,7 +24,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30 };
 const rateBuckets = new Map();
 
 const products = [
@@ -301,6 +301,8 @@ const apiDescription = {
     '/api/sandbox/human-card/scenarios':{get:{summary:'Executable synthetic Human Card scenarios'}},
     '/api/sandbox/payment-authority/runs':{post:{summary:'Evaluate a synthetic payment intent against a human-issued mandate; no execution'}},
     '/api/sandbox/human-card/runs':{post:{summary:'Run a synthetic Human Card profile and unverified funding-boundary test'}},
+    '/api/sandbox/currency/instruments':{get:{summary:'List global currency and service-credit precision references'}},
+    '/api/sandbox/currency/precision':{post:{summary:'Validate exact decimal-to-atomic-unit precision without transferring value'}},
     '/api/ledger/status':{get:{summary:'Ledger migration, runtime-role and row-level security readiness'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
@@ -940,6 +942,21 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'GET' && route === '/api/sandbox/payment-authority/scenarios') {
       return send(res,200,{scenarios:publicPaymentAuthorityScenarios,notice:'Deterministic synthetic mandate tests only. No payment instruction, reservation, debit or settlement is created.'});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/currency/instruments') {
+      return send(res,200,{instruments:currencyEngine.INSTRUMENTS,execution:'DISABLED',notice:'Reference precision only. No FX conversion, transfer, redemption or settlement is performed.'});
+    }
+    if (req.method === 'POST' && route === '/api/sandbox/currency/precision') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const body=await readBody(req);
+      try {
+        const instrument=currencyEngine.instrument(body.instrumentCode);
+        const atomicUnits=currencyEngine.amountUnits(body.amount,instrument.scale);
+        return send(res,200,{ok:true,instrument,amount:body.amount,atomicUnits,formatted:currencyEngine.formatUnits(atomicUnits,instrument.scale),precision:instrument.scale,execution:'DISABLED',boundary:'Exact precision validation only. No currency conversion, transfer, redemption, payment or settlement occurred.'});
+      } catch(error) {
+        return send(res,400,{error:'currency_precision_validation_failed',message:error.message});
+      }
     }
     if (req.method === 'POST' && route === '/api/sandbox/payment-authority/runs') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
