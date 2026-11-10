@@ -105,8 +105,8 @@ BEGIN
   IF NEW.status='open' AND NEW.opened_at IS NULL THEN
     NEW.opened_at:=NOW();
   END IF;
-  IF NEW.status='closed' AND (NEW.closed_at IS NULL OR NEW.closed_by IS NULL OR NEW.close_hash IS NULL) THEN
-    RAISE EXCEPTION 'closed accounting period requires close evidence';
+  IF NEW.status='closed' THEN
+    RAISE EXCEPTION 'period close is disabled until dual-control close approval is implemented';
   END IF;
   NEW.version:=OLD.version+1;
   RETURN NEW;
