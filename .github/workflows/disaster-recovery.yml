@@ -30,7 +30,7 @@ jobs:
     env:
       PGSSLMODE: disable
       KEEL_BACKUP_S3_BUCKET: keel-ci-backups
-      KEEL_BACKUP_S3_ENDPOINT: http://127.0.0.1:9000
+      KEEL_BACKUP_S3_ENDPOINT: http://127.0.0.1:8333
       KEEL_BACKUP_S3_REGION: us-east-1
       KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT: "true"
       AWS_ACCESS_KEY_ID: test
@@ -61,16 +61,16 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          docker run -d --name keel-s3-test -p 8333:8333 ghcr.io/chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
           ready=false
           for attempt in $(seq 1 30); do
-            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)"
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
           [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
-          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://keel-ci-backups
-          aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups
       - name: Generate ephemeral test encryption identity
         id: age
         run: |
@@ -87,7 +87,7 @@ jobs:
         run: bash scripts/backup-postgres-encrypted.sh
       - name: Verify remote backup artifacts
         run: |
-          count="$(aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups/keel/ci-source/ --recursive | wc -l)"
+          count="$(aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups/keel/ci-source/ --recursive | wc -l)"
           test "$count" -eq 3
       - name: Verify backup metadata and restore into clean database
         env:
@@ -118,7 +118,7 @@ jobs:
       PGPORT: "5432"
       PGPASSWORD: postgres
       PGBACKREST_REPO1_S3_BUCKET: keel-ci-backups
-      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
+      PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:8333
       PGBACKREST_REPO1_S3_REGION: us-east-1
       PGBACKREST_REPO1_S3_KEY: test
       PGBACKREST_REPO1_S3_KEY_SECRET: test
@@ -138,16 +138,16 @@ jobs:
       - name: Start S3-compatible test service and create disposable bucket
         run: |
           aws configure set default.s3.addressing_style path
-          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          docker run -d --name keel-s3-test -p 8333:8333 ghcr.io/chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
           ready=false
           for attempt in $(seq 1 30); do
-            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)"
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
           [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
-          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://keel-ci-backups
-          aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
