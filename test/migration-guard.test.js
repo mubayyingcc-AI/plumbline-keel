@@ -1,4 +1,3 @@
-
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -21,15 +20,14 @@ test('ledger migration runner refuses production even when migration flag is set
   assert.match(result.stderr, /ledger_migrations_refused_outside_explicit_staging_target/);
 });
 
-test('guarded migration runner includes the accounting books and periods migration',()=>{
-  const script=fs.readFileSync(path.join(__dirname,'..','scripts','apply-ledger-migrations.js'),'utf8');
-  assert.match(script,/014_accounting_books_and_periods\.sql/);
-  assert.match(script,/015_period_close_dual_control\.sql/);
-});
-
-
-test('guarded migration runner includes tenant security and provider lifecycle migrations',()=>{
-  const script=fs.readFileSync(path.join(__dirname,'..','scripts','apply-ledger-migrations.js'),'utf8');
-  assert.ok(script.includes('016_global_tenant_rls_and_auth.sql'));
-  assert.ok(script.includes('017_provider_outbox_inbox_reconciliation.sql'));
+test('guarded migration runner includes the full core migration sequence', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js'), 'utf8');
+  for (const migration of [
+    '014_accounting_books_and_periods.sql',
+    '015_period_close_dual_control.sql',
+    '016_global_tenant_rls_and_auth.sql',
+    '017_provider_outbox_inbox_reconciliation.sql'
+  ]) {
+    assert.ok(script.includes(migration), 'missing guarded migration: ' + migration);
+  }
 });
