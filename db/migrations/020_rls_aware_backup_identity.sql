@@ -2,6 +2,7 @@
 -- The login is created without a password. Provision its password out-of-band
 -- with psql's interactive \\password command, then store the URL in Railway.
 DO $keel$
+DECLARE v_role RECORD;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup_reader') THEN
     CREATE ROLE keel_backup_reader NOLOGIN INHERIT
@@ -21,10 +22,23 @@ BEGIN
       CONNECTION LIMIT 2;
     GRANT keel_backup_reader TO keel_backup;
   END IF;
+
+  -- Remove any pre-existing memberships: this login must inherit only the
+  -- explicitly read-only backup group, never an application/admin role.
+  FOR v_role IN
+    SELECT granted.rolname
+    FROM pg_auth_members m
+    JOIN pg_roles granted ON granted.oid=m.roleid
+    JOIN pg_roles member ON member.oid=m.member
+    WHERE member.rolname='keel_backup' AND granted.rolname<>'keel_backup_reader'
+  LOOP
+    EXECUTE format('REVOKE %I FROM keel_backup', v_role.rolname);
+  END LOOP;
 END
 $keel$;
 
 GRANT USAGE ON SCHEMA public TO keel_backup_reader;
+GRANT SELECT ON public.keel_tenants TO keel_auth_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO keel_backup_reader;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO keel_backup_reader;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
