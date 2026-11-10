@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, 'feat/production-disaster-recovery-foundation']
+    branches: [main, 'feat/production-disaster-recovery-foundation', 'feat/keel-dr-backup-restore-controls']
 
 permissions:
   contents: read
@@ -65,7 +65,6 @@ jobs:
         run: bash scripts/backup-postgres-encrypted.sh
       - name: Verify backup metadata and restore into clean database
         env:
-          KEEL_BACKUP_FILE: ${{ runner.temp }}/keel-backups/$(ls "$RUNNER_TEMP/keel-backups" | grep '\.dump\.age$' | head -1)
           KEEL_BACKUP_AGE_IDENTITY_FILE: ${{ runner.temp }}/age-identity.txt
           KEEL_RESTORE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_ci
           KEEL_RESTORE_CONFIRM: RESTORE_TO_EMPTY_DATABASE
@@ -73,6 +72,8 @@ jobs:
         run: |
           backup_file="$(find "$RUNNER_TEMP/keel-backups" -maxdepth 1 -name '*.dump.age' -print -quit)"
           test -n "$backup_file"
+          test -s "$backup_file.manifest.json"
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const b=fs.readFileSync(process.argv[2]);if(m.sha256!==c.createHash("sha256").update(b).digest("hex")||m.databaseId!=="ci-source")process.exit(1)' "$backup_file.manifest.json" "$backup_file"
           export KEEL_BACKUP_FILE="$backup_file"
           bash scripts/restore-postgres-encrypted.sh
           restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT value FROM dr_probe WHERE id=1")"
