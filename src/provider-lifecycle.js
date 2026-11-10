@@ -106,8 +106,15 @@ async function claimNextInstruction(pool,tenantId,workerId,leaseSeconds=45,autho
   if(!Number.isInteger(leaseSeconds)||leaseSeconds<10||leaseSeconds>300)fail('lease_seconds_invalid');
   if(!authorityContext)fail('provider_dispatch_authority_context_required',403);
   return withTenantTransaction(pool,tenantId,async client=>{
-    // A worker may have sent the instruction before crashing. Expiry is therefore UNKNOWN, never an automatic resend.
-    await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW()",[tenantId]);
+    // A worker may have sent before crashing. Authorize each expiry transition; never silently mutate it.
+    const expired=await client.query("SELECT outbox_id,journal_id,provider_id,idempotency_key,payload,payload_fingerprint FROM keel_provider_outbox WHERE tenant_id=$1 AND status='leased' AND lease_until<=NOW() ORDER BY lease_until FOR UPDATE SKIP LOCKED",[tenantId]);
+    for(const row of expired.rows){
+      const payload=row.payload||{};
+      if(typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_expired_lease_financial_amount_and_currency_required',400);
+      const recoveryRequest={tenantId,journalId:row.journal_id,outboxId:row.outbox_id,providerId:row.provider_id,payloadFingerprint:row.payload_fingerprint,idempotencyKey:row.idempotency_key,recovery:'expired_lease_to_unknown'};
+      await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:recover_expired',resourceId:'provider:'+row.provider_id,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(recoveryRequest),executionRef:row.outbox_id});
+      await client.query("UPDATE keel_provider_outbox SET status='unknown',lease_owner=NULL,lease_until=NULL,last_error_code='DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN',updated_at=NOW() WHERE tenant_id=$1 AND outbox_id=$2 AND status='leased' AND lease_until<=NOW()",[tenantId,row.outbox_id]);
+    }
     const claimed=await client.query(
       `SELECT outbox_id,journal_id,provider_id,aggregate_type,aggregate_id,instruction_type,idempotency_key,payload,payload_fingerprint,attempts
          FROM keel_provider_outbox
