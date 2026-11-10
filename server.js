@@ -18,6 +18,7 @@ const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
+const providerLifecycle = require('./src/provider-lifecycle');
 const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
@@ -27,7 +28,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60 };
 const rateBuckets = new Map();
 
 const products = [
@@ -353,9 +354,16 @@ const apiDescription = {
     '/api/ledger/trial-balance':{get:{summary:'Calculate opening, movement and closing trial balance by currency'}},
     '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
     '/api/ledger/journals':{post:{summary:'Post an idempotent balanced journal bound to an open accounting period'}},
+    '/api/ledger/provider-instructions':{post:{summary:'Atomically post a journal and enqueue a provider instruction under separate KAAA grants'}},
+    '/api/providers/outbox/claim':{post:{summary:'Claim an allowlisted sandbox instruction using a named integration principal and dispatch authority'}},
+    '/api/providers/outbox/{outboxId}/outcome':{post:{summary:'Record provider dispatch outcome under the same principal and a separate authority grant'}},
     '/api/ledger/reservations':{post:{summary:'Create a tenant-scoped funds reservation'}},
     '/api/ledger/events/verify':{get:{summary:'Verify the append-only ledger event chain'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
+    '/api/assurance/authority/envelopes':{post:{summary:'Create a human-granted, scoped Authority Envelope'}},
+    '/api/assurance/authority/envelopes/revoke':{post:{summary:'Revoke an Authority Envelope'}},
+    '/api/assurance/authority/approvals':{post:{summary:'Record independent human approval bound to a request fingerprint'}},
+    '/api/assurance/authority/proofs':{get:{summary:'List immutable Action Proof Objects'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
     '/api/human-card/recovery/groups':{post:{summary:'Create recovery group with independently verified trustees'}},
@@ -972,9 +980,16 @@ const server = http.createServer(async (req,res) => {
       if(!actor.principal_id)return send(res,403,{error:'named_approver_principal_required'});
       const body=await readBody(req),envelopeId=cleanString(body.envelopeId,64),requestFingerprint=cleanString(body.requestFingerprint,64),decision=cleanString(body.decision,16),rationale=cleanString(body.rationale,500);
       if(!envelopeId||! /^[a-f0-9]{64}$/.test(requestFingerprint)||!['approve','reject'].includes(decision)||!rationale)return send(res,400,{error:'valid_envelope_request_fingerprint_decision_and_rationale_required'});
+       security/global-financial-core-tenant-assurance
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
       const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
       if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
+
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
+      const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
+      if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
+      const client=await pool.connect();
+       main
       try{await client.query('BEGIN');const e=await client.query('SELECT grantee_principal_id,approver_principal_id,approval_required,status FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[actor.tenant_id,envelopeId]);if(!e.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'authority_envelope_not_found'});}if(e.rows[0].status!=='active'||!e.rows[0].approval_required||e.rows[0].approver_principal_id!==actor.principal_id||e.rows[0].grantee_principal_id===actor.principal_id){await client.query('ROLLBACK');return send(res,403,{error:'independent_envelope_approver_required'});}const id=crypto.randomUUID();await client.query('INSERT INTO keel_authority_action_approvals(tenant_id,approval_id,envelope_id,request_fingerprint,approver_principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,envelopeId,requestFingerprint,actor.principal_id,decision,rationale]);await recordEventWithClient(client,actor,'AUTHORITY_ACTION_APPROVAL_RECORDED',id,{envelopeId,requestFingerprint,decision});await client.query('COMMIT');return send(res,201,{ok:true,approvalId:id,envelopeId,requestFingerprint,decision});}
       catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
     }
@@ -982,6 +997,29 @@ const server = http.createServer(async (req,res) => {
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);const q=await pool.query('SELECT proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref,created_at FROM keel_action_proof_objects WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:q.rowCount,proofs:q.rows});
+    }
+    if(route.startsWith('/api/providers/')){
+      const actor=await authenticateTenant(req);
+      if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(actor.role!=='integration'||!actor.principal_id)return send(res,403,{error:'named_integration_worker_required'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
+      if(!pool)return send(res,503,{error:'provider_lifecycle_storage_unavailable'});
+      if(req.method==='POST'&&route==='/api/providers/outbox/claim'){
+        if(rateLimited(req,'/api/providers/outbox/claim'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const body=await readBody(req),authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const leaseSeconds=body.leaseSeconds===undefined?45:body.leaseSeconds;
+        const claimed=await providerLifecycle.claimNextInstruction(pool,actor.tenant_id,actor.principal_id,leaseSeconds,authorityContext,['bank-sandbox']);
+        return send(res,200,{ok:true,claimed,execution:claimed?'CLAIMED_FOR_SANDBOX_WORKER':'NO_WORK',notice:'Only the deterministic bank-sandbox adapter is enabled by this worker endpoint. No live financial provider is connected.'});
+      }
+      const outcomeMatch=route.match(/^\/api\/providers\/outbox\/([^/]+)\/outcome$/);
+      if(req.method==='POST'&&outcomeMatch){
+        if(rateLimited(req,'/api/providers/outbox/outcome'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const outboxId=decodeURIComponent(outcomeMatch[1]),body=await readBody(req);
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await providerLifecycle.recordDispatchOutcome(pool,actor.tenant_id,{...body,outboxId,workerId:actor.principal_id},authorityContext);
+        return send(res,200,{ok:true,...result});
+      }
+      return send(res,404,{error:'provider_endpoint_not_found'});
     }
     if (route.startsWith('/api/ledger/')) {
       const actor=await authenticateTenant(req);
@@ -1094,6 +1132,17 @@ const server = http.createServer(async (req,res) => {
           ? await ledgerPosting.getAccountBalance(pool,actor.tenant_id,accountId)
           : await ledgerPosting.verifyAccountProjection(pool,actor.tenant_id,accountId);
         return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/provider-instructions'){
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'provider_instruction_role_required'});
+        if(rateLimited(req,'/api/ledger/provider-instructions'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const body=await readBody(req);
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_provider_instruction'});
+        if(!body.journal||!body.instruction||!body.journal.bookId||!body.journal.periodId)return send(res,400,{error:'period_bound_journal_and_provider_instruction_required'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await ledgerPosting.postJournalAndEnqueueInstruction(pool,actor.tenant_id,body.journal,body.instruction,authorityContext);
+        return send(res,result.journal.replay?200:201,{ok:true,...result,execution:'NOT_DISPATCHED',notice:'The ledger and provider outbox were committed atomically. A separately authorised worker must claim the instruction; no provider network call occurred in this request.'});
       }
       if(req.method==='POST'&&route==='/api/ledger/journals'){
         if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_posting_role_required'});

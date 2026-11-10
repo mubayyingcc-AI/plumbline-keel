@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "provider:sandbox:once": "node scripts/provider-sandbox-worker.js"
   },
   "engines": {
     "node": ">=18"

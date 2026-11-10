@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { validateJournal } = require('./ledger-engine');
 const { canonical } = require('./authority-chain');
+const { appendLedgerEvent } = require('./ledger-event-chain');
 const authorityPersistence = require('./authority-persistence');
 const providerLifecycle = require('./provider-lifecycle');
 
@@ -86,29 +87,6 @@ async function verifyAccountProjectionWithClient(client,tenantId,account) {
   return {matches:projection.debit===debit&&projection.credit===credit&&projection.balance===computed,
     projection:{debitTotalMinor:projection.debit.toString(),creditTotalMinor:projection.credit.toString(),balanceMinor:projection.balance.toString(),version:projection.version},
     computed:{debitTotalMinor:debit.toString(),creditTotalMinor:credit.toString(),balanceMinor:computed.toString()}};
-}
-async function appendLedgerEvent(client, tenantId, eventType, subjectId, payload) {
-  await client.query(
-    'INSERT INTO keel_ledger_event_heads(tenant_id,last_sequence,last_fingerprint) VALUES($1,0,NULL) ON CONFLICT(tenant_id) DO NOTHING',
-    [tenantId]
-  );
-  const head=await client.query(
-    'SELECT last_sequence,last_fingerprint FROM keel_ledger_event_heads WHERE tenant_id=$1 FOR UPDATE',
-    [tenantId]
-  );
-  const sequence=BigInt(head.rows[0].last_sequence)+1n;
-  const previousFingerprint=head.rows[0].last_fingerprint;
-  const eventId=crypto.randomUUID();
-  const body={tenantId,eventId,eventType,subjectId,payload,sequence:sequence.toString(),previousFingerprint};
-  const fingerprint=crypto.createHash('sha256').update(canonical(body)).digest('hex');
-  await client.query(
-    'INSERT INTO keel_ledger_events(tenant_id,event_id,event_type,subject_id,tenant_sequence,previous_event_fingerprint,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
-    [tenantId,eventId,eventType,subjectId,sequence.toString(),previousFingerprint,fingerprint,JSON.stringify(payload)]
-  );
-  await client.query(
-    'UPDATE keel_ledger_event_heads SET last_sequence=$2,last_fingerprint=$3,updated_at=NOW() WHERE tenant_id=$1',
-    [tenantId,sequence.toString(),fingerprint]
-  );
 }
 async function verifyLedgerEventChain(pool,tenantIdInput) {
   requirePool(pool);
@@ -318,6 +296,8 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
   const tenantId = actorTenant(tenantIdInput);
   if (!instruction || typeof instruction !== 'object') fail('provider_instruction_required');
   return withTransaction(pool, async client => {
+    
+    security/global-financial-core-tenant-assurance
     let authorityProof=null;
     if(authorityContext){
       const normalized=validateJournal({...journal,tenantId});
@@ -343,6 +323,24 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
     });
     if(providerAuthorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
     return { journal: authorityProof?{...posted,authorityProof}:posted, outbox:providerAuthorityProof?{...outbox,authorityProof:providerAuthorityProof}:outbox };
+
+    if(!authorityContext)fail('provider_enqueue_authority_context_required',403);
+    const normalized=validateJournal({...journal,tenantId});
+    const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
+    if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);
+    const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();
+    const authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
+    const posted=await postJournalWithClient(client,tenantId,journal);
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityPersistence.digest(normalized),executionRef:posted.journalId});
+    const providerId=String(instruction.providerId||'').trim();
+    const payload=instruction.payload&&typeof instruction.payload==='object'?instruction.payload:{};
+    if(!providerId||typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_instruction_financial_amount_and_currency_required',400);
+    const providerRequest={tenantId,journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+    const providerAuthorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:enqueue',resourceId:'provider:'+providerId,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(providerRequest),executionRef:posted.journalId});
+    const outbox=await providerLifecycle.enqueueInstruction(client,{...instruction,tenantId,journalId:posted.journalId});
+    await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
+    return {journal:{...posted,authorityProof},outbox:{...outbox,authorityProof:providerAuthorityProof}};
+        main
   }, tenantId);
 }
 async function listAccounts(pool,tenantIdInput) {

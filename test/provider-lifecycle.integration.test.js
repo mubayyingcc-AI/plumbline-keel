@@ -8,7 +8,7 @@ const lifecycle=require('../src/provider-lifecycle');
 const periods=require('../src/accounting-periods');
 const authority=require('../src/authority-persistence');
 
-test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-017 applied'},async()=>{
+test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-019 applied'},async()=>{
   const {Pool}=require('pg');
   const pool=new Pool({connectionString:url,max:6});
   const admin=new Pool({connectionString:process.env.PG_ADMIN_URL,max:2});
@@ -34,7 +34,11 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     await admin.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,identity_assurance,principal_kind) VALUES($1,$2,'Provider grantor',$3,'externally_verified','human'),($4,$2,'Provider worker agent',$5,'externally_verified','ai_agent')",[grantorId,tenantId,grantorId+'@example.test',principalId,principalId+'@example.test']);
     await admin.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$2,$3,'Provider lifecycle CI agent','integration',$4)",[keyId,tenantId,tokenHash,principalId]);
     const actor={tenant_id:tenantId,principal_id:principalId,key_id:keyId,role:'integration'};
+    security/global-financial-core-tenant-assurance
     const envelope=authority.normalizeEnvelope({granteePrincipalId:principalId,scopes:['ledger:journal:post','provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired'],resourceIds:['book:'+bookId,'provider:bank-sandbox'],currency:'USD',maxAmountMinor:'1000',expiresAt:new Date(Date.now()+30*86400000).toISOString()},grantorId);
+
+    const envelope=authority.normalizeEnvelope({granteePrincipalId:principalId,scopes:['ledger:journal:post','provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired','provider:instruction:outcome'],resourceIds:['book:'+bookId,'provider:bank-sandbox'],currency:'USD',maxAmountMinor:'1000',expiresAt:new Date(Date.now()+30*86400000).toISOString()},grantorId);
+    main
     const envelopeId=crypto.randomUUID(),envelopeFingerprint=authority.digest(envelope);
     await admin.query("INSERT INTO keel_authority_envelopes(tenant_id,envelope_id,grantor_principal_id,grantee_principal_id,scopes,resource_ids,currency,max_amount_minor,approval_required,approver_principal_id,valid_from,expires_at,envelope_fingerprint) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13)",[tenantId,envelopeId,grantorId,principalId,JSON.stringify(envelope.scopes),JSON.stringify(envelope.resourceIds),envelope.currency,envelope.maxAmountMinor,false,null,envelope.validFrom,envelope.expiresAt,envelopeFingerprint]);
     const authorityContext={actor,envelopeId};
@@ -43,16 +47,21 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(committed.journal.status,'posted');
     assert.equal(committed.outbox.replay,false);
     const outboxId=committed.outbox.outbox_id;
-    const replay=await posting.postJournalAndEnqueueInstruction(pool,tenantId,journal,instruction);
+    const replay=await posting.postJournalAndEnqueueInstruction(pool,tenantId,journal,instruction,authorityContext);
     assert.equal(replay.journal.replay,true);
     assert.equal(replay.outbox.replay,true);
     assert.equal(replay.outbox.outbox_id,outboxId);
 
+     security/global-financial-core-tenant-assurance
     const claimed=await lifecycle.claimNextInstruction(pool,tenantId,'worker-'+suffix,30,authorityContext);
+
+    const claimed=await lifecycle.claimNextInstruction(pool,tenantId,principalId,30,authorityContext);
+    main
     assert.equal(claimed.outbox_id,outboxId);
     assert.equal(claimed.attempts,1);
-    const unknown=await lifecycle.recordDispatchOutcome(pool,tenantId,{outboxId,workerId:'worker-'+suffix,outcome:'unknown',errorCode:'provider_timeout'});
+    const unknown=await lifecycle.recordDispatchOutcome(pool,tenantId,{outboxId,workerId:principalId,outcome:'unknown',errorCode:'provider_timeout'},authorityContext);
     assert.equal(unknown.status,'unknown');
+    security/global-financial-core-tenant-assurance
     assert.equal(await lifecycle.claimNextInstruction(pool,tenantId,'worker-retry-'+suffix,30,authorityContext),null,'unknown provider outcomes must not be automatically retried');
 
     const leaseJournal='provider-lease-journal-'+suffix;
@@ -67,6 +76,18 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(lease.outbox_id,leasedId);
     await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query("UPDATE keel_provider_outbox SET lease_until=NOW()-INTERVAL '1 second' WHERE tenant_id=$1 AND outbox_id=$2",[tenantId,leasedId]));
     assert.equal(await lifecycle.claimNextInstruction(pool,tenantId,'must-not-redispatch-'+suffix,30,authorityContext),null);
+
+    assert.equal(await lifecycle.claimNextInstruction(pool,tenantId,principalId,30,authorityContext),null,'unknown provider outcomes must not be automatically retried');
+
+    const leaseJournal='provider-lease-journal-'+suffix;
+    const leaseInstruction={providerId:'bank-sandbox',aggregateType:'payment',aggregateId:'lease-payment-'+suffix,instructionType:'payment.submit',idempotencyKey:'provider-lease-outbox-'+suffix+'-0001',payload:{amountMinor:'100',currency:'USD'}};
+    const leaseCommit=await posting.postJournalAndEnqueueInstruction(pool,tenantId,{journalId:leaseJournal,idempotencyKey:'provider-lease-ledger-'+suffix+'-0001',description:'Provider lease test funding',sourceRef:'test:provider-lease:'+suffix,effectiveAt:'2026-11-10T10:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[{accountId:cash,side:'debit',currency:'USD',amountMinor:'100'},{accountId:liability,side:'credit',currency:'USD',amountMinor:'100'}]},leaseInstruction,authorityContext);
+    const leasedId=leaseCommit.outbox.outbox_id;
+    const lease=await lifecycle.claimNextInstruction(pool,tenantId,principalId,30,authorityContext);
+    assert.equal(lease.outbox_id,leasedId);
+    await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query("UPDATE keel_provider_outbox SET lease_until=NOW()-INTERVAL '1 second' WHERE tenant_id=$1 AND outbox_id=$2",[tenantId,leasedId]));
+    assert.equal(await lifecycle.claimNextInstruction(pool,tenantId,principalId,30,authorityContext),null);
+    main
     const expired=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status,last_error_code FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,leasedId]));
     assert.equal(expired.rows[0].status,'unknown');
     assert.equal(expired.rows[0].last_error_code,'DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN');
@@ -108,6 +129,7 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(own.rowCount,1);
     const cases=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status FROM keel_provider_reconciliation_cases WHERE tenant_id=$1',[tenantId]));
     assert.equal(cases.rows[0].status,'matched');
+    const chain=await posting.verifyLedgerEventChain(pool,tenantId);assert.equal(chain.valid,true);
   }finally{
     await pool.end();
     await admin.end();
