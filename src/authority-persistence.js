@@ -3,7 +3,7 @@ const crypto=require('node:crypto');
 const {canonical}=require('./authority-chain');
 function fail(code,status=403){const e=new Error(code);e.code=code;e.status=status;throw e;}
 function digest(v){return crypto.createHash('sha256').update(canonical(v)).digest('hex');}
-const ACTIONS=new Set(['ledger:journal:post','ledger:reservation:create','ledger:reservation:release','ledger:reservation:consume','provider:instruction:enqueue','provider:instruction:dispatch']);
+const ACTIONS=new Set(['ledger:journal:post','ledger:reservation:create','ledger:reservation:release','ledger:reservation:consume','provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired']);
 function normalizeEnvelope(input,grantorPrincipalId){
  if(!input||typeof input!=='object'||Array.isArray(input))fail('authority_envelope_required',400);
  const granteePrincipalId=String(input.granteePrincipalId||'').trim();
