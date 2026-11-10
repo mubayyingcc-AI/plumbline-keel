@@ -10,3 +10,5 @@ test('checkpoint tampering is detected',()=>{const cp=createCheckpoint(input);as
 test('checkpoint signed by a different key is rejected',()=>{const cp=createCheckpoint(input),other=crypto.generateKeyPairSync('ed25519');assert.equal(verifyCheckpoint(cp,other.publicKey).valid,false);});
 test('checkpoint requires Ed25519 keys and valid chain head',()=>{const rsa=crypto.generateKeyPairSync('rsa',{modulusLength:2048});assert.throws(()=>createCheckpoint({...input,privateKey:rsa.privateKey}),/checkpoint_private_key_must_be_ed25519/);assert.throws(()=>createCheckpoint({...input,headFingerprint:'bad'}),/checkpoint_head_fingerprint_invalid/);});
 test('empty tenant checkpoint requires a null chain head',()=>{const cp=createCheckpoint({...input,verifiedEvents:'0',headFingerprint:null});assert.equal(verifyCheckpoint(cp,pair.publicKey).valid,true);});
+
+test('checkpoint PEM environment keys sign and verify independently',()=>{const privatePem=pair.privateKey.export({type:'pkcs8',format:'pem'}),publicPem=pair.publicKey.export({type:'spki',format:'pem'});const cp=createCheckpoint({...input,privateKey:privatePem});assert.equal(verifyCheckpoint(cp,publicPem).valid,true);});
