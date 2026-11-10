@@ -34,7 +34,7 @@ Run `scripts/backup-postgres-encrypted.sh` with:
 - `KEEL_BACKUP_AGE_RECIPIENT`: public age recipient; private identity must not be on the database host.
 - `KEEL_BACKUP_DATABASE_ID`: stable non-secret database identifier.
 
-The script creates a PostgreSQL custom-format dump, encrypts it with age, verifies decryptability, and writes a SHA-256 sidecar plus a metadata manifest. It does **not** upload artifacts. Transfer the encrypted backup, manifest and checksum to a separate account/project with object versioning, retention lock/WORM, deletion protection, MFA, audit logging and separately administered credentials. A backup stored only beside the source is not DR.
+The script creates a PostgreSQL custom-format dump, encrypts it with age, and writes a SHA-256 sidecar plus a metadata manifest. It deliberately does not decrypt on the source host: the private identity must remain outside that failure domain. A separate recovery custodian must periodically verify decryption and restore capability in an isolated environment. It does **not** upload artifacts. Transfer the encrypted backup, manifest and checksum to a separate account/project with object versioning, retention lock/WORM, deletion protection, MFA, audit logging and separately administered credentials. A backup stored only beside the source is not DR.
 
 Hold the age identity outside the production account using managed KMS/secrets custody, dual control, recovery escrow and tested revocation. Never place it in Git, CI logs, application variables or the backup storage account.
 
