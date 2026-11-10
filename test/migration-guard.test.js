@@ -27,7 +27,8 @@ test('guarded migration runner includes the full core migration sequence', () =>
     '015_period_close_dual_control.sql',
     '016_global_tenant_rls_and_auth.sql',
     '017_provider_outbox_inbox_reconciliation.sql',
-    '018_keel_authority_action_assurance.sql'
+    '018_keel_authority_action_assurance.sql',
+    '019_kAAA_provider_authority_event_type.sql'
   ]) {
     assert.ok(script.includes(migration), 'missing guarded migration: ' + migration);
   }

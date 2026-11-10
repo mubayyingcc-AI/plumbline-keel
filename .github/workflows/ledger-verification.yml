@@ -2,7 +2,7 @@ name: Keel ledger verification
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'security/**']
   push:
     branches:
       - main
@@ -52,3 +52,8 @@ jobs:
         run: node scripts/apply-ledger-migrations.js
       - name: Run unit and PostgreSQL integration tests
         run: npm test
+      - name: Verify tenant-scoped restored-state projections and ledger event chains
+        env:
+          KEEL_RECOVERY_TARGET: isolated
+          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@localhost:5432/keel_test
+        run: node scripts/verify-recovery-state.js
