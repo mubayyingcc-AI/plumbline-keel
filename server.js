@@ -354,9 +354,16 @@ const apiDescription = {
     '/api/ledger/trial-balance':{get:{summary:'Calculate opening, movement and closing trial balance by currency'}},
     '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
     '/api/ledger/journals':{post:{summary:'Post an idempotent balanced journal bound to an open accounting period'}},
+    '/api/ledger/provider-instructions':{post:{summary:'Atomically post a journal and enqueue a provider instruction under separate KAAA grants'}},
+    '/api/providers/outbox/claim':{post:{summary:'Claim an allowlisted sandbox instruction using a named integration principal and dispatch authority'}},
+    '/api/providers/outbox/{outboxId}/outcome':{post:{summary:'Record provider dispatch outcome under the same principal and a separate authority grant'}},
     '/api/ledger/reservations':{post:{summary:'Create a tenant-scoped funds reservation'}},
     '/api/ledger/events/verify':{get:{summary:'Verify the append-only ledger event chain'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
+    '/api/assurance/authority/envelopes':{post:{summary:'Create a human-granted, scoped Authority Envelope'}},
+    '/api/assurance/authority/envelopes/revoke':{post:{summary:'Revoke an Authority Envelope'}},
+    '/api/assurance/authority/approvals':{post:{summary:'Record independent human approval bound to a request fingerprint'}},
+    '/api/assurance/authority/proofs':{get:{summary:'List immutable Action Proof Objects'}},
     '/api/human-card/pairing/challenge':{post:{summary:'Issue one-time challenge to a delivered, attested physical Human Card'}},
     '/api/human-card/pairing/verify':{post:{summary:'Verify Ed25519 physical-card proof of possession and pair device'}},
     '/api/human-card/recovery/groups':{post:{summary:'Create recovery group with independently verified trustees'}},
@@ -1121,6 +1128,7 @@ const server = http.createServer(async (req,res) => {
         return send(res,200,{ok:true,...result});
       }
       if(req.method==='POST'&&route==='/api/ledger/provider-instructions'){
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
         if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'provider_instruction_role_required'});
         if(rateLimited(req,'/api/ledger/provider-instructions'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
         const body=await readBody(req);
