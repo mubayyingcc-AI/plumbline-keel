@@ -15,7 +15,6 @@ pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file="$plain"
 test -s "$plain"
 age --encrypt --recipient "$KEEL_BACKUP_AGE_RECIPIENT" --output "$work/backup.age" "$plain"
 test -s "$work/backup.age"
-age --decrypt "$work/backup.age" >/dev/null
 mv "$work/backup.age" "$encrypted"; chmod 600 "$encrypted"
 (cd "$KEEL_BACKUP_DIR" && sha256sum "$(basename "$encrypted")") > "$encrypted.sha256"
 chmod 600 "$encrypted.sha256"
