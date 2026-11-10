@@ -55,3 +55,12 @@ test('decimal floats and malformed currency are rejected',()=>{
   assert.throws(()=>engine.reconcile({expectedTransfers:[{...expected(),amountMinor:100000}],providerEvents:[event()],now}),/integer_minor_units/);
   assert.throws(()=>engine.reconcile({expectedTransfers:[{...expected(),currency:'US'}],providerEvents:[event()],now}),/iso_4217/);
 });
+
+test('unexpected event type and failed provider state are not treated as a clean match',()=>{
+  const wrongType=engine.reconcile({expectedTransfers:[expected()],providerEvents:[event({eventType:'refund'})],now});
+  assert.equal(wrongType.status,'EXCEPTIONS');
+  assert.ok(wrongType.results.some(x=>x.reasons.includes('UNEXPECTED_PROVIDER_EVENT_TYPE')));
+  const failed=engine.reconcile({expectedTransfers:[expected()],providerEvents:[event({status:'failed'})],now});
+  assert.equal(failed.status,'EXCEPTIONS');
+  assert.ok(failed.results[0].reasons.includes('PROVIDER_EVENT_NOT_SETTLED'));
+});
