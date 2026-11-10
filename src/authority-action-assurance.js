@@ -42,3 +42,5 @@ function detectConsequenceConflicts(grants){
  const rules=[['read_beneficiaries','initiate_payment','BENEFICIARY_READ_AND_PAYMENT_INITIATION','critical'],['change_beneficiary','release_payment','BENEFICIARY_CHANGE_AND_PAYMENT_RELEASE','critical'],['manage_credentials','initiate_payment','CREDENTIAL_CONTROL_AND_PAYMENT_INITIATION','critical'],['change_policy','approve','POLICY_CHANGE_AND_APPROVAL','high']];
  const findings=[];for(const g of grouped.values())for(const [a,b,code,severity] of rules)if(g.capabilities.has(a)&&g.capabilities.has(b))findings.push({actorId:g.actorId,resourceId:g.resourceId,code,severity});return findings;
 }
+
+module.exports={ACTIONS,evaluateAction,detectConsequenceConflicts};
