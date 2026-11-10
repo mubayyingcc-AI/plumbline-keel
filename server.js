@@ -298,6 +298,7 @@ const apiDescription = {
     '/api/products':{get:{summary:'Current product catalogue'}},
     '/api/sandbox/scenarios':{get:{summary:'Executable public synthetic sandbox scenarios'}},
     '/api/sandbox/payment-authority/scenarios':{get:{summary:'Executable synthetic Payment Authority scenarios'}},
+    '/api/sandbox/human-card/scenarios':{get:{summary:'Executable synthetic Human Card scenarios'}},
     '/api/sandbox/payment-authority/runs':{post:{summary:'Evaluate a synthetic payment intent against a human-issued mandate; no execution'}},
     '/api/sandbox/human-card/runs':{post:{summary:'Run a synthetic Human Card profile and unverified funding-boundary test'}},
     '/api/ledger/status':{get:{summary:'Ledger migration, runtime-role and row-level security readiness'}},
@@ -954,6 +955,9 @@ const server = http.createServer(async (req,res) => {
         const result=paymentAuthority.evaluatePayment({tenantId,mandate,intent,availability,policy,now});
         return send(res,200,{ok:true,synthetic:true,scenario,expectedDecision:scenario.expectedDecision,passed:result.decision===scenario.expectedDecision,result,execution:'DISABLED',boundary:'Evaluation only. No reservation, approval, provider instruction, debit or settlement occurred.'});
       }catch(error){return send(res,400,{error:'payment_authority_scenario_invalid',message:error.message});}
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/human-card/scenarios') {
+      return send(res,200,{scenarios:publicHumanCardScenarios,notice:'Sandbox credential only. No issuer, payment credential or real funds.'});
     }
     if (req.method === 'POST' && route === '/api/sandbox/human-card/runs') {
       if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
