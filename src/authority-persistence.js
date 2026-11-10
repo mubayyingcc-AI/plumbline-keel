@@ -32,6 +32,8 @@ async function authorizeAndRecord(client,context){
  const q=await client.query('SELECT * FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[tenantId,envelopeId]);
  if(!q.rowCount)fail('authority_envelope_not_found',404);
  const e=q.rows[0],reasons=[];
+ const storedEnvelopeFingerprint=digest({grantorPrincipalId:e.grantor_principal_id,granteePrincipalId:e.grantee_principal_id,scopes:Array.isArray(e.scopes)?e.scopes:[],resourceIds:Array.isArray(e.resource_ids)?e.resource_ids:[],currency:e.currency,maxAmountMinor:e.max_amount_minor===null?null:String(e.max_amount_minor),approvalRequired:e.approval_required,approverPrincipalId:e.approver_principal_id,validFrom:new Date(e.valid_from).toISOString(),expiresAt:new Date(e.expires_at).toISOString(),allowSubdelegation:false});
+ if(storedEnvelopeFingerprint!==String(e.envelope_fingerprint||'').trim())fail('authority_envelope_fingerprint_mismatch',409);
  if(e.status!=='active')reasons.push('ENVELOPE_NOT_ACTIVE');
  if(e.grantee_principal_id!==actor.principal_id)reasons.push('ACTOR_NOT_AUTHORIZED_GRANTEE');
  const now=Date.now();if(now<Date.parse(e.valid_from)||now>=Date.parse(e.expires_at))reasons.push('DELEGATION_NOT_CURRENT');
