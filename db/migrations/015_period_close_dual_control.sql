@@ -37,11 +37,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS keel_accounting_period_close_one_pending_idx
   ON keel_accounting_period_close_requests(tenant_id,period_id) WHERE status='pending';
 
 ALTER TABLE keel_accounting_periods ADD COLUMN IF NOT EXISTS closed_by_principal_id TEXT;
-DO $ BEGIN
+DO $do$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_accounting_period_closed_principal_check') THEN
     ALTER TABLE keel_accounting_periods ADD CONSTRAINT keel_accounting_period_closed_principal_check CHECK(status<>'closed' OR closed_by_principal_id IS NOT NULL);
   END IF;
-END $;
+END $do$;
 
 CREATE TABLE IF NOT EXISTS keel_accounting_period_closures (
   tenant_id UUID NOT NULL,
@@ -87,10 +87,10 @@ CREATE TRIGGER keel_accounting_period_close_request_guard_trigger
   BEFORE UPDATE ON keel_accounting_period_close_requests
   FOR EACH ROW EXECUTE FUNCTION keel_accounting_period_close_request_guard();
 
-CREATE OR REPLACE FUNCTION keel_accounting_period_close_request_no_delete() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE OR REPLACE FUNCTION keel_accounting_period_close_request_no_delete() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
   RAISE EXCEPTION 'accounting period close request evidence cannot be deleted';
-END; $;
+END; $fn$;
 DROP TRIGGER IF EXISTS keel_accounting_period_close_request_no_delete_trigger ON keel_accounting_period_close_requests;
 CREATE TRIGGER keel_accounting_period_close_request_no_delete_trigger
   BEFORE DELETE ON keel_accounting_period_close_requests
