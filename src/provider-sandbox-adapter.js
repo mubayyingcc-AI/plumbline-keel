@@ -31,8 +31,10 @@ class ProviderSandboxAdapter{
 }
 function createDeterministicSandboxTransport({outcome='accepted'}={}){
  const seen=new Map();return async ({providerId,idempotencyKey,payload})=>{
-  const prior=seen.get(idempotencyKey);if(prior)return {...prior,replayed:true};
-  const result={outcome,providerInstructionId:'sbx_'+crypto.createHash('sha256').update(providerId+':'+idempotencyKey).digest('hex').slice(0,24),echoFingerprint:crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex')};
+  const fingerprint=crypto.createHash('sha256').update(canonical(payload)).digest('hex');
+  const prior=seen.get(idempotencyKey);
+  if(prior){if(prior.echoFingerprint!==fingerprint)fail('sandbox_idempotency_payload_conflict',409);return {...prior,replayed:true};}
+  const result={outcome,providerInstructionId:'sbx_'+crypto.createHash('sha256').update(providerId+':'+idempotencyKey).digest('hex').slice(0,24),echoFingerprint:fingerprint};
   seen.set(idempotencyKey,result);return {...result,replayed:false};
  };
 }
