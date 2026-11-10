@@ -1,3 +1,5 @@
+ALTER TABLE public.keel_principals ADD COLUMN IF NOT EXISTS principal_kind TEXT NOT NULL DEFAULT 'human';
+DO $keel$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_principals_kind_check') THEN ALTER TABLE public.keel_principals ADD CONSTRAINT keel_principals_kind_check CHECK(principal_kind IN ('human','ai_agent','service','system')); END IF; END $keel$;
 -- KAAA: scoped financial authority and immutable action evidence.
 CREATE TABLE IF NOT EXISTS keel_authority_envelopes (
  tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
