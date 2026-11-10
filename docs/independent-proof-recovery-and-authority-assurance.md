@@ -85,5 +85,31 @@ The mainline release candidate now requires a named delegated principal and sepa
 ## Automated recovery-state verification
 
 The PostgreSQL 16/18 CI matrix now runs `scripts/verify-recovery-state.js` after migrations and integration tests against a disposable database using the restricted `keel_runtime` role. A separate admin connection enumerates active tenants; every financial read is then executed with transaction-local tenant context. The verifier checks runtime role privileges, tenant isolation, exact ledger projections, trial-balance equality, provider uncertainty/open-case state and the hash-linked ledger event chain. This is a meaningful restore-target verification step, but it is not a substitute for taking an encrypted backup, restoring from WAL/PITR into a clean environment, measuring RPO/RTO and obtaining independent sign-off.
+ provider/callback-reconciliation-assurance
+
+
+## Signed sandbox callback ingress
+
+`POST /api/providers/callback/bank-sandbox` accepts the exact raw request body and requires `x-keel-signature: sha256=<hex>` plus `x-keel-key-id`. The event body itself must carry the tenant UUID, provider event ID, idempotency key, event type, status, provider occurrence time and amount/currency payload; tenant selection is taken only from this signed content. The route verifies HMAC before opening a tenant-scoped transaction, persists the inbox event idempotently, reconciles it against the durable outbox and appends a linked ledger event proof. It never posts settlement, reverses or writes off a journal.
+
+Configure `KEEL_BANK_SANDBOX_WEBHOOK_KEYRING` as a JSON object mapping key IDs to secrets of at least 32 bytes, and `KEEL_BANK_SANDBOX_WEBHOOK_ACTIVE_KEY_ID` as the current key ID. During rotation, deploy both old and new keys in the keyring, switch the active key ID for outbound sandbox signing where applicable, then remove the old key only after the provider confirms cutover. Legacy single-key variables `KEEL_BANK_SANDBOX_WEBHOOK_SECRET` and `KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID` are accepted for initial setup. Secrets must be injected through the deployment secret manager and never committed.
+
+
+## Independently verifiable Ed25519 ledger checkpoints
+
+Keel can export each active tenant's verified ledger-event-chain head as a signed `keel-independent-proof-checkpoint/v1` JSON object. The exporter refuses to run with a superuser or BYPASSRLS runtime role and refuses to sign a tenant whose chain does not verify. The checkpoint includes tenant ID, verified event count, chain-head fingerprint, timestamp, database identity, algorithm and key ID. It is signed with Ed25519; verification needs only the checkpoint JSON and public key, not access to Keel's database.
+
+Generate an offline signing key pair in a controlled key ceremony (example only; production private key should be held by KMS/HSM):
+
+```sh
+openssl genpkey -algorithm ED25519 -out keel-checkpoint-private.pem
+openssl pkey -in keel-checkpoint-private.pem -pubout -out keel-checkpoint-public.pem
+```
+
+Inject the private key and key ID as `KEEL_CHECKPOINT_SIGNING_PRIVATE_KEY` and `KEEL_CHECKPOINT_SIGNING_KEY_ID`; set `PG_ADMIN_URL`, `DATABASE_URL` (restricted runtime), and optional `KEEL_CHECKPOINT_DATABASE_ID`. Run `npm run proof:checkpoint:export`. Store the resulting timestamped JSON files in a separately administered immutable/WORM object store and distribute the public key through an independent trust channel. To verify offline, set `KEEL_CHECKPOINT_VERIFY_PUBLIC_KEY` to the public PEM and run `npm run proof:checkpoint:verify -- path/to/checkpoint.json`.
+
+This proves that the signed chain head was attested by the holder of the signing key and allows an external party to compare later database state against that checkpoint. The exporter currently writes local files only; automatic WORM publication, KMS/HSM-backed signing, key revocation/rotation registry and independent operational custody are not yet implemented. A signed checkpoint is not itself a backup or a proof that the provider settled funds.
+
  main
+main
 main

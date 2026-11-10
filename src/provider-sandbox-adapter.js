@@ -1,5 +1,6 @@
 'use strict';
-const crypto=require('node:crypto');const {verifyHmacSha256}=require('./provider-lifecycle');
+const crypto=require('node:crypto');
+const {verifyHmacSha256}=require('./provider-lifecycle');
 const {canonical}=require('./authority-chain');
 function fail(code,status=400){const e=new Error(code);e.code=code;e.status=status;throw e;}
 class ProviderSandboxAdapter{
@@ -7,6 +8,7 @@ class ProviderSandboxAdapter{
   if(!providerId||typeof transport!=='function'||!keyring||!activeKeyId)fail('sandbox_adapter_configuration_incomplete',503);
   this.providerId=providerId;this.transport=transport;this.keyring=new Map(Object.entries(keyring));this.activeKeyId=activeKeyId;
   if(!this.keyring.has(activeKeyId))fail('active_webhook_key_missing',503);
+  for(const [id,secret] of this.keyring)if(!id||typeof secret!=='string'||Buffer.byteLength(secret)<32)fail('webhook_keyring_entry_invalid',503);
  }
  rotateWebhookKey({keyId,secret,retainPrevious=true}){
   if(!keyId||typeof secret!=='string'||Buffer.byteLength(secret)<32)fail('rotation_key_invalid');
@@ -30,6 +32,7 @@ class ProviderSandboxAdapter{
  }
 }
 function createDeterministicSandboxTransport({outcome='accepted'}={}){
+ if(!['accepted','failed','unknown'].includes(outcome))fail('sandbox_outcome_invalid');
  const seen=new Map();return async ({providerId,idempotencyKey,payload})=>{
   const fingerprint=crypto.createHash('sha256').update(canonical(payload)).digest('hex');
   const prior=seen.get(idempotencyKey);

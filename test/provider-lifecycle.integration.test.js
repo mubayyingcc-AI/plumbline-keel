@@ -7,6 +7,8 @@ const posting=require('../src/ledger-posting');
 const lifecycle=require('../src/provider-lifecycle');
 const periods=require('../src/accounting-periods');
 const authority=require('../src/authority-persistence');
+const callbackIngress=require('../src/provider-callback-ingress');
+const {ProviderSandboxAdapter,createDeterministicSandboxTransport}=require('../src/provider-sandbox-adapter');
 
 test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-019 applied'},async()=>{
   const {Pool}=require('pg');
@@ -92,36 +94,20 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(expired.rows[0].status,'unknown');
     assert.equal(expired.rows[0].last_error_code,'DISPATCH_LEASE_EXPIRED_OUTCOME_UNKNOWN');
 
-    const eventClient=await pool.connect();
-    let inboxId;
-    try{
-      await eventClient.query('BEGIN');
-      await eventClient.query("SELECT set_config('keel.tenant_id',$1,true)",[tenantId]);
-      const signedEvent={providerEventId:'evt-'+suffix,idempotencyKey:'provider-outbox-'+suffix+'-0001',eventType:'payment.status',status:'settled',occurredAt:'2026-11-10T10:01:00.000Z',payload:{amountMinor:'500',currency:'USD'}};
-      const rawBody=JSON.stringify(signedEvent);
-      const secret='test-provider-webhook-secret-32-bytes-minimum';
-      const signature='sha256='+crypto.createHmac('sha256',secret).update(rawBody).digest('hex');
-      const verification=lifecycle.verifyHmacSha256({rawBody,signature,secret,keyId:'sandbox-signing-key'});
-      const event=await lifecycle.recordVerifiedProviderEvent(eventClient,{
-        tenantId,providerId:'bank-sandbox',providerEventId:signedEvent.providerEventId,idempotencyKey:signedEvent.idempotencyKey,
-        eventType:signedEvent.eventType,status:signedEvent.status,occurredAt:signedEvent.occurredAt,
-        payload:signedEvent.payload,rawBody,verification
-      });
-      inboxId=event.inbox_id;
-      const replay=await lifecycle.recordVerifiedProviderEvent(eventClient,{
-        tenantId,providerId:'bank-sandbox',providerEventId:signedEvent.providerEventId,idempotencyKey:signedEvent.idempotencyKey,
-        eventType:signedEvent.eventType,status:signedEvent.status,occurredAt:signedEvent.occurredAt,
-        payload:{currency:'USD',amountMinor:'500'},rawBody,verification
-      });
-      assert.equal(replay.replay,true);
-      assert.equal(replay.inbox_id,inboxId);
-      const reconciliation=await lifecycle.reconcileProviderEvent(eventClient,tenantId,inboxId);
-      assert.equal(reconciliation.status,'matched');
-      assert.equal(reconciliation.execution,'DISABLED');
-      const outboxState=await eventClient.query('SELECT status FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,outboxId]);
-      assert.equal(outboxState.rows[0].status,'reconciled');
-      await eventClient.query('COMMIT');
-    }catch(e){await eventClient.query('ROLLBACK');throw e;}finally{eventClient.release();}
+    const secret='test-provider-webhook-secret-32-bytes-minimum',webhookKeyId='sandbox-signing-key';
+    const adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:createDeterministicSandboxTransport(),keyring:{[webhookKeyId]:secret},activeKeyId:webhookKeyId});
+    const signedEvent={tenantId,providerId:'bank-sandbox',providerEventId:'evt-'+suffix,idempotencyKey:'provider-outbox-'+suffix+'-0001',eventType:'payment.status',status:'settled',occurredAt:'2026-11-10T10:01:00.000Z',payload:{amountMinor:'500',currency:'USD'}};
+    const rawBody=JSON.stringify(signedEvent);
+    const signature='sha256='+crypto.createHmac('sha256',secret).update(rawBody).digest('hex');
+    const callback=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:webhookKeyId});
+    assert.equal(callback.replay,false);
+    assert.equal(callback.reconciliation.status,'matched');
+    assert.equal(callback.reconciliation.execution,'DISABLED');
+    const callbackReplay=await callbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:webhookKeyId});
+    assert.equal(callbackReplay.replay,true);
+    assert.equal(callbackReplay.inboxId,callback.inboxId);
+    const outboxState=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status FROM keel_provider_outbox WHERE tenant_id=$1 AND outbox_id=$2',[tenantId,outboxId]));
+    assert.equal(outboxState.rows[0].status,'reconciled');
 
     const unscoped=await pool.query('SELECT inbox_id FROM keel_provider_inbox WHERE tenant_id=$1',[tenantId]);
     assert.equal(unscoped.rowCount,0,'provider inbox must be invisible without transaction-local tenant context');
