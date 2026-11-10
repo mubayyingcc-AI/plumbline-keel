@@ -1,6 +1,12 @@
 'use strict';
-const test=require('node:test'),assert=require('node:assert/strict');const {createKeyPair,createCheckpoint,verifyCheckpoint}=require('../src/independent-proof-checkpoint');
-test('public-key-only independent checkpoint verification',()=>{const k=createKeyPair(),cp=createCheckpoint({tenantId:'t-1',sequence:1,ledgerHeadFingerprint:'a'.repeat(64),providerWatermark:{bank:'evt-9'},privateKey:k.privateKey,keyId:'key-1'});assert.equal(verifyCheckpoint(cp,{publicKey:k.publicKey,expectedTenantId:'t-1'}).valid,true);});
-test('checkpoint tampering invalidates signature',()=>{const k=createKeyPair(),cp=createCheckpoint({tenantId:'t-1',sequence:1,ledgerHeadFingerprint:'a'.repeat(64),privateKey:k.privateKey,keyId:'key-1'});assert.equal(verifyCheckpoint({...cp,ledgerHeadFingerprint:'b'.repeat(64)},{publicKey:k.publicKey}).reason,'SIGNATURE_INVALID');});
-test('broken checkpoint chain rejected',()=>{const k=createKeyPair(),cp=createCheckpoint({tenantId:'t-1',sequence:2,previousCheckpointHash:'abc',ledgerHeadFingerprint:'a'.repeat(64),privateKey:k.privateKey,keyId:'key-1'});assert.equal(verifyCheckpoint(cp,{publicKey:k.publicKey,expectedPreviousHash:'wrong'}).reason,'CHECKPOINT_CHAIN_MISMATCH');});
-test('no trusted public key fails closed',()=>{const k=createKeyPair(),cp=createCheckpoint({tenantId:'t-1',sequence:1,ledgerHeadFingerprint:'a'.repeat(64),privateKey:k.privateKey,keyId:'key-1'});assert.equal(verifyCheckpoint(cp,{}).reason,'TRUSTED_PUBLIC_KEY_REQUIRED');});
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const crypto=require('node:crypto');
+const {createCheckpoint,verifyCheckpoint}=require('../src/independent-proof-checkpoint');
+const pair=crypto.generateKeyPairSync('ed25519');
+const input={tenantId:'11111111-1111-4111-8111-111111111111',verifiedEvents:'12',headFingerprint:'a'.repeat(64),keyId:'keel-test-key-1',privateKey:pair.privateKey};
+test('independent checkpoint verifies offline with public key only',()=>{const cp=createCheckpoint(input);const result=verifyCheckpoint(cp,pair.publicKey);assert.equal(result.valid,true);assert.equal(result.verifiedEvents,'12');});
+test('checkpoint tampering is detected',()=>{const cp=createCheckpoint(input);assert.equal(verifyCheckpoint({...cp,headFingerprint:'b'.repeat(64)},pair.publicKey).valid,false);});
+test('checkpoint signed by a different key is rejected',()=>{const cp=createCheckpoint(input),other=crypto.generateKeyPairSync('ed25519');assert.equal(verifyCheckpoint(cp,other.publicKey).valid,false);});
+test('checkpoint requires Ed25519 keys and valid chain head',()=>{const rsa=crypto.generateKeyPairSync('rsa',{modulusLength:2048});assert.throws(()=>createCheckpoint({...input,privateKey:rsa.privateKey}),/checkpoint_private_key_must_be_ed25519/);assert.throws(()=>createCheckpoint({...input,headFingerprint:'bad'}),/checkpoint_head_fingerprint_invalid/);});
+test('empty tenant checkpoint requires a null chain head',()=>{const cp=createCheckpoint({...input,verifiedEvents:'0',headFingerprint:null});assert.equal(verifyCheckpoint(cp,pair.publicKey).valid,true);});
