@@ -1069,6 +1069,9 @@ const server = http.createServer(async (req,res) => {
       );
       return send(res,201,{ok:true,leadId:lead.id,message:'Your request has been recorded.'});
     }
+    if (req.method === 'GET' && ['/favicon.svg','/favicon.ico'].includes(route)) {
+      return send(res,200,fs.readFileSync(path.join(__dirname,'favicon.svg')),'image/svg+xml; charset=utf-8');
+    }
     if (req.method === 'GET' && ['/', '/index.html'].includes(route)) {
       return send(res,200,fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),'text/html; charset=utf-8');
     }
