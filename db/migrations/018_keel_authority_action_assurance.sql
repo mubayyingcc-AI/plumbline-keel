@@ -73,3 +73,15 @@ BEGIN
  END LOOP;
 END
 $keel$;
+
+-- Action proofs and approvals are append-only evidence.
+CREATE OR REPLACE FUNCTION public.keel_reject_kAAA_evidence_mutation()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $function$
+BEGIN
+ RAISE EXCEPTION 'keel_kAAA_evidence_is_immutable' USING ERRCODE='55000';
+END
+$function$;
+DROP TRIGGER IF EXISTS keel_action_proof_objects_immutable ON public.keel_action_proof_objects;
+CREATE TRIGGER keel_action_proof_objects_immutable BEFORE UPDATE OR DELETE ON public.keel_action_proof_objects FOR EACH ROW EXECUTE FUNCTION public.keel_reject_kAAA_evidence_mutation();
+DROP TRIGGER IF EXISTS keel_authority_action_approvals_immutable ON public.keel_authority_action_approvals;
+CREATE TRIGGER keel_authority_action_approvals_immutable BEFORE UPDATE OR DELETE ON public.keel_authority_action_approvals FOR EACH ROW EXECUTE FUNCTION public.keel_reject_kAAA_evidence_mutation();
