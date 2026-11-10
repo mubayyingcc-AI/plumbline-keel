@@ -51,6 +51,6 @@ async function authorizeAndRecord(client,context){
  const authority={envelopeId:e.envelope_id,grantorPrincipalId:e.grantor_principal_id,granteePrincipalId:e.grantee_principal_id,scopes,resourceIds:resources,currency:e.currency,maxAmountMinor:e.max_amount_minor===null?null:String(e.max_amount_minor),validFrom:new Date(e.valid_from).toISOString(),expiresAt:new Date(e.expires_at).toISOString(),approvalRequired:e.approval_required,approverPrincipalId:e.approver_principal_id,status:e.status};
  const authorityFingerprint=digest(authority),proofId=crypto.randomUUID();
  await client.query('INSERT INTO keel_action_proof_objects(tenant_id,proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)',[tenantId,proofId,actor.key_id,actor.principal_id,envelopeId,action,resourceId||null,requestFingerprint,authorityFingerprint,'PERMIT',JSON.stringify(['WITHIN_SCOPED_DELEGATION',...(e.approval_required?['INDEPENDENT_APPROVAL_VERIFIED']:[])]),executionRef||null]);
- return {proofId,envelopeId,authorityFingerprint,decision:'PERMIT'};
+ return {proofId,envelopeId,authorityFingerprint,requestFingerprint,decision:'PERMIT'};
 }
 module.exports={ACTIONS,normalizeEnvelope,authorizeAndRecord,digest};
