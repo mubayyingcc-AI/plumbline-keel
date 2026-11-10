@@ -93,7 +93,24 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     await assert.rejects(()=>posting.withTransaction(pool,client=>client.query(
       "UPDATE keel_accounting_periods SET status='closed',closed_at=NOW(),closed_by='test',close_hash=repeat('a',64) WHERE tenant_id=$1 AND period_id=$2",
       [tenantId,periodId]
-    ),tenantId),/period close is disabled until dual-control close approval is implemented/);
+    ),tenantId),/approved dual-control closure record required/);
+    await accountingPeriods.softClosePeriod(pool,tenantId,periodId);
+    const closeRequest=await accountingPeriods.requestPeriodClose(pool,tenantId,periodId,'maker-key-'+suffix);
+    await assert.rejects(()=>accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'maker-key-'+suffix),/checker_must_be_independent/);
+    const closed=await accountingPeriods.approvePeriodClose(pool,tenantId,periodId,closeRequest.requestId,'checker-key-'+suffix);
+    assert.equal(closed.closed,true);
+    assert.equal(closed.status,'closed');
+    assert.ok(/^[0-9a-f]{64}$/.test(closed.closeHash));
+    const closure=await accountingPeriods.getPeriodClosure(pool,tenantId,periodId);
+    assert.equal(closure.close_hash,closed.closeHash);
+    assert.equal(closure.closed_by_key_id,'checker-key-'+suffix);
+    const requests=await accountingPeriods.listPeriodCloseRequests(pool,tenantId,periodId);
+    assert.equal(requests.length,1);
+    assert.equal(requests[0].status,'approved');
+    await assert.rejects(()=>posting.postJournal(pool,tenantId,{journalId:'closed-'+suffix,idempotencyKey:'closed-period-key-'+suffix+'-0000',description:'Cannot post after close',sourceRef:'test:closed:'+suffix,effectiveAt:'2026-11-10T15:00:00.000Z',bookId,periodId,accountingDate:'2026-11-10',lines:[
+      {accountId:cash,side:'debit',currency:'USD',amountMinor:'1'},
+      {accountId:liability,side:'credit',currency:'USD',amountMinor:'1'}
+    ]}),/accounting_period_not_open/);
 
     const reversalCash='reversal-cash-'+suffix, reversalEquity='reversal-equity-'+suffix;
     await posting.createAccount(pool,tenantId,{accountId:reversalCash,accountCode:'3000-'+suffix,accountName:'Reversal test cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
