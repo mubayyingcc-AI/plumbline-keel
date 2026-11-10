@@ -70,3 +70,10 @@ The mainline release candidate now requires a named delegated principal and sepa
 ## Automated recovery-state verification
 
 The PostgreSQL 16/18 CI matrix now runs `scripts/verify-recovery-state.js` after migrations and integration tests against a disposable database using the restricted `keel_runtime` role. A separate admin connection enumerates active tenants; every financial read is then executed with transaction-local tenant context. The verifier checks runtime role privileges, tenant isolation, exact ledger projections, trial-balance equality, provider uncertainty/open-case state and the hash-linked ledger event chain. This is a meaningful restore-target verification step, but it is not a substitute for taking an encrypted backup, restoring from WAL/PITR into a clean environment, measuring RPO/RTO and obtaining independent sign-off.
+
+
+## Signed sandbox callback ingress
+
+`POST /api/providers/callback/bank-sandbox` accepts the exact raw request body and requires `x-keel-signature: sha256=<hex>` plus `x-keel-key-id`. The event body itself must carry the tenant UUID, provider event ID, idempotency key, event type, status, provider occurrence time and amount/currency payload; tenant selection is taken only from this signed content. The route verifies HMAC before opening a tenant-scoped transaction, persists the inbox event idempotently, reconciles it against the durable outbox and appends a linked ledger event proof. It never posts settlement, reverses or writes off a journal.
+
+Configure `KEEL_BANK_SANDBOX_WEBHOOK_KEYRING` as a JSON object mapping key IDs to secrets of at least 32 bytes, and `KEEL_BANK_SANDBOX_WEBHOOK_ACTIVE_KEY_ID` as the current key ID. During rotation, deploy both old and new keys in the keyring, switch the active key ID for outbound sandbox signing where applicable, then remove the old key only after the provider confirms cutover. Legacy single-key variables `KEEL_BANK_SANDBOX_WEBHOOK_SECRET` and `KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID` are accepted for initial setup. Secrets must be injected through the deployment secret manager and never committed.
