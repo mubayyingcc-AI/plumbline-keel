@@ -1008,7 +1008,7 @@ const server = http.createServer(async (req,res) => {
       }
       if(req.method==='GET'&&route==='/api/ledger/events/verify'){
         const result=await ledgerPosting.verifyLedgerEventChain(pool,actor.tenant_id);
-        return send(res,result.matches?200:409,{ok:result.matches,...result});
+        return send(res,result.valid?200:409,{ok:result.valid,...result});
       }
       return send(res,404,{error:'ledger_endpoint_not_found'});
     }
