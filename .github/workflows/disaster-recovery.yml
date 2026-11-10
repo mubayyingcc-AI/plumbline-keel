@@ -60,11 +60,12 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
+          docker run -d --name keel-s3-test -p 8333:8333 chrislusf/seaweedfs:latest server -s3 -dir=/data -s3.port=8333
           for attempt in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:8333/status >/dev/null && break
+            if aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:8333 s3 ls s3://keel-ci-backups
       - name: Generate ephemeral test encryption identity
         id: age
         run: |
@@ -104,9 +105,6 @@ jobs:
   pgbackrest-point-in-time-recovery:
     name: S3-backed PostgreSQL point-in-time recovery
     runs-on: ubuntu-24.04
-    services:
-      s3:
-                env:
     env:
       PGDATA: /var/lib/postgresql/16/main
       PGUSER: postgres
