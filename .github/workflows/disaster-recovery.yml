@@ -52,9 +52,9 @@ jobs:
       - name: Generate ephemeral test encryption identity
         id: age
         run: |
-          age-keygen -o "$RUNNER_TEMP/age-identity.txt" 2> "$RUNNER_TEMP/age-recipient.txt"
+          age-keygen -o "$RUNNER_TEMP/age-identity.txt"
           chmod 600 "$RUNNER_TEMP/age-identity.txt"
-          RECIPIENT="$(awk '/^# public key:/ {print $4}' "$RUNNER_TEMP/age-recipient.txt")"
+          RECIPIENT="$(age-keygen -y "$RUNNER_TEMP/age-identity.txt")"
           test -n "$RECIPIENT"
           echo "recipient=$RECIPIENT" >> "$GITHUB_OUTPUT"
       - name: Create encrypted backup
