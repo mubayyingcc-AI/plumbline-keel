@@ -156,3 +156,20 @@ test('regulatory docket export requires tenant authentication',async()=>{const r
 
 test('regulatory corrective action creation requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/actions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
 test('regulatory corrective action transition requires tenant authentication',async()=>{const r=await fetch(base+'/api/regulatory/actions/transition',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});assert.equal(r.status,401)});
+
+test('public sandbox scenario catalogue exposes only explicitly executable fixtures', async () => {
+  const response = await fetch(base + '/api/sandbox/scenarios');
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(data.scenarios.map(s => s.id), ['KFS-001','KFS-002']);
+  assert.ok(data.scenarios.every(s => s.availability === 'EXECUTABLE' && s.dataClass === 'synthetic'));
+});
+
+test('assurance status exposes the contract consumed by the website', async () => {
+  const response = await fetch(base + '/api/assurance/status');
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.availability, 'available');
+  assert.equal(data.tenantIsolation, 'credential-scoped');
+  assert.equal(typeof data.boundary, 'string');
+});

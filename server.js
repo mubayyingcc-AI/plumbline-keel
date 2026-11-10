@@ -36,6 +36,11 @@ const products = [
   { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'Architecture + schema foundation', description:'Trace remittance origin, funding, FX, payout, wallet credit and card spend as distinct provider events, with reconciliation and recovery evidence.', outputs:['Canonical transfer identity','Provider event ingestion model','Wallet availability controls','Discrepancy and recovery model'], integration:'Provider-neutral schema foundation; no MTO or wallet adapter connected' }
 ];
 
+const publicSandboxScenarios = [
+  { id:'KFS-001', version:'1.0.0', name:'Fresh evidence and policy evaluation', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Fresh synthetic evidence only; no external institution or financial system is queried.' },
+  { id:'KFS-002', version:'1.0.0', name:'Stale evidence must not pass cleanly', availability:'EXECUTABLE', dataClass:'synthetic', engine:'Keel collateral evaluator', boundary:'Stale synthetic evidence only; no external institution or financial system is queried.' }
+];
+
 let poolPromise;
 async function dbPool() {
   if (!process.env.DATABASE_URL) return null;
@@ -107,7 +112,7 @@ async function dbPool() {
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS actor_key_id TEXT');
       await pool.query('ALTER TABLE keel_assurance_events ADD COLUMN IF NOT EXISTS actor_role TEXT');
       await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS keel_assurance_events_tenant_sequence_uq ON keel_assurance_events(tenant_id,tenant_sequence) WHERE tenant_id IS NOT NULL');
-      await pool.query("CREATE OR REPLACE FUNCTION keel_reject_assurance_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RAISE EXCEPTION 'Keel Authority Chain events are append-only'; END; $");
+      await pool.query("CREATE OR REPLACE FUNCTION keel_reject_assurance_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Keel Authority Chain events are append-only'; END; $$");
       await pool.query('DROP TRIGGER IF EXISTS keel_assurance_events_immutable ON keel_assurance_events');
       await pool.query('CREATE TRIGGER keel_assurance_events_immutable BEFORE UPDATE OR DELETE ON keel_assurance_events FOR EACH ROW EXECUTE FUNCTION keel_reject_assurance_event_mutation()');
 
@@ -123,7 +128,26 @@ async function dbPool() {
       await pool.query(`CREATE TABLE IF NOT EXISTS keel_regulatory_applicability_decisions (tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id), decision_id UUID NOT NULL, obligation_id TEXT NOT NULL, obligation_version TEXT NOT NULL, applicable BOOLEAN NOT NULL, rationale JSONB NOT NULL, reviewer_principal_id UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(tenant_id,decision_id), FOREIGN KEY(tenant_id,obligation_id,obligation_version) REFERENCES keel_regulatory_obligations(tenant_id,obligation_id,source_version), FOREIGN KEY(tenant_id,reviewer_principal_id) REFERENCES keel_principals(tenant_id,principal_id))`);
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_findings_tenant_idx ON keel_regulatory_findings(tenant_id,status,severity)');
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
-      return pool;
+      const runtimeUrl = process.env.KEEL_RUNTIME_DATABASE_URL;
+      if (!runtimeUrl) return pool;
+      const runtimePool = new Pool({
+        connectionString: runtimeUrl,
+        ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 8000,
+        query_timeout: 10000
+      });
+      try {
+        await runtimePool.query('SELECT 1');
+        await pool.end();
+        return runtimePool;
+      } catch (error) {
+        await runtimePool.end().catch(() => {});
+        await pool.end().catch(() => {});
+        throw error;
+      }
     })().catch(err => { poolPromise = null; throw err; });
   }
   return poolPromise;
@@ -854,6 +878,12 @@ const server = http.createServer(async (req,res) => {
         return send(res,result.status==='expired'?409:(result.replay?200:201),{ok:result.status!=='expired',...result});
       }
       return send(res,404,{error:'ledger_route_not_found'});
+    }
+    if (req.method === 'GET' && route === '/api/sandbox/scenarios') {
+      return send(res,200,{
+        scenarios:publicSandboxScenarios,
+        notice:'Only scenarios marked EXECUTABLE are runnable in the public synthetic sandbox. Other financial test families remain outside this endpoint until their actual engines are integrated.'
+      });
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});
