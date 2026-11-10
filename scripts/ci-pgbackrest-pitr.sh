@@ -11,7 +11,7 @@ set -Eeuo pipefail
 : "${PGBACKREST_REPO1_S3_KEY_SECRET:?PGBACKREST_REPO1_S3_KEY_SECRET required}"
 : "${PGBACKREST_REPO1_S3_REGION:=us-east-1}"
 for bin in pgbackrest pg_ctl psql runuser; do command -v "$bin" >/dev/null 2>&1 || { echo "missing:$bin" >&2; exit 127; }; done
-install -d -o postgres -g postgres -m 0750 /var/log/pgbackrest /var/spool/pgbackrest /var/lib/pgbackrest
+install -d -o postgres -g postgres -m 0750 /etc/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest /var/lib/pgbackrest
 cat >/etc/pgbackrest/pgbackrest.conf <<EOF
 [global]
 repo1-type=s3
