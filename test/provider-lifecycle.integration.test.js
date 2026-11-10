@@ -8,7 +8,7 @@ const lifecycle=require('../src/provider-lifecycle');
 const periods=require('../src/accounting-periods');
 const authority=require('../src/authority-persistence');
 
-test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-017 applied'},async()=>{
+test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-posts settlement',{skip:!url&&'Set KEEL_LEDGER_TEST_DATABASE_URL to disposable PostgreSQL with migrations 012-019 applied'},async()=>{
   const {Pool}=require('pg');
   const pool=new Pool({connectionString:url,max:6});
   const admin=new Pool({connectionString:process.env.PG_ADMIN_URL,max:2});
@@ -104,6 +104,7 @@ test('provider outbox/inbox is tenant-bound, durable, idempotent and never auto-
     assert.equal(own.rowCount,1);
     const cases=await lifecycle.withTenantTransaction(pool,tenantId,client=>client.query('SELECT status FROM keel_provider_reconciliation_cases WHERE tenant_id=$1',[tenantId]));
     assert.equal(cases.rows[0].status,'matched');
+    const chain=await posting.verifyLedgerEventChain(pool,tenantId);assert.equal(chain.valid,true);
   }finally{
     await pool.end();
     await admin.end();
