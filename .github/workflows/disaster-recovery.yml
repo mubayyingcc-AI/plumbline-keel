@@ -27,8 +27,24 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      s3:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: s3
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        ports:
+          - 4567:4566
     env:
       PGSSLMODE: disable
+      KEEL_BACKUP_S3_BUCKET: keel-ci-backups
+      KEEL_BACKUP_S3_ENDPOINT: http://127.0.0.1:4567
+      KEEL_BACKUP_S3_REGION: us-east-1
+      KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT: "true"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_source
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +54,7 @@ jobs:
       - name: Install PostgreSQL client and age
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client-16 age
+          sudo apt-get install -y postgresql-client-16 age awscli
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - name: Validate shell syntax
         run: |
@@ -50,6 +66,13 @@ jobs:
           createdb -h 127.0.0.1 -U postgres -e keel_restore_ci
         env:
           PGPASSWORD: postgres
+      - name: Create isolated S3 test bucket
+        run: |
+          for attempt in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:4567/_localstack/health >/dev/null && break
+            sleep 2
+          done
+          aws --endpoint-url http://127.0.0.1:4567 s3 mb s3://keel-ci-backups
       - name: Generate ephemeral test encryption identity
         id: age
         run: |
