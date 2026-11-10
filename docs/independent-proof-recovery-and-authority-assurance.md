@@ -32,7 +32,7 @@ An Authority Envelope binds tenant, grantor, grantee, action scopes, resource sc
 
 The consequence map flags hazardous combinations: beneficiary read + payment initiation; beneficiary change + payment release; credential administration + payment initiation; policy change + approval. These are explicit findings, not opaque universal risk scores.
 
-Every consequential action must persist an Action Proof Object: actor and delegated identity, envelope/policy versions, canonical request fingerprint, deterministic decision/reasons, human approvals, before/after state references, execution result and reconciliation status. The current evaluator is a pure deterministic primitive; universal route interception and durable persistence remain integration gates.
+Keel now persists Authority Envelopes, scoped resource/action grants, expiry and revocation state, designated independent approvals, and append-only Action Proof Objects. The authenticated ledger journal and reservation create/release/consume routes invoke the authority check inside the same database transaction as the financial write. Successful proofs are linked into the ledger event chain and returned to the caller. Integration-role keys without a named principal are denied financial execution. The current execution adapter supports single-currency delegated journals; delegated multi-currency journal posting is explicitly denied until a multi-currency envelope model is implemented. The KAAA HTTP API creates/revokes envelopes, records approvals and lists proofs. Denied attempts are returned as deterministic errors but are not yet written as durable denied Action Proof Objects; that remains an audit enhancement.
 
 ## Adversarial release gates
 - Compromised agent denied across tenants, outside action/resource scope, after expiry, above amount/currency limits, or when attempting self-approval.
@@ -45,4 +45,4 @@ Every consequential action must persist an Action Proof Object: actor and delega
 - CI uses no production secrets, endpoints, migrations or deployment credentials.
 
 ## Explicit limitations
-This branch adds signed checkpoint primitives, deterministic sandbox adapter and authority evaluator with adversarial unit tests. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, durable delegation revocation, universal route interception, automated restore drill or measured RPO/RTO. Those are blockers, not implied capabilities.
+This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. Provider dispatch worker enforcement must be added before enabling live external execution.
