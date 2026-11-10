@@ -173,3 +173,12 @@ test('assurance status exposes the contract consumed by the website', async () =
   assert.equal(data.tenantIsolation, 'credential-scoped');
   assert.equal(typeof data.boundary, 'string');
 });
+
+test('ledger status fails closed when no database is configured', async () => {
+  if (process.env.DATABASE_URL) return;
+  const response = await fetch(base + '/api/ledger/status');
+  const data = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(data.status, 'BLOCKED');
+  assert.equal(data.reason, 'database_not_configured');
+});
