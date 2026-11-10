@@ -10,10 +10,27 @@ const accountingPeriods=require('../src/accounting-periods');
 test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url && 'Set KEEL_LEDGER_TEST_DATABASE_URL to a disposable PostgreSQL database with migrations 012, 013 and 014 applied'}, async()=>{
   const {Pool}=require('pg');
   const pool=new Pool({connectionString:url,max:8});
+  const adminPool=new Pool({connectionString:process.env.PG_ADMIN_URL,max:2});
   const tenantId=crypto.randomUUID();
   const suffix=crypto.randomUUID().replace(/-/g,'').slice(0,12);
   try {
-    await pool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,'Keel ledger integration '+suffix,'ledger-test-'+suffix]);
+    await adminPool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,'Keel ledger integration '+suffix,'ledger-test-'+suffix]);
+    const otherTenantId=crypto.randomUUID();
+    await adminPool.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[otherTenantId,'Keel isolation integration '+suffix,'isolation-test-'+suffix]);
+    const authTokenHash=crypto.createHash('sha256').update('kk_live_'+crypto.randomBytes(32).toString('base64url')).digest('hex');
+    const authKeyId='auth-key-'+suffix;
+    await adminPool.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role) VALUES($1,$2,$3,'CI auth key','integration')",[authKeyId,tenantId,authTokenHash]);
+    const authResult=await pool.query('SELECT * FROM public.keel_authenticate_tenant_key($1)',[authTokenHash]);
+    assert.equal(authResult.rowCount,1);
+    assert.equal(authResult.rows[0].tenant_id,tenantId);
+    const hiddenKeys=await pool.query('SELECT key_id FROM keel_tenant_keys WHERE tenant_id=$1',[tenantId]);
+    assert.equal(hiddenKeys.rowCount,0,'tenant key table must deny unscoped runtime reads');
+    await pool.query('SELECT public.keel_touch_tenant_key($1,$2)',[authKeyId,tenantId]);
+    await posting.createAccount(pool,otherTenantId,{accountId:'isolated-cash-'+suffix,accountCode:'I1000-'+suffix,accountName:'Other tenant cash',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
+    const crossTenantRead=await posting.withTransaction(pool,client=>client.query('SELECT account_id FROM keel_ledger_accounts WHERE tenant_id=$1',[otherTenantId]),tenantId);
+    assert.equal(crossTenantRead.rowCount,0,'tenant A must not read tenant B ledger rows even with explicit foreign tenant ID');
+    const ownTenantRead=await posting.withTransaction(pool,client=>client.query('SELECT account_id FROM keel_ledger_accounts WHERE tenant_id=$1',[otherTenantId]),otherTenantId);
+    assert.equal(ownTenantRead.rowCount,1,'tenant B can read its own ledger row');
     await posting.createAccount(pool,tenantId,{accountId:'cash-'+suffix,accountCode:'1000-'+suffix,accountName:'Cash asset',accountClass:'asset',currency:'USD',currencyExponent:2,normalSide:'debit'});
     await posting.createAccount(pool,tenantId,{accountId:'customer-liability-'+suffix,accountCode:'2000-'+suffix,accountName:'Customer funds liability',accountClass:'liability',currency:'USD',currencyExponent:2,normalSide:'credit',isReservable:true});
     await assert.rejects(()=>posting.createAccount(pool,tenantId,{accountId:'bad-scale-'+suffix,accountCode:'9000-'+suffix,accountName:'Invalid scale',accountClass:'asset',currency:'USD',currencyExponent:7,normalSide:'debit'}),/ledger_account_currency_exponent_invalid/);
@@ -136,5 +153,6 @@ test('PostgreSQL ledger posting, idempotency, holds and concurrency', {skip:!url
     if(!chainCheck.valid)throw new Error('ledger_chain_check:'+JSON.stringify(chainCheck));
   } finally {
     await pool.end();
+    await adminPool.end();
   }
 });
