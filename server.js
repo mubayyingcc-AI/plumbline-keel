@@ -489,8 +489,7 @@ const server = http.createServer(async (req,res) => {
         const expired=humanCardPairing.isExpired(expiryIso);
         const deviceEligible=c.device_status==='delivered_pending_pairing'&&c.lifecycle_state==='physical_card_delivered_pending_pairing'&&c.hardware_attestation_verified===true;
         const counterValid=Number(c.expected_counter)===Number(c.last_challenge_counter)+1;
-        const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('
-');
+        const message=[humanCardPairing.VERSION,c.tenant_id,c.principal_id,c.card_id,c.challenge_id,nonce,String(c.expected_counter),expiryIso].join('\\n');
 
         let fingerprintValid=false;try{fingerprintValid=humanCardPairing.fingerprintPublicKey(c.device_public_key)===String(c.key_fingerprint||'').trim();}catch{fingerprintValid=false;}
         const signatureValid=nonceValid&&!expired&&deviceEligible&&counterValid&&fingerprintValid&&humanCardPairing.verifyPairingSignature({publicKeyPem:c.device_public_key,message,signatureBase64url:signature});
