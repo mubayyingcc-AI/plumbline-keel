@@ -1,0 +1,48 @@
+name: RLS-aware backup identity
+on:
+  pull_request:
+    paths:
+      - "db/migrations/020_rls_aware_backup_identity.sql"
+      - "test/backup-role.integration.test.js"
+      - "test/fixtures/backup-role-fixture.sql"
+      - ".github/workflows/backup-role.yml"
+  push:
+    branches: [main]
+    paths:
+      - "db/migrations/020_rls_aware_backup_identity.sql"
+      - "test/backup-role.integration.test.js"
+      - "test/fixtures/backup-role-fixture.sql"
+      - ".github/workflows/backup-role.yml"
+permissions:
+  contents: read
+jobs:
+  backup-role:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel_backup_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d keel_backup_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      KEEL_BACKUP_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: Verify least-privilege backup identity and RLS
+        run: node --test test/backup-role.integration.test.js
