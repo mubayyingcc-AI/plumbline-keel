@@ -18,6 +18,7 @@ const humanCardRecoveryApi = require('./src/human-card-recovery-api');
 const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
+const providerLifecycle = require('./src/provider-lifecycle');
 const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
@@ -27,7 +28,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60 };
 const rateBuckets = new Map();
 
 const products = [
@@ -984,6 +985,29 @@ const server = http.createServer(async (req,res) => {
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);const q=await pool.query('SELECT proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref,created_at FROM keel_action_proof_objects WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:q.rowCount,proofs:q.rows});
     }
+    if(route.startsWith('/api/providers/')){
+      const actor=await authenticateTenant(req);
+      if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
+      if(actor.role!=='integration'||!actor.principal_id)return send(res,403,{error:'named_integration_worker_required'});
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
+      if(!pool)return send(res,503,{error:'provider_lifecycle_storage_unavailable'});
+      if(req.method==='POST'&&route==='/api/providers/outbox/claim'){
+        if(rateLimited(req,'/api/providers/outbox/claim'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const body=await readBody(req),authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const leaseSeconds=body.leaseSeconds===undefined?45:body.leaseSeconds;
+        const claimed=await providerLifecycle.claimNextInstruction(pool,actor.tenant_id,actor.principal_id,leaseSeconds,authorityContext,['bank-sandbox']);
+        return send(res,200,{ok:true,claimed,execution:claimed?'CLAIMED_FOR_SANDBOX_WORKER':'NO_WORK',notice:'Only the deterministic bank-sandbox adapter is enabled by this worker endpoint. No live financial provider is connected.'});
+      }
+      const outcomeMatch=route.match(/^\/api\/providers\/outbox\/([^/]+)\/outcome$/);
+      if(req.method==='POST'&&outcomeMatch){
+        if(rateLimited(req,'/api/providers/outbox/outcome'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const outboxId=decodeURIComponent(outcomeMatch[1]),body=await readBody(req);
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await providerLifecycle.recordDispatchOutcome(pool,actor.tenant_id,{...body,outboxId,workerId:actor.principal_id},authorityContext);
+        return send(res,200,{ok:true,...result});
+      }
+      return send(res,404,{error:'provider_endpoint_not_found'});
+    }
     if (route.startsWith('/api/ledger/')) {
       const actor=await authenticateTenant(req);
       if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
@@ -1095,6 +1119,16 @@ const server = http.createServer(async (req,res) => {
           ? await ledgerPosting.getAccountBalance(pool,actor.tenant_id,accountId)
           : await ledgerPosting.verifyAccountProjection(pool,actor.tenant_id,accountId);
         return send(res,200,{ok:true,...result});
+      }
+      if(req.method==='POST'&&route==='/api/ledger/provider-instructions'){
+        if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'provider_instruction_role_required'});
+        if(rateLimited(req,'/api/ledger/provider-instructions'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const body=await readBody(req);
+        if(!actor.principal_id)return send(res,403,{error:'named_principal_required_for_provider_instruction'});
+        if(!body.journal||!body.instruction||!body.journal.bookId||!body.journal.periodId)return send(res,400,{error:'period_bound_journal_and_provider_instruction_required'});
+        const authorityContext={actor,envelopeId:req.headers['x-keel-authority-envelope']||body.authorityEnvelopeId};
+        const result=await ledgerPosting.postJournalAndEnqueueInstruction(pool,actor.tenant_id,body.journal,body.instruction,authorityContext);
+        return send(res,result.journal.replay?200:201,{ok:true,...result,execution:'NOT_DISPATCHED',notice:'The ledger and provider outbox were committed atomically. A separately authorised worker must claim the instruction; no provider network call occurred in this request.'});
       }
       if(req.method==='POST'&&route==='/api/ledger/journals'){
         if(!['owner','admin','integration'].includes(actor.role))return send(res,403,{error:'ledger_posting_role_required'});
