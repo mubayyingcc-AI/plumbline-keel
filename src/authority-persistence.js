@@ -26,8 +26,8 @@ async function authorizeAndRecord(client,context){
  if(!actor||!actor.principal_id||!actor.key_id)fail('named_actor_principal_required');
  if(!ACTIONS.has(action))fail('financial_action_not_supported',400);
  if(!envelopeId)fail('authority_envelope_header_required');
- const principal=await client.query("SELECT principal_id FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active' FOR SHARE",[tenantId,actor.principal_id]);
- if(!principal.rowCount)fail('actor_principal_inactive');
+ const principal=await client.query("SELECT p.principal_id FROM keel_principals p JOIN keel_tenant_keys k ON k.tenant_id=p.tenant_id AND k.principal_id=p.principal_id WHERE p.tenant_id=$1 AND p.principal_id=$2 AND p.status='active' AND k.key_id=$3 AND k.status='active' FOR SHARE OF p,k",[tenantId,actor.principal_id,actor.key_id]);
+ if(!principal.rowCount)fail('actor_principal_or_key_inactive');
  const q=await client.query('SELECT * FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[tenantId,envelopeId]);
  if(!q.rowCount)fail('authority_envelope_not_found',404);
  const e=q.rows[0],reasons=[];
