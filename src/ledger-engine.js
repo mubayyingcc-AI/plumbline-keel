@@ -23,6 +23,12 @@ function normaliseLine(line,index){
  if(!CURRENCY.test(currency))throw new Error('journal_line_currency_invalid');
  return Object.freeze({accountId,side,currency,amountMinor:units(line.amountMinor)});
 }
+function dateOnly(value){
+ if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))throw new Error('accounting_date_must_be_iso_date');
+ const parsed=new Date(value+'T00:00:00.000Z');
+ if(!Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==value)throw new Error('accounting_date_invalid_calendar_date');
+ return value;
+}
 function validateJournal(journal){
  if(!journal||typeof journal!=='object'||Array.isArray(journal))throw new Error('journal_required');
  const tenantId=required(journal.tenantId,'tenant_id',80);
@@ -34,6 +40,11 @@ function validateJournal(journal){
  const sourceRef=required(journal.sourceRef,'source_ref',300);
  const effectiveAt=required(journal.effectiveAt,'effective_at',80);
  if(!Number.isFinite(Date.parse(effectiveAt)))throw new Error('effective_at_invalid');
+ const bookId=journal.bookId==null?null:required(journal.bookId,'book_id');
+ const periodId=journal.periodId==null?null:required(journal.periodId,'period_id');
+ if((bookId===null)!==(periodId===null))throw new Error('ledger_book_and_period_must_be_bound_together');
+ const accountingDate=periodId?(journal.accountingDate==null?new Date(Date.parse(effectiveAt)).toISOString().slice(0,10):dateOnly(journal.accountingDate)):null;
+ if(!periodId&&journal.accountingDate!=null)throw new Error('accounting_date_requires_period_binding');
  if(!Array.isArray(journal.lines)||journal.lines.length<2||journal.lines.length>500)throw new Error('journal_lines_count_invalid');
  const lines=journal.lines.map(normaliseLine);
  const byCurrency={};
@@ -49,17 +60,17 @@ function validateJournal(journal){
  if(lineAccounts.size<2)throw new Error('journal_requires_distinct_accounts');
  const reversalOfJournalId=journal.reversalOfJournalId==null?null:required(journal.reversalOfJournalId,'reversal_of_journal_id');
  if(reversalOfJournalId===journalId)throw new Error('journal_cannot_reverse_itself');
- const normalised={tenantId,journalId,idempotencyKey,description,sourceRef,effectiveAt:new Date(Date.parse(effectiveAt)).toISOString(),reversalOfJournalId,lines};
+ const normalised={tenantId,journalId,idempotencyKey,description,sourceRef,effectiveAt:new Date(Date.parse(effectiveAt)).toISOString(),bookId,periodId,accountingDate,reversalOfJournalId,lines};
  const fingerprint=crypto.createHash('sha256').update(canonical(normalised)).digest('hex');
  return Object.freeze({...normalised,totalsByCurrency:Object.fromEntries(Object.entries(byCurrency).map(([k,v])=>[k,v.debit.toString()])),lineCount:lines.length,fingerprint,status:'validated_not_posted'});
 }
 function buildJournal(input){return validateJournal(input);}
-function buildReversal({original,tenantId,journalId,idempotencyKey,description,effectiveAt}){
+function buildReversal({original,tenantId,journalId,idempotencyKey,description,effectiveAt,bookId,periodId,accountingDate}){
  const source=validateJournal(original);
  if(source.tenantId!==tenantId)throw new Error('reversal_tenant_mismatch');
  return validateJournal({
   tenantId,journalId,idempotencyKey,description:description||('Reversal of '+source.journalId),
-  sourceRef:'reversal:'+source.journalId,effectiveAt,reversalOfJournalId:source.journalId,
+  sourceRef:'reversal:'+source.journalId,effectiveAt,bookId,periodId,accountingDate,reversalOfJournalId:source.journalId,
   lines:source.lines.map(line=>({accountId:line.accountId,side:line.side==='debit'?'credit':'debit',currency:line.currency,amountMinor:line.amountMinor}))
  });
 }
