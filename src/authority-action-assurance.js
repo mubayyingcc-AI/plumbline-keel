@@ -12,6 +12,8 @@ function normalizeEnvelope(e){
  if(!Number.isFinite(issued)||!Number.isFinite(expires))reject('authority_time_invalid');
  if(expires<=issued)reject('authority_expiry_must_follow_issue');
  if(e.status!=='active')reject('authority_not_active');
+ if(e.maxAmountMinor!==undefined&&(!/^(0|[1-9][0-9]*)$/.test(String(e.maxAmountMinor))))reject('authority_amount_cap_invalid');
+ if(e.maxAmountMinor!==undefined&&!e.currency)reject('authority_currency_required_for_amount_cap');
  if(e.allowSubdelegation===true)reject('subdelegation_not_supported');
  return {...e,scopes,issuedAt:new Date(issued).toISOString(),expiresAt:new Date(expires).toISOString()};
 }
@@ -35,7 +37,8 @@ function evaluateAction({envelope,actorId,tenantId,action,resource,amountMinor,c
  return {outcome:'PERMIT',reasonCodes:['WITHIN_DELEGATED_AUTHORITY'],authorityFingerprint:crypto.createHash('sha256').update(canonical(e)).digest('hex')};
 }
 function detectConsequenceConflicts(grants){
+ const grouped=new Map();
+ for(const g of grants){const key=String(g.actorId)+'|'+String(g.resourceId||'*');if(!grouped.has(key))grouped.set(key,{actorId:g.actorId,resourceId:g.resourceId,capabilities:new Set()});for(const c of g.capabilities||[])grouped.get(key).capabilities.add(c);}
  const rules=[['read_beneficiaries','initiate_payment','BENEFICIARY_READ_AND_PAYMENT_INITIATION','critical'],['change_beneficiary','release_payment','BENEFICIARY_CHANGE_AND_PAYMENT_RELEASE','critical'],['manage_credentials','initiate_payment','CREDENTIAL_CONTROL_AND_PAYMENT_INITIATION','critical'],['change_policy','approve','POLICY_CHANGE_AND_APPROVAL','high']];
- const findings=[];for(const g of grants){const caps=new Set(g.capabilities||[]);for(const [a,b,code,severity] of rules)if(caps.has(a)&&caps.has(b))findings.push({actorId:g.actorId,resourceId:g.resourceId,code,severity});}return findings;
+ const findings=[];for(const g of grouped.values())for(const [a,b,code,severity] of rules)if(g.capabilities.has(a)&&g.capabilities.has(b))findings.push({actorId:g.actorId,resourceId:g.resourceId,code,severity});return findings;
 }
-module.exports={ACTIONS,evaluateAction,detectConsequenceConflicts};
