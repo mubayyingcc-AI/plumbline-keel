@@ -26,7 +26,7 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10 };
 const rateBuckets = new Map();
 
 const products = [
@@ -323,6 +323,11 @@ const apiDescription = {
     '/api/ledger/books/{bookId}/accounts':{get:{summary:'List chart-of-account mappings'},post:{summary:'Map an existing ledger account to a book'}},
     '/api/ledger/periods':{get:{summary:'List accounting periods'},post:{summary:'Create a planned accounting period'}},
     '/api/ledger/periods/{periodId}/open':{post:{summary:'Open a planned accounting period'}},
+    '/api/ledger/periods/{periodId}/soft-close':{post:{summary:'Soft-close an open period to stop further posting'}},
+    '/api/ledger/periods/{periodId}/close-requests':{get:{summary:'List period close requests'},post:{summary:'Request dual-control period close'}},
+    '/api/ledger/periods/{periodId}/close-requests/{requestId}/approve':{post:{summary:'Approve period close as a separate checker'}},
+    '/api/ledger/periods/{periodId}/close-requests/{requestId}/reject':{post:{summary:'Reject period close as a separate checker'}},
+    '/api/ledger/periods/{periodId}/closure':{get:{summary:'Retrieve immutable period closure evidence'}},
     '/api/ledger/trial-balance':{get:{summary:'Calculate opening, movement and closing trial balance by currency'}},
     '/api/ledger/accounts':{get:{summary:'List tenant ledger accounts'},post:{summary:'Create a tenant ledger account'}},
     '/api/ledger/journals':{post:{summary:'Post an idempotent balanced journal bound to an open accounting period'}},
@@ -879,17 +884,17 @@ const server = http.createServer(async (req,res) => {
       const pool = await dbPool();
       if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
       const [migrations, role, ledgerRls, accountingRls] = await Promise.all([
-        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql']]),
+        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql','015_period_close_dual_control.sql']]),
         pool.query("SELECT current_user AS role, r.rolsuper AS is_superuser, r.rolbypassrls AS bypasses_rls FROM pg_roles r WHERE r.rolname=current_user"),
         pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']]),
-        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods']])
+        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods','keel_accounting_period_close_requests','keel_accounting_period_closures']])
       ]);
       const runtime = role.rows[0] || {};
       const ledger = ledgerRls.rows[0] || {};
       const accounting = accountingRls.rows[0] || {};
-      const migrationsReady = migrations.rowCount === 3;
+      const migrationsReady = migrations.rowCount === 4;
       const roleReady = runtime.role === 'keel_runtime' && runtime.is_superuser === false && runtime.bypasses_rls === false;
-      const rlsReady = ledger.tables === 7 && ledger.enabled === 7 && ledger.forced === 7 && accounting.tables === 3 && accounting.enabled === 3 && accounting.forced === 3;
+      const rlsReady = ledger.tables === 7 && ledger.enabled === 7 && ledger.forced === 7 && accounting.tables === 5 && accounting.enabled === 5 && accounting.forced === 5;
       const ready = migrationsReady && roleReady && rlsReady;
       return send(res,ready?200:503,{
         ok:ready,
@@ -903,7 +908,7 @@ const server = http.createServer(async (req,res) => {
           totalTables:(ledger.tables||0)+(accounting.tables||0),
           totalForced:(ledger.forced||0)+(accounting.forced||0)
         },
-        boundary:'Double-entry ledger, book and period schema with tenant RLS only. Accounting close/reopen approvals, provider reconciliation persistence and external settlement remain separate capabilities.'
+        boundary:'Double-entry ledger, book and period schema with tenant RLS and dual-control final close evidence. Period reopen approvals, durable provider reconciliation and external settlement remain separate capabilities.'
       });
     }
     if (route.startsWith('/api/ledger/')) {
@@ -944,6 +949,48 @@ const server = http.createServer(async (req,res) => {
         if(rateLimited(req,'/api/ledger/periods'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
         const period=await accountingPeriods.createPeriod(pool,actor.tenant_id,await readBody(req));
         return send(res,201,{ok:true,period});
+      }
+      const softCloseMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/soft-close$/);
+      if(softCloseMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/period-close'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        const result=await accountingPeriods.softClosePeriod(pool,actor.tenant_id,decodeURIComponent(softCloseMatch[1]));
+        return send(res,200,{ok:true,...result});
+      }
+      const closeRequestsMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/close-requests$/);
+      if(closeRequestsMatch&&req.method==='GET'){
+        const requests=await accountingPeriods.listPeriodCloseRequests(pool,actor.tenant_id,decodeURIComponent(closeRequestsMatch[1]));
+        return send(res,200,{count:requests.length,requests});
+      }
+      if(closeRequestsMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/period-close'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        if(!actor.key_id)return send(res,403,{error:'independent_api_key_identity_required'});
+        const result=await accountingPeriods.requestPeriodClose(pool,actor.tenant_id,decodeURIComponent(closeRequestsMatch[1]),actor.key_id);
+        return send(res,201,{ok:true,...result});
+      }
+      const closeActionMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/close-requests\/([^/]+)\/(approve|reject)$/);
+      if(closeActionMatch&&req.method==='POST'){
+        if(!['owner','admin'].includes(actor.role))return send(res,403,{error:'accounting_period_admin_required'});
+        if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});
+        if(rateLimited(req,'/api/ledger/period-close'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+        if(!actor.key_id)return send(res,403,{error:'independent_api_key_identity_required'});
+        const periodId=decodeURIComponent(closeActionMatch[1]),requestId=decodeURIComponent(closeActionMatch[2]);
+        if(closeActionMatch[3]==='approve'){
+          const result=await accountingPeriods.approvePeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id);
+          return send(res,result.closed?200:409,{ok:result.closed,...result});
+        }
+        const body=await readBody(req);
+        const result=await accountingPeriods.rejectPeriodClose(pool,actor.tenant_id,periodId,requestId,actor.key_id,body.reason);
+        return send(res,200,{ok:true,...result});
+      }
+      const closureMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/closure$/);
+      if(closureMatch&&req.method==='GET'){
+        const closure=await accountingPeriods.getPeriodClosure(pool,actor.tenant_id,decodeURIComponent(closureMatch[1]));
+        if(!closure)return send(res,404,{error:'period_closure_not_found'});
+        return send(res,200,{closure});
       }
       const openPeriodMatch=route.match(/^\/api\/ledger\/periods\/([^/]+)\/open$/);
       if(openPeriodMatch&&req.method==='POST'){
