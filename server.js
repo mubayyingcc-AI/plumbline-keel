@@ -991,10 +991,16 @@ const server = http.createServer(async (req,res) => {
       if(!actor.principal_id)return send(res,403,{error:'named_approver_principal_required'});
       const body=await readBody(req),envelopeId=cleanString(body.envelopeId,64),requestFingerprint=cleanString(body.requestFingerprint,64),decision=cleanString(body.decision,16),rationale=cleanString(body.rationale,500);
       if(!envelopeId||! /^[a-f0-9]{64}$/.test(requestFingerprint)||!['approve','reject'].includes(decision)||!rationale)return send(res,400,{error:'valid_envelope_request_fingerprint_decision_and_rationale_required'});
+       security/global-financial-core-tenant-assurance
+      const pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
+      const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
+      if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
+
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
       const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
       if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
       const client=await pool.connect();
+       main
       try{await client.query('BEGIN');const e=await client.query('SELECT grantee_principal_id,approver_principal_id,approval_required,status FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[actor.tenant_id,envelopeId]);if(!e.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'authority_envelope_not_found'});}if(e.rows[0].status!=='active'||!e.rows[0].approval_required||e.rows[0].approver_principal_id!==actor.principal_id||e.rows[0].grantee_principal_id===actor.principal_id){await client.query('ROLLBACK');return send(res,403,{error:'independent_envelope_approver_required'});}const id=crypto.randomUUID();await client.query('INSERT INTO keel_authority_action_approvals(tenant_id,approval_id,envelope_id,request_fingerprint,approver_principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,envelopeId,requestFingerprint,actor.principal_id,decision,rationale]);await recordEventWithClient(client,actor,'AUTHORITY_ACTION_APPROVAL_RECORDED',id,{envelopeId,requestFingerprint,decision});await client.query('COMMIT');return send(res,201,{ok:true,approvalId:id,envelopeId,requestFingerprint,decision});}
       catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
     }

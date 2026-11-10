@@ -36,9 +36,13 @@ Keel now persists Authority Envelopes, scoped resource/action grants, expiry and
 
 ## KAAA API and execution contract
 1. A tenant owner/admin first creates a named principal through `POST /api/assurance/principals`. Use `principalKind: "ai_agent"` and `role: "integration"` for an AI agent; the returned API key is bound to that principal. Identity is still self-asserted until an external identity provider is integrated.
+ security/global-financial-core-tenant-assurance
+2. A named human admin (non-human principals cannot hold the administrative grant role) grants an envelope through `POST /api/assurance/authority/envelopes`. The allowed scopes are `ledger:journal:post`, `ledger:reservation:create`, `ledger:reservation:release`, and `ledger:reservation:consume`. Resource identifiers are exact values such as `book:<bookId>` and `account:<accountId>`. Set currency and a minor-unit amount ceiling for financial actions. Expiry cannot exceed 90 days.
+
 2. A named human admin grants an envelope through `POST /api/assurance/authority/envelopes`. The allowed scopes are `ledger:journal:post`, `ledger:reservation:create`, `ledger:reservation:release`, `ledger:reservation:consume`, `provider:instruction:enqueue`, `provider:instruction:dispatch`, `provider:instruction:recover_expired`, and `provider:instruction:outcome`. Resource identifiers are exact values such as `book:<bookId>` and `account:<accountId>`. Set currency and a minor-unit amount ceiling for financial actions. Expiry cannot exceed 90 days.
+ main
 3. A delegated financial request supplies the envelope ID in `X-Keel-Authority-Envelope` (or `authorityEnvelopeId` in its JSON body). The ledger transaction revalidates the active tenant key and principal, locks and verifies the envelope fingerprint, checks action/resource/amount/currency/expiry/revocation and required approval, then writes the Action Proof Object and financial event atomically.
-4. Where approval is required, the designated independent principal records an approve/reject decision at `POST /api/assurance/authority/approvals`, bound to the exact 64-character SHA-256 request fingerprint. Approval of a different request fingerprint cannot authorize the actual execution.
+4. Where approval is required, the designated independent human principal records an approve/reject decision at `POST /api/assurance/authority/approvals`, bound to the exact 64-character SHA-256 request fingerprint. Approval of a different request fingerprint cannot authorize the actual execution.
 5. Revoke with `POST /api/assurance/authority/envelopes/revoke`; inspect durable proofs with `GET /api/assurance/authority/proofs`.
 
 The initial bootstrap owner key has no named principal and therefore cannot post journals or mutate reservations. It must create a named human principal and use that principal-bound key to grant authority. This intentionally removes implicit owner-key financial execution.
@@ -54,6 +58,17 @@ The initial bootstrap owner key has no named principal and therefore cannot post
 - CI uses no production secrets, endpoints, migrations or deployment credentials.
 
 ## Explicit limitations
+ security/global-financial-core-tenant-assurance
+This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. Provider dispatch worker enforcement must be added before enabling live external execution.
+ security/kaa-verified-review
+\n\n## Provider instruction authority gate\n\nKAAA now supports the explicit `provider:instruction:enqueue` scope. The atomic journal-plus-outbox posting path requires a separate authority decision for the provider instruction, bound to provider identity, journal, aggregate, instruction type, idempotency key, exact amount and currency. The authority proof is linked into the tenant ledger event chain and returned with the outbox result. This prevents a journal-post permission from silently implying authority to instruct an external provider. The downstream dispatch worker still requires its own workload identity and execution-time outbox integrity checks before live provider dispatch is enabled.\n
+
+
+
+## Provider instruction and dispatch authority
+
+KAAA distinguishes authority to enqueue a provider instruction from authority to claim it for dispatch. Enqueue binds the journal, provider, aggregate, instruction type, idempotency key, exact amount and currency. Dispatch requires a named worker principal, an explicit provider-scoped dispatch envelope and an exact outbox payload fingerprint before any lease/housekeeping state transition. Missing authority context fails closed. This code does not itself enable a live provider integration.
+
 This branch adds signed checkpoint primitives, deterministic sandbox adapter, durable KAAA envelopes and transaction-bound ledger enforcement. It does not yet provide KMS/HSM, external WORM publication, production bank/MTO adapter, delegated multi-currency journal support, durable denied-attempt proofs, automated restore drill or measured RPO/RTO. An authenticated worker API is available for the deterministic `bank-sandbox` provider only. A real bank/MTO/wallet adapter, provider-specific callback registration, external identity verification, KMS/HSM and independent WORM publication are still release blockers.
 
 
@@ -70,6 +85,7 @@ The mainline release candidate now requires a named delegated principal and sepa
 ## Automated recovery-state verification
 
 The PostgreSQL 16/18 CI matrix now runs `scripts/verify-recovery-state.js` after migrations and integration tests against a disposable database using the restricted `keel_runtime` role. A separate admin connection enumerates active tenants; every financial read is then executed with transaction-local tenant context. The verifier checks runtime role privileges, tenant isolation, exact ledger projections, trial-balance equality, provider uncertainty/open-case state and the hash-linked ledger event chain. This is a meaningful restore-target verification step, but it is not a substitute for taking an encrypted backup, restoring from WAL/PITR into a clean environment, measuring RPO/RTO and obtaining independent sign-off.
+ provider/callback-reconciliation-assurance
 
 
 ## Signed sandbox callback ingress
@@ -93,3 +109,7 @@ openssl pkey -in keel-checkpoint-private.pem -pubout -out keel-checkpoint-public
 Inject the private key and key ID as `KEEL_CHECKPOINT_SIGNING_PRIVATE_KEY` and `KEEL_CHECKPOINT_SIGNING_KEY_ID`; set `PG_ADMIN_URL`, `DATABASE_URL` (restricted runtime), and optional `KEEL_CHECKPOINT_DATABASE_ID`. Run `npm run proof:checkpoint:export`. Store the resulting timestamped JSON files in a separately administered immutable/WORM object store and distribute the public key through an independent trust channel. To verify offline, set `KEEL_CHECKPOINT_VERIFY_PUBLIC_KEY` to the public PEM and run `npm run proof:checkpoint:verify -- path/to/checkpoint.json`.
 
 This proves that the signed chain head was attested by the holder of the signing key and allows an external party to compare later database state against that checkpoint. The exporter currently writes local files only; automatic WORM publication, KMS/HSM-backed signing, key revocation/rotation registry and independent operational custody are not yet implemented. A signed checkpoint is not itself a backup or a proof that the provider settled funds.
+
+ main
+main
+main

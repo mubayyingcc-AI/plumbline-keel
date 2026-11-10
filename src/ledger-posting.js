@@ -296,6 +296,40 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
   const tenantId = actorTenant(tenantIdInput);
   if (!instruction || typeof instruction !== 'object') fail('provider_instruction_required');
   return withTransaction(pool, async client => {
+    
+    security/global-financial-core-tenant-assurance
+    let authorityProof=null;
+    if(authorityContext){
+      const normalized=validateJournal({...journal,tenantId});
+      const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
+      if(currencies.length!==1)fail('delegated_multi_currency_journal_not_supported',403);
+      const amountMinor=normalized.lines.filter(x=>x.side==='debit').reduce((s,x)=>s+BigInt(x.amountMinor),0n).toString();
+      authorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'ledger:journal:post',resourceId:normalized.bookId?'book:'+normalized.bookId:undefined,amountMinor,currency:currencies[0],requestFingerprint:authorityPersistence.digest(normalized),executionRef:normalized.journalId});
+    }
+    const posted = await postJournalWithClient(client, tenantId, journal);
+    if(authorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',authorityProof.proofId,{action:'ledger:journal:post',envelopeId:authorityProof.envelopeId,requestFingerprint:authorityPersistence.digest(journal),executionRef:posted.journalId});
+    let providerAuthorityProof=null;
+    if(authorityContext){
+      const providerId=String(instruction.providerId||'').trim();
+      const payload=instruction.payload&&typeof instruction.payload==='object'?instruction.payload:{};
+      if(!providerId||typeof payload.currency!=='string'||!/^[A-Z]{3}$/.test(payload.currency)||typeof payload.amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(payload.amountMinor))fail('provider_instruction_financial_amount_and_currency_required',400);
+      security/kaa-verified-review
+      const request={tenantId, journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+
+      const request={tenantId,journalId:posted.journalId,providerId,aggregateType:instruction.aggregateType,aggregateId:instruction.aggregateId,instructionType:instruction.instructionType,idempotencyKey:instruction.idempotencyKey,payload};
+       main
+      providerAuthorityProof=await authorityPersistence.authorizeAndRecord(client,{...authorityContext,tenantId,action:'provider:instruction:enqueue',resourceId:'provider:'+providerId,amountMinor:payload.amountMinor,currency:payload.currency,requestFingerprint:authorityPersistence.digest(request),executionRef:posted.journalId});
+    }
+    const outbox = await providerLifecycle.enqueueInstruction(client, {
+      ...instruction,
+      tenantId,
+      journalId: posted.journalId
+    });
+    if(providerAuthorityProof) await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
+    return { journal: authorityProof?{...posted,authorityProof}:posted, outbox:providerAuthorityProof?{...outbox,authorityProof:providerAuthorityProof}:outbox };
+    security/kaa-verified-review
+
+
     if(!authorityContext)fail('provider_enqueue_authority_context_required',403);
     const normalized=validateJournal({...journal,tenantId});
     const currencies=[...new Set(normalized.lines.map(x=>x.currency))];
@@ -312,6 +346,8 @@ async function postJournalAndEnqueueInstruction(pool, tenantIdInput, journal, in
     const outbox=await providerLifecycle.enqueueInstruction(client,{...instruction,tenantId,journalId:posted.journalId});
     await appendLedgerEvent(client,tenantId,'AUTHORITY_ACTION_PROVEN',providerAuthorityProof.proofId,{action:'provider:instruction:enqueue',envelopeId:providerAuthorityProof.envelopeId,requestFingerprint:providerAuthorityProof.requestFingerprint,executionRef:outbox.outbox_id});
     return {journal:{...posted,authorityProof},outbox:{...outbox,authorityProof:providerAuthorityProof}};
+        main
+       main
   }, tenantId);
 }
 async function listAccounts(pool,tenantIdInput) {
