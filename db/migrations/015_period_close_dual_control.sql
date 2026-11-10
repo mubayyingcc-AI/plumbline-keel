@@ -6,13 +6,16 @@ CREATE TABLE IF NOT EXISTS keel_accounting_period_close_requests (
   request_id TEXT NOT NULL,
   period_id TEXT NOT NULL,
   requested_by_key_id TEXT NOT NULL,
+  requested_by_principal_id TEXT NOT NULL,
   trial_balance_hash CHAR(64) NOT NULL CHECK(trial_balance_hash ~ '^[0-9a-f]{64}$'),
   trial_balance_snapshot JSONB NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','stale')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   approved_by_key_id TEXT,
+  approved_by_principal_id TEXT,
   approved_at TIMESTAMPTZ,
   rejected_by_key_id TEXT,
+  rejected_by_principal_id TEXT,
   rejected_at TIMESTAMPTZ,
   resolution_reason TEXT,
   resolved_at TIMESTAMPTZ,
@@ -20,16 +23,25 @@ CREATE TABLE IF NOT EXISTS keel_accounting_period_close_requests (
   PRIMARY KEY(tenant_id,request_id),
   FOREIGN KEY(tenant_id,period_id) REFERENCES keel_accounting_periods(tenant_id,period_id),
   CHECK(approved_by_key_id IS NULL OR approved_by_key_id<>requested_by_key_id),
+  CHECK(approved_by_principal_id IS NULL OR approved_by_principal_id<>requested_by_principal_id),
   CHECK(rejected_by_key_id IS NULL OR rejected_by_key_id<>requested_by_key_id),
+  CHECK(rejected_by_principal_id IS NULL OR rejected_by_principal_id<>requested_by_principal_id),
   CHECK(
     (status='pending' AND approved_by_key_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_at IS NULL AND resolved_at IS NULL)
-    OR (status='approved' AND approved_by_key_id IS NOT NULL AND approved_at IS NOT NULL AND rejected_by_key_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
-    OR (status='rejected' AND rejected_by_key_id IS NOT NULL AND rejected_at IS NOT NULL AND approved_by_key_id IS NULL AND approved_at IS NULL AND resolved_at IS NOT NULL)
-    OR (status='stale' AND approved_by_key_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
+    OR (status='approved' AND approved_by_key_id IS NOT NULL AND approved_by_principal_id IS NOT NULL AND approved_at IS NOT NULL AND rejected_by_key_id IS NULL AND rejected_by_principal_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
+    OR (status='rejected' AND rejected_by_key_id IS NOT NULL AND rejected_by_principal_id IS NOT NULL AND rejected_at IS NOT NULL AND approved_by_key_id IS NULL AND approved_by_principal_id IS NULL AND approved_at IS NULL AND resolved_at IS NOT NULL)
+    OR (status='stale' AND approved_by_key_id IS NULL AND approved_by_principal_id IS NULL AND approved_at IS NULL AND rejected_by_key_id IS NULL AND rejected_by_principal_id IS NULL AND rejected_at IS NULL AND resolved_at IS NOT NULL)
   )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS keel_accounting_period_close_one_pending_idx
   ON keel_accounting_period_close_requests(tenant_id,period_id) WHERE status='pending';
+
+ALTER TABLE keel_accounting_periods ADD COLUMN IF NOT EXISTS closed_by_principal_id TEXT;
+DO $ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_accounting_period_closed_principal_check') THEN
+    ALTER TABLE keel_accounting_periods ADD CONSTRAINT keel_accounting_period_closed_principal_check CHECK(status<>'closed' OR closed_by_principal_id IS NOT NULL);
+  END IF;
+END $;
 
 CREATE TABLE IF NOT EXISTS keel_accounting_period_closures (
   tenant_id UUID NOT NULL,
@@ -41,6 +53,7 @@ CREATE TABLE IF NOT EXISTS keel_accounting_period_closures (
   trial_balance_snapshot JSONB NOT NULL,
   closed_at TIMESTAMPTZ NOT NULL,
   closed_by_key_id TEXT NOT NULL,
+  closed_by_principal_id TEXT NOT NULL,
   PRIMARY KEY(tenant_id,period_id),
   UNIQUE(tenant_id,request_id),
   FOREIGN KEY(tenant_id,period_id) REFERENCES keel_accounting_periods(tenant_id,period_id),
@@ -49,18 +62,18 @@ CREATE TABLE IF NOT EXISTS keel_accounting_period_closures (
 
 CREATE OR REPLACE FUNCTION keel_accounting_period_close_request_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF (NEW.tenant_id,NEW.request_id,NEW.period_id,NEW.requested_by_key_id,NEW.trial_balance_hash,NEW.trial_balance_snapshot,NEW.created_at)
+  IF (NEW.tenant_id,NEW.request_id,NEW.period_id,NEW.requested_by_key_id,NEW.requested_by_principal_id,NEW.trial_balance_hash,NEW.trial_balance_snapshot,NEW.created_at)
      IS DISTINCT FROM
-     (OLD.tenant_id,OLD.request_id,OLD.period_id,OLD.requested_by_key_id,OLD.trial_balance_hash,OLD.trial_balance_snapshot,OLD.created_at) THEN
+     (OLD.tenant_id,OLD.request_id,OLD.period_id,OLD.requested_by_key_id,OLD.requested_by_principal_id,OLD.trial_balance_hash,OLD.trial_balance_snapshot,OLD.created_at) THEN
     RAISE EXCEPTION 'period close request evidence is immutable';
   END IF;
   IF OLD.status<>'pending' OR NEW.status NOT IN ('approved','rejected','stale') THEN
     RAISE EXCEPTION 'period close request transition is not permitted';
   END IF;
-  IF NEW.status='approved' AND (NEW.approved_by_key_id IS NULL OR NEW.approved_by_key_id=NEW.requested_by_key_id OR NEW.approved_at IS NULL OR NEW.resolved_at IS NULL) THEN
+  IF NEW.status='approved' AND (NEW.approved_by_key_id IS NULL OR NEW.approved_by_key_id=NEW.requested_by_key_id OR NEW.approved_by_principal_id IS NULL OR NEW.approved_by_principal_id=NEW.requested_by_principal_id OR NEW.approved_at IS NULL OR NEW.resolved_at IS NULL) THEN
     RAISE EXCEPTION 'period close approval requires an independent checker';
   END IF;
-  IF NEW.status='rejected' AND (NEW.rejected_by_key_id IS NULL OR NEW.rejected_by_key_id=NEW.requested_by_key_id OR NEW.rejected_at IS NULL OR NEW.resolved_at IS NULL) THEN
+  IF NEW.status='rejected' AND (NEW.rejected_by_key_id IS NULL OR NEW.rejected_by_key_id=NEW.requested_by_key_id OR NEW.rejected_by_principal_id IS NULL OR NEW.rejected_by_principal_id=NEW.requested_by_principal_id OR NEW.rejected_at IS NULL OR NEW.resolved_at IS NULL) THEN
     RAISE EXCEPTION 'period close rejection requires an independent checker';
   END IF;
   IF NEW.status='stale' AND NEW.resolved_at IS NULL THEN
@@ -111,8 +124,9 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION 'approved dual-control closure record required'; END IF;
     SELECT * INTO r FROM keel_accounting_period_close_requests
       WHERE tenant_id=c.tenant_id AND request_id=c.request_id;
-    IF NOT FOUND OR r.period_id<>NEW.period_id OR r.status<>'approved' OR r.requested_by_key_id=r.approved_by_key_id
+    IF NOT FOUND OR r.period_id<>NEW.period_id OR r.status<>'approved' OR r.requested_by_key_id=r.approved_by_key_id OR r.requested_by_principal_id=r.approved_by_principal_id
        OR r.approved_by_key_id<>NEW.closed_by OR c.closed_by_key_id<>NEW.closed_by
+       OR r.approved_by_principal_id<>NEW.closed_by_principal_id OR c.closed_by_principal_id<>NEW.closed_by_principal_id
        OR c.trial_balance_hash<>r.trial_balance_hash OR c.closed_at<>NEW.closed_at THEN
       RAISE EXCEPTION 'approved dual-control closure evidence does not match period';
     END IF;
