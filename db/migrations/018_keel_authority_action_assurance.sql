@@ -1,6 +1,13 @@
 ALTER TABLE public.keel_principals ADD COLUMN IF NOT EXISTS principal_kind TEXT NOT NULL DEFAULT 'human';
 DO $keel$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='keel_principals_kind_check') THEN ALTER TABLE public.keel_principals ADD CONSTRAINT keel_principals_kind_check CHECK(principal_kind IN ('human','ai_agent','service','system')); END IF; END $keel$;
 -- KAAA: scoped financial authority and immutable action evidence.
+-- Extend the immutable ledger event vocabulary for authority proof linkage.
+ALTER TABLE public.keel_ledger_events DROP CONSTRAINT IF EXISTS keel_ledger_events_event_type_check;
+ALTER TABLE public.keel_ledger_events ADD CONSTRAINT keel_ledger_events_event_type_check CHECK(event_type IN (
+ 'ACCOUNT_CREATED','JOURNAL_POSTED','RESERVATION_CREATED',
+ 'RESERVATION_RELEASED','RESERVATION_CONSUMED','PROJECTION_REBUILT',
+ 'AUTHORITY_ACTION_PROVEN'
+));
 CREATE TABLE IF NOT EXISTS keel_authority_envelopes (
  tenant_id UUID NOT NULL REFERENCES keel_tenants(tenant_id),
  envelope_id UUID NOT NULL,
