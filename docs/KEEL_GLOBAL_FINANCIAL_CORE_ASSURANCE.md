@@ -112,9 +112,25 @@ Each product adapter must expose:
 - Independent accounting, security, privacy and operational reviewers sign the release evidence.
 - Provider-specific contracts, legal responsibilities, data residency and regulatory scope are documented.
 
+## Implemented provider-lifecycle evidence (candidate PR #32)
+
+The candidate implementation adds a durable lifecycle foundation in migration 017 and the shared ledger posting service:
+
+- Tenant-RLS protected outbox, inbox and reconciliation-case tables.
+- A single SERIALIZABLE operation posts the journal and enqueues the provider instruction; failure in either step rolls back both.
+- Worker claims are bounded by leases. Expired leases become UNKNOWN because the provider may already have received the instruction.
+- UNKNOWN outcomes are never automatically re-dispatched. Recovery requires authoritative provider evidence or a controlled manual process.
+- HMAC-SHA256 verification covers exact raw webhook bytes, uses constant-time comparison, and binds normalized event fields to the signed payload.
+- Replayed provider event IDs with changed payloads are rejected; exact replays are idempotent.
+- Reconciliation records matched, pending or exception outcomes without automatically posting, reversing, settling or writing off a ledger journal.
+
+Candidate CI evidence on commit `934107779ccde747897016a57a7ee03243d4ff32`: application CI plus PostgreSQL 16 and PostgreSQL 18 migration, restricted-role and integration suites passed. The tests run against disposable databases; they are not evidence of a production deployment or a real provider connection.
+
+This is a durable core primitive, not a complete provider integration. Provider-specific signature formats, key custody/rotation, mutual TLS, callback registration, provider sandbox certification, operational worker deployment, alerts, and real-money end-to-end certification remain open.
+
 ## Current known limitations
 
-The current repository has a double-entry ledger, reservations, account projections, accounting books and periods, dual-control close, tenant RLS/authentication, and synthetic reconciliation logic. These are not equivalent to a complete global financial infrastructure. Durable provider adapters, production-grade outbox/inbox reconciliation, backup/restore drills, independent reviews, complete consumer-card tenantization, external evidence anchoring, operational resilience and end-to-end product conformance remain release gates.
+The current candidate includes a double-entry ledger, reservations, account projections, accounting books and periods, dual-control close, tenant RLS/authentication, durable provider outbox/inbox primitives, signed-event verification and reconciliation cases. These are not equivalent to a complete global financial infrastructure. Provider-specific adapters and operational workers, backup/restore drills, independent reviews, complete consumer-card tenantization, external evidence anchoring, operational resilience and end-to-end product conformance remain release gates.
 
 ## Forbidden shortcuts
 
