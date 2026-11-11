@@ -16,7 +16,7 @@ psqlq() { psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 "$@"; }
 identity="$(psqlq -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
 [[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
 
-unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','f','m') AND n.nspname NOT IN ('public','pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%')"
+unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','f','m') AND n.nspname NOT IN ('public','pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'" )"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_non_public_data_relations" >&2; exit 78; }
 
 # A snapshot backup is supported only for ordinary public tables with a
