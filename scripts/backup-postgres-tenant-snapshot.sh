@@ -40,7 +40,16 @@ package="$work/package"
 
 # The exporter holds one REPEATABLE READ snapshot while all schema, data,
 # tenant enumeration, table catalogs and row counts import that same snapshot.
-stdbuf -oL psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT 'KEEL_SNAPSHOT='||pg_export_snapshot(); SELECT 'KEEL_TENANT='||tenant_id::text FROM public.keel_backup_tenant_ids() ORDER BY tenant_id; SELECT 'KEEL_TENANT_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname; SELECT 'KEEL_GLOBAL_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) ORDER BY c.relname; SELECT 'KEEL_EXTENSION='||extname||'|'||extversion FROM pg_extension WHERE extname<>'plpgsql' ORDER BY extname; SELECT 'KEEL_CATALOG_DONE'; SELECT pg_sleep(86400)" > "$work/snapshot.log" 2> "$work/snapshot.err" &
+stdbuf -oL psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 > "$work/snapshot.log" 2> "$work/snapshot.err" <<'SQL' &
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SELECT 'KEEL_SNAPSHOT='||pg_export_snapshot();
+SELECT 'KEEL_TENANT='||tenant_id::text FROM public.keel_backup_tenant_ids() ORDER BY tenant_id;
+SELECT 'KEEL_TENANT_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname;
+SELECT 'KEEL_GLOBAL_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) ORDER BY c.relname;
+SELECT 'KEEL_EXTENSION='||extname||'|'||extversion FROM pg_extension WHERE extname<>'plpgsql' ORDER BY extname;
+SELECT 'KEEL_CATALOG_DONE';
+SELECT pg_sleep(86400);
+SQL
 snapshot_pid=$!
 for attempt in $(seq 1 100); do
   if grep -q '^KEEL_CATALOG_DONE$' "$work/snapshot.log" 2>/dev/null; then break; fi
