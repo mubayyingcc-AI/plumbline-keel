@@ -56,7 +56,8 @@ psql -X -v ON_ERROR_STOP=1 -c "CREATE TABLE dr_pitr_probe (id integer PRIMARY KE
 echo "phase=full-backup"
 timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --type=full backup
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (1, 'before-target')"
-psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_create_restore_point('keel_pitr_target')"
+target_lsn="$(psql -X -A -t -v ON_ERROR_STOP=1 -c "SELECT pg_create_restore_point('keel_pitr_target')")"
+[[ "$target_lsn" =~ ^[0-9A-F]+/[0-9A-F]+$ ]] || { echo "invalid PITR target LSN: $target_lsn" >&2; exit 1; }
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (2, 'after-target')"
 prior_wal="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal, '') FROM pg_stat_archiver")"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal()"
@@ -74,7 +75,7 @@ echo "phase=pitr-restore"
 timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --pg1-path="$restore_dir" --type=name --target=keel_pitr_target --target-action=promote restore
 chown -R postgres:postgres "$restore_dir"
 echo "phase=start-restored-cluster"
-timeout 60 runuser -u postgres -- pg_ctl -D "$restore_dir" -w start -o "-p 5434 -c config_file=$PGCONF -c data_directory=$restore_dir -c listen_addresses=127.0.0.1"
+timeout 60 runuser -u postgres -- pg_ctl -D "$restore_dir" -w start -o "-p 5434 -c config_file=$PGCONF -c data_directory=$restore_dir -c listen_addresses=127.0.0.1 -c archive_mode=off -c archive_command=/bin/true"
 restored_before="$(psql -h 127.0.0.1 -p 5434 -X -A -t -c "SELECT marker FROM dr_pitr_probe WHERE id=1")"
 restored_after="$(psql -h 127.0.0.1 -p 5433 -X -A -t -c "SELECT count(*) FROM dr_pitr_probe WHERE id=2")"
 [[ "$restored_before" == before-target && "$restored_after" == 0 ]] || { echo "PITR assertion failed: before=$restored_before after_count=$restored_after" >&2; exit 1; }
