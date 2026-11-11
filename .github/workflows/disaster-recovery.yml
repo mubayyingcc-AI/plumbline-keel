@@ -120,6 +120,21 @@ jobs:
           test "$restored" = "keel-dr-proof"
           echo "Encrypted backup and isolated restore passed." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Fail closed when tenant RLS is present
+        env:
+          KEEL_BACKUP_DIR: ${{ runner.temp }}/keel-backups-rls-guard
+          KEEL_BACKUP_AGE_RECIPIENT: ${{ steps.age.outputs.recipient }}
+          KEEL_BACKUP_DATABASE_ID: ci-source
+        run: |
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "CREATE TABLE public.dr_rls_guard (tenant_id uuid NOT NULL, payload text NOT NULL); ALTER TABLE public.dr_rls_guard ENABLE ROW LEVEL SECURITY; ALTER TABLE public.dr_rls_guard FORCE ROW LEVEL SECURITY; CREATE POLICY dr_rls_guard_tenant ON public.dr_rls_guard USING (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid);"
+          set +e
+          output="$(bash scripts/backup-postgres-encrypted.sh 2>&1)"
+          status=$?
+          set -e
+          [[ "$status" -eq 78 ]] || { printf '%s\\n' "$output"; echo "expected RLS backup guard exit 78, got $status" >&2; exit 1; }
+          grep -q "backup_blocked_rls_requires_consistent_tenant_snapshot_export" <<< "$output"
+          echo "RLS backup fail-closed guard passed." >> "$GITHUB_STEP_SUMMARY"
+
   pgbackrest-point-in-time-recovery:
     name: S3-backed PostgreSQL 18 point-in-time recovery
     runs-on: ubuntu-24.04
