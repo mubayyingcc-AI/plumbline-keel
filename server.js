@@ -146,6 +146,16 @@ async function bootstrapCoreSchema(pool) {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
 }
 
+function databaseSslOptions(env=process.env) {
+  if (env.PGSSLMODE === 'disable') {
+    if (env.NODE_ENV === 'production') throw new Error('database_tls_cannot_be_disabled_in_production');
+    return false;
+  }
+  const options = { rejectUnauthorized:true };
+  if (env.PGSSLROOTCERT) options.ca = fs.readFileSync(env.PGSSLROOTCERT, 'utf8');
+  return options;
+}
+
 let poolPromise;
 async function dbPool() {
   const runtimeUrl = process.env.KEEL_RUNTIME_DATABASE_URL;
@@ -153,7 +163,7 @@ async function dbPool() {
   if (!poolPromise) {
     const { Pool } = require('pg');
     poolPromise = (async () => {
-      const pool = new Pool({ connectionString: runtimeUrl, ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
+      const pool = new Pool({ connectionString: runtimeUrl, ssl: databaseSslOptions(), max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
       try {
         const identity = await pool.query('SELECT current_user AS runtime_role, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname=current_user');
         const role = identity.rows[0];
@@ -1364,4 +1374,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
+module.exports = { server, demoPayload, products, rateLimited, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool, databaseSslOptions };
