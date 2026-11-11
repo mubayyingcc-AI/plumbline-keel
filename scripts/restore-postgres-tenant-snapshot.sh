@@ -61,7 +61,12 @@ if(tenants.length!==m.tenantCount||new Set(tenants).size!==tenants.length||tenan
 const tenantFiles=fs.readdirSync(path.join(root,'tenants')).filter(x=>/^tenant-[0-9]{6}\.sql$/.test(x));
 if(tenantFiles.length!==m.tenantCount)throw Error('backup_package_tenant_export_count_mismatch');
 NODE
-while IFS=
+while IFS='|' read -r extension version; do
+  [[ "$extension" =~ ^[A-Za-z0-9_.-]+$ && "$version" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "backup_extension_manifest_invalid" >&2; exit 13; }
+  available="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_available_extension_versions WHERE name='$extension' AND version='$version'")"
+  [[ "$available" == 1 ]] || { echo "required_extension_version_unavailable:$extension:$version" >&2; exit 13; }
+done < "$package/extensions.tsv"
+can_create_roles="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT (rolsuper OR rolcreaterole)::text FROM pg_roles WHERE rolname=current_user")"
 [[ "$can_create_roles" == true ]] || { echo "restore_requires_superuser_or_createrole" >&2; exit 8; }
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/role-bootstrap.sql"
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/schema.sql"
