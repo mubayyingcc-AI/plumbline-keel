@@ -128,7 +128,7 @@ jobs:
       PGCONF: /etc/postgresql/18/main/postgresql.conf
       PGUSER: postgres
       PGHOST: 127.0.0.1
-      PGPORT: "5432"
+      PGPORT: "5433"
       PGPASSWORD: postgres
       PGBACKREST_REPO1_S3_BUCKET: keel-ci-backups
       PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
@@ -152,7 +152,7 @@ jobs:
           sudo python3 -m pip install --break-system-packages awscli
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
           sudo pg_createcluster 18 main --start
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
+          sudo -u postgres psql -p 5433 -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
       - name: Start TLS-verified S3-compatible test service and create disposable bucket
         run: |
           set -euo pipefail
