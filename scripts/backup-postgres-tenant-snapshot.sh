@@ -54,18 +54,18 @@ mapfile -t tenants < <(sed -n 's/^KEEL_TENANT=//p' "$work/snapshot.log")
 mapfile -t tenant_tables < <(sed -n 's/^KEEL_TENANT_TABLE=//p' "$work/snapshot.log")
 mapfile -t global_tables < <(sed -n 's/^KEEL_GLOBAL_TABLE=//p' "$work/snapshot.log")
 sed -n 's/^KEEL_EXTENSION=//p' "$work/snapshot.log" > "$package/extensions.tsv"
-(("@{#tenants[@]}" > 0)) || { echo "backup_refused_no_tenants_enumerated" >&2; exit 78; }
-for tenant in "@{tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
-for table in "@{tenant_tables[@]}" "@{global_tables[@]}"; do [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
-for extension in "$(cat "$package/extensions.tsv")"; do
-  [[ -z "$extension" || "$extension" =~ ^[A-Za-z0-9_.-]+\|[A-Za-z0-9_.-]+$ ]] || { echo "unsupported_extension_identifier" >&2; exit 78; }
-done
-(("@{#tenant_tables[@]}" > 0)) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
-printf '%s\n' "@{tenants[@]}" > "$package/tenant-ids.txt"
+(("${#tenants[@]}" > 0)) || { echo "backup_refused_no_tenants_enumerated" >&2; exit 78; }
+for tenant in "${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
+for table in "${tenant_tables[@]}" "${global_tables[@]}"; do [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
+while IFS= read -r extension; do
+  [[ -z "$extension" || "$extension" =~ ^[A-Za-z0-9_.-]+\\|[A-Za-z0-9_.-]+$ ]] || { echo "unsupported_extension_identifier" >&2; exit 78; }
+done < "$package/extensions.tsv"
+(("${#tenant_tables[@]}" > 0)) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
+printf '%s\n' "${tenants[@]}" > "$package/tenant-ids.txt"
 
 : > "$package/tenant-row-counts.tsv"
-for tenant in "@{tenants[@]}"; do
-  for table in "@{tenant_tables[@]}"; do
+for tenant in "${tenants[@]}"; do
+  for table in "${tenant_tables[@]}"; do
     counts="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot'; SELECT count(*)::text||'|'||count(*) FILTER (WHERE tenant_id IS DISTINCT FROM '$tenant'::uuid)::text FROM public.\"$table\"; COMMIT;")"
     IFS='|' read -r visible cross_tenant <<< "$counts"
     [[ "$visible" =~ ^[0-9]+$ && "$cross_tenant" == 0 ]] || { echo "tenant_snapshot_visibility_check_failed:$tenant:$table" >&2; exit 78; }
@@ -73,7 +73,7 @@ for tenant in "@{tenants[@]}"; do
   done
 done
 : > "$package/global-row-counts.tsv"
-for table in "@{global_tables[@]}"; do
+for table in "${global_tables[@]}"; do
   visible="$(psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   [[ "$visible" =~ ^[0-9]+$ ]] || { echo "global_snapshot_count_failed:$table" >&2; exit 78; }
   printf '%s\t%s\n' "$table" "$visible" >> "$package/global-row-counts.tsv"
@@ -109,14 +109,14 @@ SQL
 
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --file="$package/schema.sql"
 global_args=()
-for table in "@{tenant_tables[@]}"; do global_args+=( "--exclude-table=public.$table" ); done
-pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner --no-acl "@{global_args[@]}" --file="$package/global-data.sql"
-for index in "@{!tenants[@]}"; do
-  tenant="@{tenants[$index]}"
+for table in "${tenant_tables[@]}"; do global_args+=( "--exclude-table=public.$table" ); done
+pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner --no-acl "${global_args[@]}" --file="$package/global-data.sql"
+for index in "${!tenants[@]}"; do
+  tenant="${tenants[$index]}"
   printf -v number '%06d' "$((index+1))"
   tenant_args=()
-  for table in "@{global_tables[@]}"; do tenant_args+=( "--exclude-table=public.$table" ); done
-  PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --no-owner --no-acl --no-blobs "@{tenant_args[@]}" --file="$package/tenants/tenant-$number.sql"
+  for table in "${global_tables[@]}"; do tenant_args+=( "--exclude-table=public.$table" ); done
+  PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --no-owner --no-acl --no-blobs "${tenant_args[@]}" --file="$package/tenants/tenant-$number.sql"
   test -f "$package/tenants/tenant-$number.sql"
 done
 
