@@ -69,6 +69,9 @@ BEGIN
   IF v.rolsuper OR v.rolcreatedb OR v.rolcreaterole OR v.rolreplication OR NOT v.rolbypassrls OR v.rolcanlogin THEN
     RAISE EXCEPTION 'keel_backup_audit_owner_privilege_boundary_failed';
   END IF;
+  IF EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid=(SELECT oid FROM pg_roles WHERE rolname='keel_backup_audit_owner')) THEN
+    RAISE EXCEPTION 'keel_backup_audit_owner_must_have_no_members';
+  END IF;
   IF pg_has_role('keel_backup','keel_backup_audit_owner','MEMBER') THEN
     RAISE EXCEPTION 'keel_backup_must_not_inherit_audit_owner';
   END IF;
