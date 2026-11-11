@@ -6,6 +6,16 @@ umask 077
 : "${KEEL_BACKUP_AGE_RECIPIENT:?KEEL_BACKUP_AGE_RECIPIENT required}"
 : "${KEEL_BACKUP_DATABASE_ID:?KEEL_BACKUP_DATABASE_ID required}"
 for bin in pg_dump psql age sha256sum node; do command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }; done
+
+# Fail closed until the tenant-consistent RLS export format is enabled.
+# A normal whole-database pg_dump is not a valid backup for this schema:
+# it cannot safely enumerate every tenant while preserving the no-BYPASSRLS boundary.
+rls_table_count="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relrowsecurity")"
+[[ "$rls_table_count" =~ ^[0-9]+$ ]] || { echo "backup_rls_preflight_failed" >&2; exit 78; }
+if (( rls_table_count > 0 )); then
+  echo "backup_blocked_rls_requires_consistent_tenant_snapshot_export" >&2
+  exit 78
+fi
 mkdir -p "$KEEL_BACKUP_DIR"; chmod 700 "$KEEL_BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/keel-backup.XXXXXXXX")"; trap 'rm -rf "$work"' EXIT
