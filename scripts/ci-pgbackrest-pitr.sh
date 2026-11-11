@@ -58,6 +58,15 @@ timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --type=full backup
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (1, 'before-target')"
 target_lsn="$(psql -X -A -t -v ON_ERROR_STOP=1 -c "SELECT pg_create_restore_point('keel_pitr_target')")"
 [[ "$target_lsn" =~ ^[0-9A-F]+/[0-9A-F]+$ ]] || { echo "invalid PITR target LSN: $target_lsn" >&2; exit 1; }
+# Force the restore-point WAL segment to archive before writing post-target data.
+target_prior_wal="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal, '') FROM pg_stat_archiver")"
+psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal()"
+for _ in $(seq 1 90); do
+  target_archived="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal,'') FROM pg_stat_archiver")"
+  [[ -n "$target_archived" && "$target_archived" != "$target_prior_wal" ]] && break
+  sleep 2
+done
+[[ -n "${target_archived:-}" && "$target_archived" != "$target_prior_wal" ]] || { echo "restore-point WAL segment did not archive" >&2; exit 1; }
 psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO dr_pitr_probe VALUES (2, 'after-target')"
 prior_wal="$(psql -X -A -t -c "SELECT COALESCE(last_archived_wal, '') FROM pg_stat_archiver")"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal()"
