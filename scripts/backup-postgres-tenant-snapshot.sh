@@ -229,7 +229,7 @@ for index in "${!tenants[@]}"; do
   tenant="${tenants[$index]}"
   printf -v number '%06d' "$((index+1))"
   dump_file="$package/tenants/tenant-$number.sql"
-  pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --rows-per-insert=1 --no-owner --no-acl "${tenant_args[@]}" --file="$dump_file"
+  PGOPTIONS="-c keel.tenant_id=$tenant -c row_security=on" pg_dump --dbname="$DATABASE_URL" --role=keel_backup --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --rows-per-insert=1 --no-owner --no-acl "${tenant_args[@]}" --file="$dump_file"
   test -f "$dump_file"
   for table in "${tenant_tables[@]}"; do
     expected="$(count_rows "$tenant" "$table" "$snapshot")"
