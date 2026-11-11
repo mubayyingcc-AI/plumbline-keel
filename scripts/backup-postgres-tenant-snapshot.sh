@@ -58,7 +58,7 @@ sed -n 's/^KEEL_EXTENSION=//p' "$work/snapshot.log" > "$package/extensions.tsv"
 for tenant in "${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
 for table in "${tenant_tables[@]}" "${global_tables[@]}"; do [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
 while IFS= read -r extension; do
-  [[ -z "$extension" || "$extension" =~ ^[A-Za-z0-9_.-]+\\|[A-Za-z0-9_.-]+$ ]] || { echo "unsupported_extension_identifier" >&2; exit 78; }
+  [[ -z "$extension" || "$extension" =~ ^[A-Za-z0-9_.-]+\|[A-Za-z0-9_.-]+$ ]] || { echo "unsupported_extension_identifier" >&2; exit 78; }
 done < "$package/extensions.tsv"
 (("${#tenant_tables[@]}" > 0)) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
 printf '%s\n' "${tenants[@]}" > "$package/tenant-ids.txt"
