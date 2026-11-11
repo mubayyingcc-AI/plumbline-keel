@@ -99,13 +99,13 @@ jobs:
         run: |
           bash -n scripts/restore-postgres-encrypted.sh
           bash scripts/restore-postgres-encrypted.sh
-          restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000001'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
+          restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000001'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
           test "$restored" = "journal-a"
-          hidden="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000002'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
+          hidden="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000002'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
           test "$hidden" = "journal-b"
-          global_count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.keel_global_reference")"
+          global_count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.keel_global_reference")"
           test "$global_count" = "2"
-          next_id="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "INSERT INTO public.keel_global_reference(code) VALUES ('restore-probe') RETURNING id")"
+          next_id="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "INSERT INTO public.keel_global_reference(code) VALUES ('restore-probe') RETURNING id")"
           test "$next_id" = "3"
           echo "Tenant-consistent encrypted backup, global data, sequence state and isolated PostgreSQL 18 restore passed." >> "$GITHUB_STEP_SUMMARY"
       - name: Collect restore container diagnostics on failure
