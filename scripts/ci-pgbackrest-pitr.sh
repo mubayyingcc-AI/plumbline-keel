@@ -81,7 +81,7 @@ restore_dir=/var/lib/postgresql/pitr-restore
 rm -rf "$restore_dir"
 install -d -o postgres -g postgres -m 0700 "$restore_dir"
 echo "phase=pitr-restore"
-timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --pg1-path="$restore_dir" --type=lsn --target="$target_lsn" --target-exclusive --target-action=promote restore
+timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --pg1-path="$restore_dir" --type=lsn --target="$target_lsn" --target-exclusive --target-action=promote --archive-mode=off restore
 chown -R postgres:postgres "$restore_dir"
 echo "phase=start-restored-cluster"
 timeout 60 runuser -u postgres -- pg_ctl -D "$restore_dir" -w start -o "-p 5434 -c config_file=$PGCONF -c data_directory=$restore_dir -c listen_addresses=127.0.0.1 -c archive_mode=off -c archive_command=/bin/true"
