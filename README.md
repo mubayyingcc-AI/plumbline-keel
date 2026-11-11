@@ -1,6 +1,6 @@
-# Plumbline Keel — Financial Infrastructure Foundation
+# Plumbline Keel — Decision & Evidence Infrastructure
 
-Global, multi-tenant financial state, ledger, authority, collateral and continuity architecture. The website and API remain an engineering alpha; they are not production financial infrastructure.
+Vendor-neutral decision, evidence and authority infrastructure for AI systems and financial workflows. The financial engines remain a specialised domain pack. The website and API remain an engineering alpha; they are not production financial infrastructure.
 
 ## Run locally
 
@@ -42,3 +42,14 @@ The transactional ledger posting/reservation work is under draft PR [#22](https:
 Keel is not a bank, custodian, payment system, regulator or legal title registry. A cryptographic fingerprint does not prove asset existence, ownership, encumbrance status, funds availability or settlement finality. Sandbox results are technical test evidence—not certification, audit opinion, regulatory approval or permission to execute financial transactions.
 
 No production migration, live financial integration or deployment is authorised by this branch.
+
+
+## AI Release Assurance
+
+Keel now includes a domain-neutral deterministic release-assessment core for AI companies and enterprises. It can bind exact versions and fingerprints for models, prompts, retrieval indexes, datasets, tools, agents, workflows, policies, runtimes and integrations to required test evidence, risk-tiered approvals and rollback evidence.
+
+- [AI Release Assurance contract and integration roadmap](docs/AI_RELEASE_ASSURANCE.md)
+- Implementation: `src/ai-release-assurance.js`
+- Tests: `test/ai-release-assurance.test.js`
+
+The current library evaluates supplied evidence. It does not execute CI pipelines, authenticate external evidence providers by itself, or deploy releases. CI, model registry, artifact provenance, identity and audit adapters remain integration work. The product catalogue marks this status explicitly.
