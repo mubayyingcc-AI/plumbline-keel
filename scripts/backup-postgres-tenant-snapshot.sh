@@ -31,7 +31,11 @@ package="$work/package"
 psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT 'KEEL_SNAPSHOT='||pg_export_snapshot(); SELECT 'KEEL_TENANT='||tenant_id::text FROM public.keel_backup_tenant_ids() ORDER BY tenant_id; SELECT 'KEEL_TENANTS_DONE'; SELECT 'KEEL_TENANT_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname; SELECT 'KEEL_GLOBAL_TABLE='||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) ORDER BY c.relname; SELECT 'KEEL_CATALOG_DONE'; SELECT pg_sleep(3600)" >"$work/snapshot.log" 2>"$work/snapshot.err" &
 snapshot_pid=$!
 for attempt in $(seq 1 100); do
-  grep -q '^KEEL_CATALOG_DONE
+  if grep -q '^KEEL_CATALOG_DONE$' "$work/snapshot.log" 2>/dev/null; then break; fi
+  kill -0 "$snapshot_pid" 2>/dev/null || { cat "$work/snapshot.err" >&2; exit 1; }
+  sleep 0.1
+done
+grep -q '^KEEL_CATALOG_DONE$' "$work/snapshot.log" || { echo "snapshot_catalog_export_incomplete" >&2; exit 1; }
 snapshot="$(sed -n 's/^KEEL_SNAPSHOT=//p' "$work/snapshot.log" | head -n1)"
 [[ "$snapshot" =~ ^[0-9A-Fa-f-]+$ ]] || { echo "postgres_exported_snapshot_unavailable" >&2; exit 1; }
 mapfile -t tenants < <(sed -n 's/^KEEL_TENANT=//p' "$work/snapshot.log")
