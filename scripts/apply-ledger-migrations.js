@@ -108,7 +108,12 @@ async function main() {
       ORDER BY c.relname
     `);
     for (const row of tenantTables.rows) {
-      await client.query('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.' + quoteIdentifier(row.relname) + ' TO ' + roleName);
+      if (row.relname === 'keel_ai_release_assessments') {
+        await client.query('GRANT SELECT, INSERT ON TABLE public.' + quoteIdentifier(row.relname) + ' TO ' + roleName);
+        await client.query('REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.' + quoteIdentifier(row.relname) + ' FROM ' + roleName);
+      } else {
+        await client.query('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.' + quoteIdentifier(row.relname) + ' TO ' + roleName);
+      }
     }
     await client.query('GRANT SELECT ON TABLE public.keel_schema_migrations TO ' + roleName);
     await client.query('GRANT INSERT ON TABLE public.keel_leads TO ' + roleName);
