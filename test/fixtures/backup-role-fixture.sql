@@ -1,7 +1,7 @@
 -- Run as a database administrator against a disposable CI database.
 CREATE ROLE keel_auth_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
 CREATE TABLE public.keel_tenants (tenant_id uuid PRIMARY KEY, tenant_name text NOT NULL);
-CREATE TABLE public.keel_ledger_journals (tenant_id uuid NOT NULL, journal_id text NOT NULL, PRIMARY KEY(tenant_id,journal_id));
+CREATE TABLE public.keel_ledger_journals (tenant_id uuid NOT NULL REFERENCES public.keel_tenants(tenant_id), journal_id text NOT NULL, PRIMARY KEY(tenant_id,journal_id));
 ALTER TABLE public.keel_tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.keel_tenants FORCE ROW LEVEL SECURITY;
 CREATE POLICY keel_tenants_tenant_isolation ON public.keel_tenants
