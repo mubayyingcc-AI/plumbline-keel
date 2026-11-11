@@ -62,7 +62,7 @@ node - "$package" "$KEEL_RESTORE_EXPECTED_DATABASE_ID" <<'NODE'
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const [dir,expectedId]=process.argv.slice(2),m=JSON.parse(fs.readFileSync(path.join(dir,'PACKAGE-MANIFEST.json'),'utf8'));
 if(m.format!=='keel-tenant-snapshot-package/v2'||m.databaseId!==expectedId||!Number.isInteger(m.tenantCount)||m.tenantCount<1||!Array.isArray(m.files))throw Error('package_manifest_invalid');
-const tenantFiles=fs.readdirSync(path.join(dir,'tenants')).filter(x=>/^tenant-[0-9]{6}\\.sql$/.test(x));
+const tenantFiles=fs.readdirSync(path.join(dir,'tenants')).filter(x=>/^tenant-[0-9]{6}\.sql$/.test(x));
 if(tenantFiles.length!==m.tenantCount)throw Error('tenant_data_file_count_mismatch');
 const seen=new Set();
 for(const f of m.files){
