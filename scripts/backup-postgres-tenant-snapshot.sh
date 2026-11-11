@@ -110,7 +110,7 @@ SQL
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --file="$package/schema.sql"
 global_args=()
 for table in "${tenant_tables[@]}"; do global_args+=( "--exclude-table=public.$table" ); done
-pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner --no-acl "${global_args[@]}" --file="$package/global-data.sql"
+pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner "${global_args[@]}" --file="$package/global-data.sql"
 for index in "${!tenants[@]}"; do
   tenant="${tenants[$index]}"
   printf -v number '%06d' "$((index+1))"
