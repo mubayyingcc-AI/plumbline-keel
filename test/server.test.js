@@ -70,6 +70,15 @@ test('unknown routes return a structured 404', async () => {
   assert.equal(response.status, 404);
 });
 
+test('AI release assessment creation requires tenant authentication',async()=>{
+ const response=await fetch(base+'/api/ai/release-assessments',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+ assert.equal(response.status,401);assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
+test('AI release assessment listing requires tenant authentication',async()=>{
+ const response=await fetch(base+'/api/ai/release-assessments');
+ assert.equal(response.status,401);assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
+
 test('tenant-scoped assurance writes reject missing credentials', async () => {
   const response = await fetch(base + '/api/assurance/models', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
   assert.equal(response.status,401);
