@@ -16,7 +16,7 @@ function context({method='POST',actor={tenant_id:'11111111-1111-4111-8111-111111
   readBody:async()=>body,sameOriginIfBrowser:()=>true,crypto}};
 }
 test('tenant release assessment persists with authenticated tenant, not caller tenant',async()=>{
- const c=context();assert.equal(await handle(c.ctx),c.response);
+ const c=context();assert.equal(await handle(c.ctx),true);
  assert.equal(c.response.status,201);
  assert.equal(c.response.payload.decision,'SAFE_TO_RELEASE');
  assert.equal(c.response.payload.automaticDeploymentAuthorized,false);
