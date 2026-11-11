@@ -71,10 +71,10 @@ restore_dir=/var/lib/postgresql/pitr-restore
 rm -rf "$restore_dir"
 install -d -o postgres -g postgres -m 0700 "$restore_dir"
 echo "phase=pitr-restore"
-timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --pg1-path="$restore_dir" --type=name --target=keel_pitr_target --target-action=promote restore
+timeout 180 runuser -u postgres -- pgbackrest --stanza=keel --pg1-path="$restore_dir" --type=name --target=keel_pitr_target --target-exclusive --target-action=promote restore
 chown -R postgres:postgres "$restore_dir"
 echo "phase=start-restored-cluster"
-timeout 60 runuser -u postgres -- pg_ctl -D "$restore_dir" -w start -o "-p 5434 -c config_file=$PGCONF -c data_directory=$restore_dir -c listen_addresses=127.0.0.1"
+timeout 60 runuser -u postgres -- pg_ctl -D "$restore_dir" -w start -o "-p 5434 -c config_file=$PGCONF -c data_directory=$restore_dir -c listen_addresses=127.0.0.1 -c archive_mode=off -c archive_command=/bin/true"
 restored_before="$(psql -h 127.0.0.1 -p 5434 -X -A -t -c "SELECT marker FROM dr_pitr_probe WHERE id=1")"
 restored_after="$(psql -h 127.0.0.1 -p 5433 -X -A -t -c "SELECT count(*) FROM dr_pitr_probe WHERE id=2")"
 [[ "$restored_before" == before-target && "$restored_after" == 0 ]] || { echo "PITR assertion failed: before=$restored_before after_count=$restored_after" >&2; exit 1; }
