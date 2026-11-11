@@ -19,3 +19,15 @@ INSERT INTO public.keel_tenants VALUES
 INSERT INTO public.keel_ledger_journals VALUES
  ('00000000-0000-0000-0000-000000000001','journal-a'),
  ('00000000-0000-0000-0000-000000000002','journal-b');
+
+-- Legacy NULL ownership must be visible to the narrow backup integrity audit.
+CREATE TABLE public.keel_legacy_unassigned (
+  legacy_id text PRIMARY KEY,
+  tenant_id uuid
+);
+ALTER TABLE public.keel_legacy_unassigned ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.keel_legacy_unassigned FORCE ROW LEVEL SECURITY;
+CREATE POLICY keel_legacy_unassigned_tenant_isolation ON public.keel_legacy_unassigned
+  USING (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid);
+INSERT INTO public.keel_legacy_unassigned(legacy_id,tenant_id) VALUES ('legacy-null',NULL);
