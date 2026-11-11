@@ -45,6 +45,8 @@ age --decrypt --identity "$KEEL_BACKUP_AGE_IDENTITY_FILE" --output "$plain" "$KE
 test -s "$plain"
 mkdir -m 700 "$work/unpacked"
 tar -tzf "$plain" >"$work/archive.list"
+tar -tvzf "$plain" >"$work/archive.verbose"
+awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" { exit 1 }' "$work/archive.verbose" || { echo "backup_archive_links_or_special_files_forbidden" >&2; exit 4; }
 node - "$work/archive.list" <<'NODE'
 const fs=require('node:fs'),p=require('node:path');
 for(const raw of fs.readFileSync(process.argv[2],'utf8').split(/\r?\n/).filter(Boolean)){
@@ -60,6 +62,8 @@ node - "$package" "$KEEL_RESTORE_EXPECTED_DATABASE_ID" <<'NODE'
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const [dir,expectedId]=process.argv.slice(2),m=JSON.parse(fs.readFileSync(path.join(dir,'PACKAGE-MANIFEST.json'),'utf8'));
 if(m.format!=='keel-tenant-snapshot-package/v2'||m.databaseId!==expectedId||!Number.isInteger(m.tenantCount)||m.tenantCount<1||!Array.isArray(m.files))throw Error('package_manifest_invalid');
+const tenantFiles=fs.readdirSync(path.join(dir,'tenants')).filter(x=>/^tenant-[0-9]{6}\\.sql$/.test(x));
+if(tenantFiles.length!==m.tenantCount)throw Error('tenant_data_file_count_mismatch');
 const seen=new Set();
 for(const f of m.files){
  if(typeof f.path!=='string'||f.path.startsWith('/')||f.path.split(/[\\/]/).includes('..')||seen.has(f.path))throw Error('package_manifest_path_invalid');
