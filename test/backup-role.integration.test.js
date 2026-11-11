@@ -37,6 +37,7 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(run("SELECT unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE table_name='keel_legacy_unassigned'"), '1|0');
   assert.equal(run("SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND rolbypassrls AND NOT rolcanlogin)::text FROM pg_roles WHERE rolname='keel_backup_audit_owner'"), 'true');
   assert.equal(run("SELECT pg_has_role('keel_backup','keel_backup_audit_owner','MEMBER')::text"), 'false');
+  assert.equal(run("SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid WHERE r.rolname='keel_backup_audit_owner'"), '0');
   run("DELETE FROM public.keel_legacy_unassigned WHERE legacy_id='legacy-null'");
   run("INSERT INTO public.keel_legacy_unassigned(legacy_id,tenant_id) VALUES ('orphan-row','00000000-0000-0000-0000-000000000099')");
   assert.equal(run("SELECT unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE table_name='keel_legacy_unassigned'"), '0|1');
