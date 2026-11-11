@@ -104,7 +104,7 @@ GRANT keel_backup_reader TO keel_backup;
 SQL
 {
   echo "-- Reassign SECURITY DEFINER functions to approved non-login owners."
-  psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT format('ALTER FUNCTION %I.%I(%s) OWNER TO %I;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), r.rolname) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.prosecdef ORDER BY p.proname"
+  psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT CASE WHEN p.prokind='p' THEN format('ALTER PROCEDURE %I.%I(%s) OWNER TO %I;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), r.rolname) ELSE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), r.rolname) END FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.prosecdef ORDER BY p.proname"
 } > "$package/security-definer-owners.sql"
 
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --file="$package/schema.sql"
