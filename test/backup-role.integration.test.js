@@ -12,7 +12,7 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   const run = (sql, expected = 0) => {
     const result = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-A', '-t', '-c', sql], { encoding: 'utf8' });
     assert.equal(result.status, expected, result.stderr || result.stdout);
-    return result.stdout.trim();
+    return result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) || '';
   };
   const fixtureResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', fixture], { encoding: 'utf8' });
   assert.equal(fixtureResult.status, 0, fixtureResult.stderr);
