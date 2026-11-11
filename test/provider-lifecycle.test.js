@@ -51,9 +51,5 @@ test('lease bounds prevent unbounded provider dispatch leases',async()=>{
   await assert.rejects(()=>lifecycle.claimNextInstruction({},tenant,'worker-1',999),/lease_seconds_invalid/);
 });
 
- security/global-financial-core-tenant-assurance
-test('provider dispatch fails closed without a named delegated authority context before database access',async()=>{await assert.rejects(()=>lifecycle.claimNextInstruction({},tenant,'worker-without-authority',30),/provider_dispatch_authority_context_required/);});
-
 test('provider dispatch fails closed without delegated authority before database access',async()=>{await assert.rejects(()=>lifecycle.claimNextInstruction({},tenant,'worker-without-authority',30),/provider_dispatch_authority_context_required/);});
 test('provider outcome fails closed without delegated authority before database access',async()=>{await assert.rejects(()=>lifecycle.recordDispatchOutcome({},tenant,{outboxId:'outbox-1',workerId:'worker-1',outcome:'unknown'}),/provider_outcome_authority_context_required/);});
- main
