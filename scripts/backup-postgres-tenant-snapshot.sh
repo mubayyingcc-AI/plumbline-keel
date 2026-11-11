@@ -11,7 +11,7 @@ for bin in psql pg_dump age sha256sum node tar awk grep sed; do
   command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }
 done
 
-psqlq() { psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 "$@"; }
+psqlq() { psql "$DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
 
 identity="$(psqlq -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
 [[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
@@ -200,7 +200,7 @@ count_rows() {
   else
     value="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   fi
-  [[ "$value" =~ ^[0-9]+$ ]] || { echo "backup_row_count_failed:$tenant:$table" >&2; exit 1; }
+  [[ "$value" =~ ^[0-9]+$ ]] || { printf "backup_row_count_failed:%s:%s:output=%q\\n" "$tenant" "$table" "$value" >&2; exit 1; }
   printf '%s' "$value"
 }
 count_inserts() {
