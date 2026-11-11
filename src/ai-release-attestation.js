@@ -6,7 +6,7 @@ const {verifyReleaseAssessment}=require('./ai-release-assurance');
 function fail(code){throw Object.assign(new Error(code),{code});}
 function ed25519Key(value,type){
  let key;
- try{key=type==='private'?crypto.createPrivateKey(value):crypto.createPublicKey(value);}catch{fail('attestation_'+type+'_key_invalid');}
+ try{key=value instanceof crypto.KeyObject?value:(type==='private'?crypto.createPrivateKey(value):crypto.createPublicKey(value));}catch{fail('attestation_'+type+'_key_invalid');}
  if(key.asymmetricKeyType!=='ed25519')fail('attestation_key_must_be_ed25519');
  if(type==='private'&&key.type!=='private')fail('attestation_private_key_required');
  if(type==='public'&&key.type!=='public')fail('attestation_public_key_required');
