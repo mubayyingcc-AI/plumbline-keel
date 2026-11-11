@@ -4,6 +4,8 @@ on:
     paths:
       - "ops/backup/**"
       - "scripts/backup-postgres-encrypted.sh"
+      - "scripts/restore-postgres-encrypted.sh"
+      - "scripts/backup-postgres-tenant-snapshot.sh"
       - ".github/workflows/backup-worker.yml"
   push:
     branches: [main]
