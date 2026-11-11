@@ -8,6 +8,8 @@ umask 077
 for bin in psql pg_dump age sha256sum node tar; do command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }; done
 identity="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT current_user||'|'||rolsuper||'|'||rolbypassrls||'|'||rolcreatedb||'|'||rolcreaterole||'|'||rolreplication FROM pg_roles WHERE rolname=current_user")"
 [[ "$identity" == "keel_backup|f|f|f|f|f" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
+unapproved_definers="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.prosecdef AND r.rolname NOT IN ('keel_auth_owner','keel_backup_audit_owner')")"
+[[ "$unapproved_definers" == 0 ]] || { echo "backup_blocked_unrecognized_security_definer_owner" >&2; exit 78; }
 unsupported="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','f') AND n.nspname NOT IN ('public','pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'")"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_non_public_data_relations" >&2; exit 78; }
 unsupported="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND ((c.relrowsecurity AND (n.nspname<>'public' OR NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped))) OR (n.nspname='public' AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped) AND (NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) OR NOT c.relrowsecurity)))"
@@ -61,7 +63,34 @@ for table in "${global_tables[@]}"; do
   [[ "$visible" =~ ^[0-9]+$ ]] || { echo "global_snapshot_count_failed:$table" >&2; exit 78; }
   printf '%s\t%s\n' "$table" "$visible" >> "$package/global-row-counts.tsv"
 done
-pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --no-acl --file="$package/schema.sql"
+cat > "$package/role-bootstrap.sql" <<'SQL'
+-- Recreate only the fixed application roles. Passwords are never exported.
+DO $roles$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN
+    EXECUTE 'CREATE ROLE keel_runtime LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_auth_owner') THEN
+    EXECUTE 'CREATE ROLE keel_auth_owner NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup_audit_owner') THEN
+    EXECUTE 'CREATE ROLE keel_backup_audit_owner NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup_reader') THEN
+    EXECUTE 'CREATE ROLE keel_backup_reader NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN
+    EXECUTE 'CREATE ROLE keel_backup LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2';
+  END IF;
+END
+$roles$;
+GRANT keel_backup_reader TO keel_backup;
+SQL
+{
+  echo "-- Restore SECURITY DEFINER functions to their dedicated non-login owners."
+  psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT format('ALTER FUNCTION %I.%I(%s) OWNER TO %I;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), r.rolname) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.prosecdef ORDER BY p.proname"
+} > "$package/security-definer-owners.sql"
+pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --file="$package/schema.sql"
 global_args=(); for table in "${tenant_tables[@]}"; do global_args+=( "--exclude-table=public.$table" ); done
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner --no-acl "${global_args[@]}" --file="$package/global-data.sql"
 for index in "${!tenants[@]}"; do
