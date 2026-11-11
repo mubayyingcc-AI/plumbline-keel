@@ -61,11 +61,18 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
+          ops/isolated-backup-worker
+          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          ready=false
+          for attempt in $(seq 1 30); do
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
+
           docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z server /data --console-address ":9001"
           trap 'docker logs keel-s3-test 2>&1 | tail -n 200 || true' EXIT
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
+         main
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
@@ -143,6 +150,12 @@ jobs:
         run: |
           set -euo pipefail
           aws configure set default.s3.addressing_style path
+       ops/isolated-backup-worker
+          docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
+          ready=false
+          for attempt in $(seq 1 30); do
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
+
           cert_dir="$RUNNER_TEMP/minio-certs"
           mkdir -p "$cert_dir"
           openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
@@ -160,12 +173,18 @@ jobs:
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --cacert "$cert_dir/public.crt" --max-time 2 -s -o /dev/null -w '%{http_code}' https://127.0.0.1:9000/ || true)"
+         main
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
           [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
+          ops/isolated-backup-worker
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://keel-ci-backups
+          aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+
           aws --endpoint-url https://127.0.0.1:9000 s3 mb s3://keel-ci-backups
           aws --endpoint-url https://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+          main
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh
