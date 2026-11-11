@@ -37,6 +37,7 @@ mapfile -t global_tables < <(sed -n 's/^KEEL_GLOBAL_TABLE=//p' "$work/snapshot.l
 for tenant in "${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
 for table in "${tenant_tables[@]}" "${global_tables[@]}"; do [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
 (("${#tenant_tables[@]}" > 0)) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
+printf '%s\\n' "${tenants[@]}" > "$package/tenant-ids.txt"
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --no-owner --no-acl --file="$package/schema.sql"
 global_args=(); for table in "${tenant_tables[@]}"; do global_args+=( "--exclude-table=public.$table" ); done
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --no-owner --no-acl "${global_args[@]}" --file="$package/global-data.sql"
