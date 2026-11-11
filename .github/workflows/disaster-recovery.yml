@@ -45,6 +45,11 @@ jobs:
       - name: Install PostgreSQL 18 client and age
         run: |
           sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
           sudo apt-get install -y postgresql-client-18 age python3-pip
           sudo python3 -m pip install --break-system-packages awscli
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
@@ -137,6 +142,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install PostgreSQL 18 server and pgBackRest
         run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-18 postgresql-client-18 pgbackrest python3-pip
           sudo python3 -m pip install --break-system-packages awscli
