@@ -98,7 +98,7 @@ bad_definers="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c
 bad_tenant_rows="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_backup_tenant_integrity_audit() WHERE unassigned_rows>0 OR orphaned_rows>0")"
 [[ "$bad_tenant_rows" == 0 ]] || { echo "restored_unassigned_or_orphaned_tenant_rows:$bad_tenant_rows" >&2; exit 12; }
 echo "tenant_snapshot_restore_completed=true"
-\\t' read -r extension version; do
+while IFS='|' read -r extension version; do
   [[ "$extension" =~ ^[A-Za-z0-9_.-]+$ && "$version" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "backup_extension_manifest_invalid" >&2; exit 13; }
   available="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_available_extension_versions WHERE name='$extension' AND version='$version'")"
   [[ "$available" == 1 ]] || { echo "required_extension_version_unavailable:$extension:$version" >&2; exit 13; }
