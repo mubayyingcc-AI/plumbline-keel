@@ -24,6 +24,13 @@ test('tenant release assessment persists with authenticated tenant, not caller t
  assert.equal(c.calls[0][1][0],'11111111-1111-4111-8111-111111111111');
  assert.equal(stored.release.tenantRef,'11111111-1111-4111-8111-111111111111');
 });
+test('API does not retain caller-asserted approval metadata even for moderate risk',async()=>{
+ const body=input({approval:{status:'approved',approverRef:'spoofed-reviewer',approvedAt:now,scopeFingerprint:'b'.repeat(64)},rollback:{planRef:'fake',verified:true,testedAt:now}});
+ const c=context({body});await handle(c.ctx);
+ const stored=JSON.parse(c.calls[0][1][8]);
+ assert.equal(stored.release.approval,null);assert.equal(stored.release.rollback,null);
+});
+
 test('API cannot accept caller-asserted high-risk approval as independent approval',async()=>{
  const body=input({riskTier:'critical',approval:{status:'approved',approverRef:'spoofed',approvedAt:now,scopeFingerprint:'b'.repeat(64)},rollback:{planRef:'fake',verified:true,testedAt:now}});
  const c=context({body});await handle(c.ctx);
