@@ -155,7 +155,17 @@ function databaseSslOptions(env=process.env) {
     return false;
   }
   const options = { rejectUnauthorized:true };
-  if (env.PGSSLROOTCERT) options.ca = fs.readFileSync(env.PGSSLROOTCERT, 'utf8');
+  if (env.PGSSLROOTCERT_B64) {
+    const encoded = String(env.PGSSLROOTCERT_B64).trim();
+    const decoded = Buffer.from(encoded, 'base64');
+    const ca = decoded.toString('utf8');
+    if (!encoded || decoded.toString('base64') !== encoded || !ca.includes('-----BEGIN CERTIFICATE-----') || !ca.includes('-----END CERTIFICATE-----')) {
+      throw new Error('database_ca_bundle_invalid');
+    }
+    options.ca = ca;
+  } else if (env.PGSSLROOTCERT) {
+    options.ca = fs.readFileSync(env.PGSSLROOTCERT, 'utf8');
+  }
   return options;
 }
 
