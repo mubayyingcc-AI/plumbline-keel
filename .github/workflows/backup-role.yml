@@ -98,8 +98,8 @@ jobs:
           export KEEL_RESTORE_CONFIRM=RESTORE_TO_EMPTY_DATABASE
           export KEEL_RESTORE_EXPECTED_DATABASE_ID=keel-backup-ci
           bash scripts/restore-postgres-tenant-snapshot.sh
-          restored_a="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000001" psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals WHERE tenant_id='00000000-0000-0000-0000-000000000001'")"
-          restored_b="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000002" psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals WHERE tenant_id='00000000-0000-0000-0000-000000000002'")"
+          restored_a="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000001" psql "postgresql://keel_backup:ci-backup-password@127.0.0.1:5432/keel_restore_ci" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
+          restored_b="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000002" psql "postgresql://keel_backup:ci-backup-password@127.0.0.1:5432/keel_restore_ci" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
           test "$restored_a" = "journal-a"
           test "$restored_b" = "journal-b"
           echo "RLS identity, tenant snapshot backup, encrypted package, isolated restore, row counts, and tenant isolation passed." >> "$GITHUB_STEP_SUMMARY"
