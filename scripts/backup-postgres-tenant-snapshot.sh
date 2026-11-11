@@ -14,6 +14,10 @@ unsupported="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_unsupported_or_unprotected_tenant_table" >&2; exit 78; }
 untrusted_policies="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) AND ((SELECT count(*) FROM pg_policy p WHERE p.polrelid=c.oid)<>1 OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid AND p.polcmd='*' AND p.polqual::text LIKE '%keel.tenant_id%' AND p.polqual::text LIKE '%tenant_id%'))")"
 [[ "$untrusted_policies" == 0 ]] || { echo "backup_blocked_unrecognized_tenant_rls_policy" >&2; exit 78; }
+unsupported="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('f','m')")"
+[[ "$unsupported" == 0 ]] || { echo "backup_blocked_foreign_or_materialized_relations" >&2; exit 78; }
+audit="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT table_name||'|'||unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE unassigned_rows>0 OR orphaned_rows>0 ORDER BY table_name")"
+[[ -z "$audit" ]] || { echo "backup_blocked_unassigned_or_orphaned_tenant_rows" >&2; printf '%s\\n' "$audit" >&2; exit 78; }
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT tenant_id FROM public.keel_backup_tenant_ids() LIMIT 0" >/dev/null
 mkdir -p "$KEEL_BACKUP_DIR"; chmod 700 "$KEEL_BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
