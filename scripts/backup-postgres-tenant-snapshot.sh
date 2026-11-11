@@ -7,8 +7,8 @@ umask 077
 : "${KEEL_BACKUP_DATABASE_ID:?KEEL_BACKUP_DATABASE_ID required}"
 for bin in psql pg_dump age sha256sum node tar sed grep; do command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }; done
 
-identity="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT current_user||'|'||rolsuper||'|'||rolbypassrls||'|'||rolcreatedb||'|'||rolcreaterole||'|'||rolreplication FROM pg_roles WHERE rolname=current_user")"
-[[ "$identity" == "keel_backup|f|f|f|f|f" ]] || { printf 'backup_identity_mismatch=%s\\n' "$identity" >&2; echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
+identity="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
+[[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { printf 'backup_identity_mismatch=%s\n' "$identity" >&2; echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
 unapproved_definers="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.prosecdef AND r.rolname NOT IN ('keel_auth_owner','keel_backup_audit_owner')")"
 [[ "$unapproved_definers" == 0 ]] || { echo "backup_blocked_unrecognized_security_definer_owner" >&2; exit 78; }
 unsupported_schemas="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_namespace WHERE nspname NOT IN ('public','pg_catalog','information_schema') AND nspname NOT LIKE 'pg_%'")"
