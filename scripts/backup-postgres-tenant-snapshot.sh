@@ -25,7 +25,8 @@ unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON 
 unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('p','f','m')")"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_partitioned_foreign_or_materialized_relations" >&2; exit 78; }
 
-unsupported="$(psqlq -c "
+unsupported="$(
+psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
 SELECT count(*)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -77,7 +78,8 @@ AND (
       AND fk.confkey=ARRAY[tenant_key.attnum]::smallint[]
   ))
 )
-")"
+SQL
+)"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_unsupported_or_unprotected_tenant_table" >&2; exit 78; }
 
 large_objects="$(psqlq -c "SELECT count(*) FROM pg_largeobject_metadata")"
