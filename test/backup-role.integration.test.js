@@ -18,9 +18,13 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(fixtureResult.status, 0, fixtureResult.stderr);
   const migrationResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', migration], { encoding: 'utf8' });
   assert.equal(migrationResult.status, 0, migrationResult.stderr);
+  // A broad permissive policy for the backup reader must not override its
+  // separate restrictive tenant-scope policy installed by migration 021.
+  const broadPolicy = run("CREATE POLICY keel_test_backup_wide_access ON public.keel_ledger_journals FOR SELECT TO keel_backup_reader USING (true)");
   const integrityMigration = path.join(__dirname, '..', 'db', 'migrations', '021_backup_tenant_integrity_audit.sql');
   const integrityResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', integrityMigration], { encoding: 'utf8' });
   assert.equal(integrityResult.status, 0, integrityResult.stderr);
+  assert.equal(run("SELECT (NOT polpermissive)::text FROM pg_policy WHERE polrelid='public.keel_ledger_journals'::regclass AND polname='keel_backup_tenant_scope'"), 'true');
 
   const attributes = run("SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)::text FROM pg_roles WHERE rolname='keel_backup'");
   assert.equal(attributes, 'true');
