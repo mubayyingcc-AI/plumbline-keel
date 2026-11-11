@@ -27,6 +27,7 @@ const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
 const aiReleaseAssuranceApi = require('./src/ai-release-assurance-api');
+const openbbAdapter = require('./src/openbb-adapter');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
