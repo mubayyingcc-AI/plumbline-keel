@@ -66,7 +66,7 @@ while IFS=$'\t' read -r role canlogin inherit connlimit bypass; do
  [[ "$role" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "invalid_role_name_in_backup" >&2; exit 78; }
  if [[ "$role" == "keel_auth_owner" ]]; then
    [[ "$canlogin" == "f" && "$bypass" == "t" ]] || { echo "auth_owner_role_metadata_invalid" >&2; exit 78; }
-   psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE ROLE keel_auth_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS'
+   psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE ROLE keel_auth_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS'
  elif [[ "$bypass" == "f" && "$canlogin" == "t" ]]; then
    psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE ""$role"" NOLOGIN INHERIT NOBYPASSRLS"
  elif [[ "$bypass" == "f" && "$canlogin" == "f" ]]; then
@@ -93,11 +93,29 @@ psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/sequences.s
 
 # SECURITY DEFINER owners must be the dedicated narrow role, never the restore superuser.
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
-GRANT SELECT ON public.keel_tenants,public.keel_tenant_keys,public.keel_principals TO keel_auth_owner;
-GRANT UPDATE(last_used_at) ON public.keel_tenant_keys TO keel_auth_owner;
-ALTER FUNCTION public.keel_authenticate_tenant_key(TEXT) OWNER TO keel_auth_owner;
-ALTER FUNCTION public.keel_touch_tenant_key(TEXT,UUID) OWNER TO keel_auth_owner;
-ALTER FUNCTION public.keel_backup_tenant_ids() OWNER TO keel_auth_owner;
+DO $restore$
+BEGIN
+  IF to_regclass('public.keel_tenants') IS NOT NULL THEN
+    GRANT SELECT ON public.keel_tenants TO keel_auth_owner;
+  END IF;
+  IF to_regclass('public.keel_tenant_keys') IS NOT NULL THEN
+    GRANT SELECT ON public.keel_tenant_keys TO keel_auth_owner;
+    GRANT UPDATE(last_used_at) ON public.keel_tenant_keys TO keel_auth_owner;
+  END IF;
+  IF to_regclass('public.keel_principals') IS NOT NULL THEN
+    GRANT SELECT ON public.keel_principals TO keel_auth_owner;
+  END IF;
+  IF to_regprocedure('public.keel_authenticate_tenant_key(text)') IS NOT NULL THEN
+    ALTER FUNCTION public.keel_authenticate_tenant_key(TEXT) OWNER TO keel_auth_owner;
+  END IF;
+  IF to_regprocedure('public.keel_touch_tenant_key(text,uuid)') IS NOT NULL THEN
+    ALTER FUNCTION public.keel_touch_tenant_key(TEXT,UUID) OWNER TO keel_auth_owner;
+  END IF;
+  IF to_regprocedure('public.keel_backup_tenant_ids()') IS NOT NULL THEN
+    ALTER FUNCTION public.keel_backup_tenant_ids() OWNER TO keel_auth_owner;
+  END IF;
+END
+$restore$;
 SQL
 
 # Compare every recorded row count under the backup role's actual RLS view.
