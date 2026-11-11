@@ -198,7 +198,7 @@ count_rows() {
   if [[ "$tenant" == "GLOBAL" ]]; then
     value="$(psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   else
-    value="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
+    value="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c role=keel_backup -c keel.tenant_id=$tenant" psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   fi
   [[ "$value" =~ ^[0-9]+$ ]] || { printf "backup_row_count_failed:%s:%s:output=%q\\n" "$tenant" "$table" "$value" >&2; exit 1; }
   printf '%s' "$value"
