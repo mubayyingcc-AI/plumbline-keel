@@ -1,8 +1,11 @@
-name: RLS-aware backup identity
+name: RLS-aware backup identity and tenant snapshot recovery
 on:
   pull_request:
     paths:
       - "db/migrations/020_rls_aware_backup_identity.sql"
+      - "db/migrations/021_backup_tenant_integrity_audit.sql"
+      - "scripts/backup-postgres-tenant-snapshot.sh"
+      - "scripts/restore-postgres-tenant-snapshot.sh"
       - "test/backup-role.integration.test.js"
       - "test/fixtures/backup-role-fixture.sql"
       - ".github/workflows/backup-role.yml"
@@ -10,6 +13,9 @@ on:
     branches: [main]
     paths:
       - "db/migrations/020_rls_aware_backup_identity.sql"
+      - "db/migrations/021_backup_tenant_integrity_audit.sql"
+      - "scripts/backup-postgres-tenant-snapshot.sh"
+      - "scripts/restore-postgres-tenant-snapshot.sh"
       - "test/backup-role.integration.test.js"
       - "test/fixtures/backup-role-fixture.sql"
       - ".github/workflows/backup-role.yml"
@@ -39,7 +45,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Verify least-privilege backup identity and RLS
+      - name: Verify backup identity, RLS, and tenant integrity audit
         run: |
           mkdir -p "$RUNNER_TEMP/pg-bin"
           cat > "$RUNNER_TEMP/pg-bin/psql" <<'SH'
@@ -65,3 +71,35 @@ jobs:
           echo "$RUNNER_TEMP/pg-bin" >> "$GITHUB_PATH"
           export PATH="$RUNNER_TEMP/pg-bin:$PATH"
           node --test test/backup-role.integration.test.js
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg age
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --batch --yes --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          node_bin="$(command -v node)"
+          export PATH="/usr/lib/postgresql/18/bin:$(dirname "$node_bin"):/usr/bin:/bin"
+          age-keygen -o "$RUNNER_TEMP/keel-age-identity.txt"
+          chmod 600 "$RUNNER_TEMP/keel-age-identity.txt"
+          recipient="$(age-keygen -y "$RUNNER_TEMP/keel-age-identity.txt")"
+          export PGPASSWORD=postgres
+          createdb -h 127.0.0.1 -U postgres keel_restore_ci
+          export DATABASE_URL=postgresql://keel_backup:ci-backup-password@127.0.0.1:5432/keel_backup_ci
+          export KEEL_BACKUP_DIR="$RUNNER_TEMP/keel-backup-artifacts"
+          export KEEL_BACKUP_AGE_RECIPIENT="$recipient"
+          export KEEL_BACKUP_DATABASE_ID=keel-backup-ci
+          bash scripts/backup-postgres-tenant-snapshot.sh
+          backup_file="$(find "$KEEL_BACKUP_DIR" -maxdepth 1 -type f -name '*.age' -print -quit)"
+          test -n "$backup_file"
+          export KEEL_BACKUP_FILE="$backup_file"
+          export KEEL_BACKUP_AGE_IDENTITY_FILE="$RUNNER_TEMP/keel-age-identity.txt"
+          export KEEL_RESTORE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_ci
+          export KEEL_RESTORE_CONFIRM=RESTORE_TO_EMPTY_DATABASE
+          export KEEL_RESTORE_EXPECTED_DATABASE_ID=keel-backup-ci
+          bash scripts/restore-postgres-tenant-snapshot.sh
+          restored_a="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000001" psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals WHERE tenant_id='00000000-0000-0000-0000-000000000001'")"
+          restored_b="$(PGOPTIONS="-c keel.tenant_id=00000000-0000-0000-0000-000000000002" psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -c "SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals WHERE tenant_id='00000000-0000-0000-0000-000000000002'")"
+          test "$restored_a" = "journal-a"
+          test "$restored_b" = "journal-b"
+          echo "RLS identity, tenant snapshot backup, encrypted package, isolated restore, row counts, and tenant isolation passed." >> "$GITHUB_STEP_SUMMARY"
