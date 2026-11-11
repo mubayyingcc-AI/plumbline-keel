@@ -27,7 +27,7 @@ NODE
 
 format="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).format)' "${KEEL_BACKUP_FILE}.manifest.json")"
 if [[ "$format" == "keel-encrypted-postgres-backup/v1" ]]; then
-  count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','S','f')")"
+  count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','S','f')")"
   [[ "$count" =~ ^0$ ]] || { echo "restore_target_not_empty:$count" >&2; exit 3; }
   legacy_work="$(mktemp -d "${TMPDIR:-/tmp}/keel-legacy-restore.XXXXXXXX")"
   trap 'rm -rf "$legacy_work"' EXIT
@@ -74,7 +74,7 @@ for(const f of m.files){
 for(const required of ['schema.sql','global-data.sql','sequences.sql','coverage.tsv','roles.tsv','role-memberships.tsv'])if(!seen.has(required))throw Error('package_manifest_missing:'+required);
 NODE
 
-count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','S','f')")"
+count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','m','S','f')")"
 [[ "$count" =~ ^0$ ]] || { echo "restore_target_not_empty:$count" >&2; exit 3; }
 
 # Recreate role names only. Login credentials are never included in backups.
@@ -140,9 +140,9 @@ while IFS=$'\t' read -r scope tenant table expected actual; do
  [[ "$scope" == "scope" ]] && continue
  [[ "$table" =~ ^[a-z_][a-z0-9_]*$ && "$expected" =~ ^[0-9]+$ && "$actual" =~ ^[0-9]+$ && "$expected" == "$actual" ]] || { echo "coverage_manifest_invalid" >&2; exit 78; }
  if [[ "$scope" == "GLOBAL" ]]; then
-   observed="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.""$table""")"
+   observed="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.""$table""")"
  elif [[ "$scope" == "TENANT" && "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-   observed="$(PGOPTIONS="-c keel.tenant_id=$tenant" psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.""$table""")"
+   observed="$(PGOPTIONS="-c keel.tenant_id=$tenant" psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.""$table""")"
  else
    echo "coverage_scope_invalid" >&2; exit 78
  fi
