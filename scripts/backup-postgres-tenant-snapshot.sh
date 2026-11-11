@@ -179,6 +179,8 @@ ORDER BY granted.rolname,member.rolname
 " >"$package/role-memberships.tsv"
 
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --file="$package/schema.sql"
+# PostgreSQL creates the public schema in every database; omit the redundant CREATE on restore.
+sed -i '/^CREATE SCHEMA public;$/d' "$package/schema.sql"
 
 tenant_args=()
 for table in "${tenant_tables[@]}"; do tenant_args+=( "--table=public.$table" ); done
