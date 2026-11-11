@@ -15,6 +15,33 @@ $keel$;
 GRANT USAGE ON SCHEMA public TO keel_backup_audit_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO keel_backup_audit_owner;
 
+-- A restrictive policy makes tenant scoping mandatory for the backup reader,
+-- even if another permissive policy is later added to a tenant table.
+DO $backup_policy$
+DECLARE
+  v_table RECORD;
+BEGIN
+  FOR v_table IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid
+    WHERE n.nspname='public' AND c.relkind IN ('r','p')
+      AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype
+      AND a.attnum>0 AND NOT a.attisdropped
+    ORDER BY c.relname
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS keel_backup_tenant_scope ON public.%I',v_table.relname);
+    EXECUTE format(
+      'CREATE POLICY keel_backup_tenant_scope ON public.%I AS RESTRICTIVE FOR ALL TO keel_backup_reader ' ||
+      'USING (tenant_id = NULLIF(current_setting(''keel.tenant_id'', true), '''')::uuid) ' ||
+      'WITH CHECK (tenant_id = NULLIF(current_setting(''keel.tenant_id'', true), '''')::uuid)',
+      v_table.relname
+    );
+  END LOOP;
+END
+$backup_policy$;
+
 DO $keel$
 BEGIN
   EXECUTE format(
