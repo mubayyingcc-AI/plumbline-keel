@@ -22,7 +22,7 @@ test('product catalogue is served by the API', async () => {
   assert.ok(data.products.some(p => p.id === 'payment-authority'));
   assert.ok(data.products.some(p => p.id === 'card-control'));
   assert.ok(data.products.some(p => p.id === 'remittance-integrity'));
-  assert.ok(data.products.some(p => p.id === 'ai-release-assurance' && p.stage.includes('integration in progress')));
+  assert.ok(data.products.some(p => p.id === 'ai-release-assurance' && p.stage.includes('production rollout pending')));
 });
 
 test('demo endpoint executes the decision engine', async () => {
@@ -68,6 +68,15 @@ test('browser-origin requests from another host are rejected', async () => {
 test('unknown routes return a structured 404', async () => {
   const response = await fetch(base + '/api/not-a-route');
   assert.equal(response.status, 404);
+});
+
+test('AI release assessment creation requires tenant authentication',async()=>{
+ const response=await fetch(base+'/api/ai/release-assessments',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+ assert.equal(response.status,401);assert.equal((await response.json()).error,'valid_tenant_api_key_required');
+});
+test('AI release assessment listing requires tenant authentication',async()=>{
+ const response=await fetch(base+'/api/ai/release-assessments');
+ assert.equal(response.status,401);assert.equal((await response.json()).error,'valid_tenant_api_key_required');
 });
 
 test('tenant-scoped assurance writes reject missing credentials', async () => {

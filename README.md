@@ -52,4 +52,4 @@ Keel now includes a domain-neutral deterministic release-assessment core for AI 
 - Implementation: `src/ai-release-assurance.js`
 - Tests: `test/ai-release-assurance.test.js`
 
-The current library evaluates supplied evidence. It does not execute CI pipelines, authenticate external evidence providers by itself, or deploy releases. CI, model registry, artifact provenance, identity and audit adapters remain integration work. The product catalogue marks this status explicitly.
+The current implementation includes a deterministic assessment library, a tenant-authenticated API for immutable PostgreSQL-backed assessments, and Ed25519 release-attestation signing/verification. The API derives tenant identity from the authenticated key and enforces forced RLS; high/critical releases remain on HOLD until an authenticated independent-review workflow is available. Keel does not yet execute CI pipelines or independently authenticate external evidence producers. OIDC/workload identity, CI and model-registry adapters, trusted key registration/revocation, and production rollout remain integration work. The product catalogue marks this status explicitly.

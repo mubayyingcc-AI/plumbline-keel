@@ -31,3 +31,19 @@ No decision in this library authorizes automatic deployment or live financial ex
 5. Operations: drift monitoring, post-release observation, rollback triggers, incident evidence and recovery exercises.
 
 Provider integrations must be implemented as separate adapters. The core must remain provider-neutral and deterministic. No adapter may promote self-asserted or AI-inferred evidence to independently verified evidence without a verifiable trust mechanism.
+
+
+## Tenant API and persistence
+
+The current implementation adds:
+- `POST /api/ai/release-assessments` — tenant-authenticated assessment creation and immutable persistence.
+- `GET /api/ai/release-assessments` — tenant-scoped assessment listing.
+- `GET /api/ai/release-assessments/{assessmentId}` — tenant-scoped assessment retrieval.
+
+The PostgreSQL store is tenant-RLS protected, force-RLS enabled and append-only. The runtime role receives SELECT/INSERT only. The API derives the tenant reference from the authenticated API key, not the request body. CI integration tests exercise cross-tenant isolation and mutation rejection.
+
+**Approval boundary:** the ingestion API does not accept caller-asserted high/critical approval as independent approval. Those risk tiers remain on HOLD until a separate authenticated reviewer/approval workflow is implemented. The deterministic library can evaluate a scoped approval object, but a production API must authenticate the approving principal and enforce separation of duties.
+
+## Signed attestations
+
+`src/ai-release-attestation.js` can sign a verified release assessment fingerprint with Ed25519 and verify it against a caller-supplied public key. The signature binds the schema, key ID, issuance timestamp and exact proof fingerprint. Key registration, identity binding, revocation, HSM/KMS custody and trusted CI workload identity are not yet implemented; a signature is only as trustworthy as the out-of-band key trust process.
