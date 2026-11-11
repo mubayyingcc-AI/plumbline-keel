@@ -20,7 +20,7 @@ test('AI release assessment store enforces tenant RLS, append-only evidence and 
   const b=await scoped(runtime,tenantB,'SELECT assessment_id FROM public.keel_ai_release_assessments WHERE assessment_id=$1',[assessmentId]);
   const noContext=await runtime.query('SELECT assessment_id FROM public.keel_ai_release_assessments WHERE assessment_id=$1',[assessmentId]);
   assert.equal(a.rowCount,1);assert.equal(b.rowCount,0);assert.equal(noContext.rowCount,0);
-  await assert.rejects(()=>scoped(runtime,tenantA,'UPDATE public.keel_ai_release_assessments SET decision_status=\'SAFE_TO_RELEASE\' WHERE assessment_id=$1',[assessmentId]),/keel_ai_release_assessment_is_immutable/);
+  await assert.rejects(()=>scoped(admin,tenantA,'UPDATE public.keel_ai_release_assessments SET decision_status=\'SAFE_TO_RELEASE\' WHERE assessment_id=$1',[assessmentId]),/keel_ai_release_assessment_is_immutable/);
   await assert.rejects(()=>scoped(admin,tenantA,'DELETE FROM public.keel_ai_release_assessments WHERE assessment_id=$1',[assessmentId]),/keel_ai_release_assessment_is_immutable/);
   const privilege=await runtime.query("SELECT has_table_privilege(current_user,'public.keel_ai_release_assessments','SELECT') AS can_select,has_table_privilege(current_user,'public.keel_ai_release_assessments','INSERT') AS can_insert,has_table_privilege(current_user,'public.keel_ai_release_assessments','UPDATE') AS can_update,has_table_privilege(current_user,'public.keel_ai_release_assessments','DELETE') AS can_delete");
   assert.equal(privilege.rows[0].can_select,true);assert.equal(privilege.rows[0].can_insert,true);assert.equal(privilege.rows[0].can_update,false);assert.equal(privilege.rows[0].can_delete,false);
