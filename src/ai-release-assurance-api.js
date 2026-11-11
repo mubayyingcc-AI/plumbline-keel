@@ -21,10 +21,9 @@ async function handle(ctx){
 
  if(req.method==='POST'){
   const input=await readBody(req);
-  // A caller cannot self-assert an independent high-risk approval through this ingestion endpoint.
-  const risk=String(input.riskTier||'').toLowerCase();
-  const assessment=assessRelease({...input,tenantRef:actor.tenant_id,
-   ...(risk==='high'||risk==='critical'?{approval:null,rollback:null}:{})});
+  // This ingestion endpoint never treats caller-supplied approval or rollback claims as independently verified.
+  // High/critical risk therefore remains HOLD until a separate authenticated reviewer workflow exists.
+  const assessment=assessRelease({...input,tenantRef:actor.tenant_id,approval:null,rollback:null});
   const assessmentId=crypto.randomUUID();
   const values=[actor.tenant_id,assessmentId,assessment.release.releaseId,assessment.release.system,
    assessment.release.environment,assessment.release.riskTier,assessment.decision.status,
