@@ -13,8 +13,8 @@ done
 
 psqlq() { psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 "$@"; }
 
-identity="$(psqlq -c "SELECT current_user||'|'||rolsuper||'|'||rolbypassrls||'|'||rolcreatedb||'|'||rolcreaterole||'|'||rolreplication FROM pg_roles WHERE rolname=current_user")"
-[[ "$identity" == "keel_backup|f|f|f|f|f" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
+identity="$(psqlq -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
+[[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
 
 # A snapshot backup is supported only for ordinary public tables with a
 # single UUID tenant key, FORCE RLS, a tenant-setting policy and an enforceable
