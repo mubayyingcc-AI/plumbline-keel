@@ -47,3 +47,42 @@ The PostgreSQL store is tenant-RLS protected, force-RLS enabled and append-only.
 ## Signed attestations
 
 `src/ai-release-attestation.js` can sign a verified release assessment fingerprint with Ed25519 and verify it against a caller-supplied public key. The signature binds the schema, key ID, issuance timestamp and exact proof fingerprint. Key registration, identity binding, revocation, HSM/KMS custody and trusted CI workload identity are not yet implemented; a signature is only as trustworthy as the out-of-band key trust process.
+
+
+## JavaScript client
+
+A dependency-free Node.js client is available at `src/ai-release-assurance-client.js`. It uses HTTPS for remote endpoints, sends tenant API credentials only in the Authorization header, and exposes assessment create/list/get operations.
+
+```js
+const { KeelAIReleaseClient } = require('./src/ai-release-assurance-client');
+
+const keel = new KeelAIReleaseClient({
+  baseUrl: process.env.KEEL_API_BASE_URL,
+  apiKey: process.env.KEEL_TENANT_API_KEY
+});
+
+const result = await keel.createAssessment({
+  releaseId: 'assistant-release-2026-11-11',
+  system: 'customer-support-agent',
+  environment: 'staging',
+  riskTier: 'moderate',
+  createdAt: new Date().toISOString(),
+  changeRef: 'change-1842',
+  components: [
+    { componentId: 'agent-model', kind: 'model', version: 'v4', fingerprint: '...64-hex-sha256...' }
+  ],
+  requiredChecks: ['safety', 'security'],
+  checks: [
+    { checkId: 'safety-1842', category: 'safety', outcome: 'passed',
+      evidenceRef: 'artifact://safety/1842', evidenceFingerprint: '...64-hex-sha256...',
+      executedAt: new Date().toISOString() },
+    { checkId: 'security-1842', category: 'security', outcome: 'passed',
+      evidenceRef: 'artifact://security/1842', evidenceFingerprint: '...64-hex-sha256...',
+      executedAt: new Date().toISOString() }
+  ]
+});
+
+console.log(result.decision, result.proofFingerprint);
+```
+
+The example uses placeholders for evidence fingerprints. A real integration must calculate them from retained artifacts and authenticate the evidence producer. Do not put API keys, signed download URLs or confidential payloads in evidence references.
