@@ -19,16 +19,20 @@ const consumerIdentityApi = require('./src/consumer-identity-api');
 const consumerCardSecurityApi = require('./src/consumer-card-security-api');
 const ledgerPosting = require('./src/ledger-posting');
 const providerLifecycle = require('./src/provider-lifecycle');
+const {ProviderSandboxAdapter}=require('./src/provider-sandbox-adapter');
+const providerCallbackIngress=require('./src/provider-callback-ingress');
 const accountingPeriods = require('./src/accounting-periods');
 const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
+const aiReleaseAssuranceApi = require('./src/ai-release-assurance-api');
+const openbbAdapter = require('./src/openbb-adapter');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
 const rateBuckets = new Map();
 
 const products = [
@@ -38,6 +42,7 @@ const products = [
   { id:'scenario', name:'Keel Scenario', category:'Stress propagation', stage:'Design partner', description:'Replay declared shocks through a defined dependency graph and inspect modeled downstream effects.', outputs:['Scenario assumptions','Dependency impact','Before-and-after state'], integration:'API / partner mapping' },
   { id:'evidence', name:'Keel Evidence', category:'Evidence and audit', stage:'POC', description:'Package source references, timestamps, evidence classes, policy versions and record fingerprints.', outputs:['Evidence manifest','Decision fingerprint','Scope and limitation record'], integration:'REST API / structured CSV' },
   { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' },
+  { id:'ai-release-assurance', name:'Keel AI Release Assurance', category:'Cross-industry AI system release assurance', stage:'Tenant-authenticated API and immutable evidence store in CI · production rollout pending', description:'Assess changes to models, prompts, retrieval, datasets, tools, agents, workflows, policies, runtimes and integrations against required evidence-backed checks, scoped human approvals and rollback requirements.', outputs:['Versioned component inventory and fingerprints','Evidence-linked release checks','Risk-tiered approval and rollback gates','Tamper-evident release assessment fingerprint'], integration:'Vendor-neutral Node.js core library; CI, model registry and enterprise API adapters are in progress' },
   { id:'payment-authority', name:'Keel Payment Authority & Agent Control', category:'Mandates and payment lifecycle', stage:'Foundation · non-executing', description:'Evaluate human-issued mandates, purpose and payee scope, spend limits and evidence-backed availability before any authorised provider workflow.', outputs:['Versioned mandates','Spend envelopes','Human approval boundary','Availability-aware decision','Lifecycle and recovery model'], integration:'Internal deterministic evaluator; persistent API integration pending' },
   { id:'card-control', name:'Keel Human Card & Institutional Card Control', category:'Consumer identity, card authority and spend control', stage:'Consumer identity foundation · partner issuance pending', description:'Build a physical-first human card journey with verified consumer identity, partner card-order requests, delivery proof, secure-element pairing, independent recovery and issuer-gated virtual activation.', outputs:['Consumer identity and short-lived session foundation','Physical card order request lifecycle','Delivery and hardware pairing gates','Recovery and issuer-eligibility controls'], integration:'PostgreSQL schema and signed provider-event API; no identity provider, manufacturer or issuer connected' },
   { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'POC · synthetic reconciliation only', description:'Compare expected transfer records with declared provider events, preserving exact amounts, event identity, duplicate detection, partial payouts, missing events and late arrivals.', outputs:['Canonical transfer matching','Idempotency and duplicate detection','Partial and late-event exceptions','Provider evidence boundary'], integration:'Synthetic reconciliation API; no MTO, bank, wallet or issuer adapter connected' }
@@ -144,6 +149,26 @@ async function bootstrapCoreSchema(pool) {
       await pool.query('CREATE INDEX IF NOT EXISTS keel_reg_dockets_tenant_idx ON keel_conformity_dockets(tenant_id,created_at DESC)');
 }
 
+function databaseSslOptions(env=process.env) {
+  if (env.PGSSLMODE === 'disable') {
+    if (env.NODE_ENV === 'production') throw new Error('database_tls_cannot_be_disabled_in_production');
+    return false;
+  }
+  const options = { rejectUnauthorized:true };
+  if (env.PGSSLROOTCERT_B64) {
+    const encoded = String(env.PGSSLROOTCERT_B64).trim();
+    const decoded = Buffer.from(encoded, 'base64');
+    const ca = decoded.toString('utf8');
+    if (!encoded || decoded.toString('base64') !== encoded || !ca.includes('-----BEGIN CERTIFICATE-----') || !ca.includes('-----END CERTIFICATE-----')) {
+      throw new Error('database_ca_bundle_invalid');
+    }
+    options.ca = ca;
+  } else if (env.PGSSLROOTCERT) {
+    options.ca = fs.readFileSync(env.PGSSLROOTCERT, 'utf8');
+  }
+  return options;
+}
+
 let poolPromise;
 async function dbPool() {
   const runtimeUrl = process.env.KEEL_RUNTIME_DATABASE_URL;
@@ -151,7 +176,7 @@ async function dbPool() {
   if (!poolPromise) {
     const { Pool } = require('pg');
     poolPromise = (async () => {
-      const pool = new Pool({ connectionString: runtimeUrl, ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
+      const pool = new Pool({ connectionString: runtimeUrl, ssl: databaseSslOptions(), max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
       try {
         const identity = await pool.query('SELECT current_user AS runtime_role, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname=current_user');
         const role = identity.rows[0];
@@ -175,6 +200,15 @@ function send(res, status, payload, type='application/json; charset=utf-8', extr
     ...extraHeaders
   });
   res.end(type.startsWith('application/json') ? JSON.stringify(payload) : payload);
+}
+
+async function readRawBody(req,limit=MAX_BODY){
+  return new Promise((resolve,reject)=>{
+    const chunks=[];let size=0,finished=false;
+    req.on('data',chunk=>{size+=chunk.length;if(size>limit&&!finished){finished=true;reject(Object.assign(new Error('request_body_too_large'),{status:413}));req.destroy();return;}chunks.push(chunk);});
+    req.on('end',()=>{if(!finished){finished=true;resolve(Buffer.concat(chunks).toString('utf8'));}});
+    req.on('error',error=>{if(!finished){finished=true;reject(error);}});
+  });
 }
 
 function readBody(req) {
@@ -394,6 +428,8 @@ const apiDescription = {
     '/api/ledger/reservations/{reservationId}/consume':{post:{summary:'Atomically consume a reservation with a journal'}},
     '/api/tenants/keys':{post:{summary:'Issue tenant-scoped role key (owner/admin only)'}},
     '/api/tenants/keys/revoke':{post:{summary:'Revoke a tenant-scoped API key (owner/admin only)'}},
+    '/api/ai/release-assessments':{get:{summary:'List tenant-scoped immutable AI release assessments'},post:{summary:'Assess and persist evidence-backed AI release decision; no deployment'}},
+    '/api/ai/release-assessments/{assessmentId}':{get:{summary:'Read one tenant-scoped AI release assessment'}},
     '/api/assurance/records':{get:{summary:'Read tenant-scoped assurance records'}},
     '/api/fracture/assessments':{get:{summary:'List tenant-scoped fracture assessments'},post:{summary:'Run and persist a Financial Fracture assessment'}},
     '/api/currency/instruments':{get:{summary:'List currency and service-credit instrument references'}},
@@ -431,6 +467,10 @@ const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const route = url.pathname;
   try {
+    if (req.method === 'GET' && route === '/api/research/openbb/status') {
+      const status = await openbbAdapter.checkStatus();
+      return send(res, 200, status);
+    }
     if (req.method === 'GET' && route === '/api/health') {
       let database = 'not_configured';
       if (process.env.KEEL_RUNTIME_DATABASE_URL) {
@@ -445,6 +485,7 @@ const server = http.createServer(async (req,res) => {
         integrations:'customer-configured; no external registries connected'
       });
     }
+    if (await aiReleaseAssuranceApi.handle({req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto})) return;
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
     if (route.startsWith('/api/consumer/') || route.startsWith('/api/partners/card-')) return send(res,503,{error:'consumer_card_tenant_isolation_not_enabled',message:'Consumer identity and card services are temporarily disabled until tenant-bound ownership and provider authority are enforced.'});
     if (await consumerCardSecurityApi.handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser})) return;
@@ -980,23 +1021,40 @@ const server = http.createServer(async (req,res) => {
       if(!actor.principal_id)return send(res,403,{error:'named_approver_principal_required'});
       const body=await readBody(req),envelopeId=cleanString(body.envelopeId,64),requestFingerprint=cleanString(body.requestFingerprint,64),decision=cleanString(body.decision,16),rationale=cleanString(body.rationale,500);
       if(!envelopeId||! /^[a-f0-9]{64}$/.test(requestFingerprint)||!['approve','reject'].includes(decision)||!rationale)return send(res,400,{error:'valid_envelope_request_fingerprint_decision_and_rationale_required'});
-       security/global-financial-core-tenant-assurance
-      const pool=tenantScopedPool(await dbPool(),actor.tenant_id),client=await pool.connect();
-      const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
-      if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
-
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);
+      if(!pool)return send(res,503,{error:'authority_storage_unavailable'});
       const approver=await pool.query("SELECT principal_kind FROM keel_principals WHERE tenant_id=$1 AND principal_id=$2 AND status='active'",[actor.tenant_id,actor.principal_id]);
       if(!approver.rowCount||approver.rows[0].principal_kind!=='human')return send(res,403,{error:'human_independent_approver_required'});
       const client=await pool.connect();
-       main
-      try{await client.query('BEGIN');const e=await client.query('SELECT grantee_principal_id,approver_principal_id,approval_required,status FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[actor.tenant_id,envelopeId]);if(!e.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'authority_envelope_not_found'});}if(e.rows[0].status!=='active'||!e.rows[0].approval_required||e.rows[0].approver_principal_id!==actor.principal_id||e.rows[0].grantee_principal_id===actor.principal_id){await client.query('ROLLBACK');return send(res,403,{error:'independent_envelope_approver_required'});}const id=crypto.randomUUID();await client.query('INSERT INTO keel_authority_action_approvals(tenant_id,approval_id,envelope_id,request_fingerprint,approver_principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,envelopeId,requestFingerprint,actor.principal_id,decision,rationale]);await recordEventWithClient(client,actor,'AUTHORITY_ACTION_APPROVAL_RECORDED',id,{envelopeId,requestFingerprint,decision});await client.query('COMMIT');return send(res,201,{ok:true,approvalId:id,envelopeId,requestFingerprint,decision});}
-      catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+      try{
+        await client.query('BEGIN');
+        const e=await client.query('SELECT grantee_principal_id,approver_principal_id,approval_required,status FROM keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2 FOR UPDATE',[actor.tenant_id,envelopeId]);
+        if(!e.rowCount){await client.query('ROLLBACK');return send(res,404,{error:'authority_envelope_not_found'});}
+        if(e.rows[0].status!=='active'||!e.rows[0].approval_required||e.rows[0].approver_principal_id!==actor.principal_id||e.rows[0].grantee_principal_id===actor.principal_id){await client.query('ROLLBACK');return send(res,403,{error:'independent_envelope_approver_required'});}
+        const id=crypto.randomUUID();
+        await client.query('INSERT INTO keel_authority_action_approvals(tenant_id,approval_id,envelope_id,request_fingerprint,approver_principal_id,decision,rationale) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.tenant_id,id,envelopeId,requestFingerprint,actor.principal_id,decision,rationale]);
+        await recordEventWithClient(client,actor,'AUTHORITY_ACTION_APPROVAL_RECORDED',id,{envelopeId,requestFingerprint,decision});
+        await client.query('COMMIT');
+        return send(res,201,{ok:true,approvalId:id,envelopeId,requestFingerprint,decision});
+      }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
     }
     if(route==='/api/assurance/authority/proofs' && req.method==='GET'){
       const actor=await authenticateTenant(req);if(!actor)return send(res,401,{error:'valid_tenant_api_key_required'});
       const pool=tenantScopedPool(await dbPool(),actor.tenant_id);const q=await pool.query('SELECT proof_id,actor_key_id,actor_principal_id,envelope_id,action,resource_id,request_fingerprint,authority_fingerprint,decision,reason_codes,execution_ref,created_at FROM keel_action_proof_objects WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[actor.tenant_id]);
       return send(res,200,{count:q.rowCount,proofs:q.rows});
+    }
+    if(req.method==='POST'&&route==='/api/providers/callback/bank-sandbox'){
+      if(rateLimited(req,'/api/providers/callback/bank-sandbox'))return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      let keyring={},activeKeyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_ACTIVE_KEY_ID;
+      try{keyring=JSON.parse(process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEYRING||'{}');}catch(_){return send(res,503,{error:'provider_callback_keyring_configuration_invalid'});}
+      if(!Object.keys(keyring).length&&process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET&&process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID){activeKeyId=process.env.KEEL_BANK_SANDBOX_WEBHOOK_KEY_ID;keyring={[activeKeyId]:process.env.KEEL_BANK_SANDBOX_WEBHOOK_SECRET};}
+      if(!activeKeyId||!keyring[activeKeyId]||Object.values(keyring).some(secret=>typeof secret!=='string'||Buffer.byteLength(secret)<32))return send(res,503,{error:'provider_callback_verification_not_configured'});
+      const rawBody=await readRawBody(req,MAX_BODY),adapter=new ProviderSandboxAdapter({providerId:'bank-sandbox',transport:async()=>{throw new Error('callback_adapter_dispatch_disabled');},keyring,activeKeyId});
+      const signature=req.headers['x-keel-signature'],receivedKeyId=req.headers['x-keel-key-id'];
+      if(typeof signature!=='string'||typeof receivedKeyId!=='string')return send(res,403,{error:'provider_signature_headers_required'});
+      const pool=await dbPool();if(!pool)return send(res,503,{error:'provider_callback_storage_unavailable'});
+      const result=await providerCallbackIngress.ingestCallback({pool,adapter,rawBody,signature,keyId:receivedKeyId});
+      return send(res,result.replay?200:202,{ok:true,...result,execution:'RECONCILIATION_ONLY',notice:'Signature verified and event durably recorded. No ledger settlement, reversal or write-off is performed.'});
     }
     if(route.startsWith('/api/providers/')){
       const actor=await authenticateTenant(req);
@@ -1336,4 +1394,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, dbPool, bootstrapCoreSchema, tenantScopedPool };
+module.exports = { server, demoPayload, products, rateLimited, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool, databaseSslOptions };
