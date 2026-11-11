@@ -22,7 +22,7 @@ test('product catalogue is served by the API', async () => {
   assert.ok(data.products.some(p => p.id === 'payment-authority'));
   assert.ok(data.products.some(p => p.id === 'card-control'));
   assert.ok(data.products.some(p => p.id === 'remittance-integrity'));
-  assert.ok(data.products.some(p => p.id === 'ai-release-assurance' && p.stage.includes('integration in progress')));
+  assert.ok(data.products.some(p => p.id === 'ai-release-assurance' && p.stage.includes('production rollout pending')));
 });
 
 test('demo endpoint executes the decision engine', async () => {
