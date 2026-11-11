@@ -52,7 +52,7 @@ BEGIN
       'FROM public.%I x',
       v_table.relname
     ) INTO v_unassigned,v_orphaned;
-    RETURN QUERY SELECT v_table.relname,v_unassigned,v_orphaned;
+    RETURN QUERY SELECT v_table.relname::TEXT,v_unassigned,v_orphaned;
   END LOOP;
 END
 $function$;
