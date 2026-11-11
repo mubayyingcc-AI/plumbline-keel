@@ -1,0 +1,113 @@
+name: Tenant snapshot backup and isolated restore
+on:
+  pull_request:
+    paths:
+      - "scripts/backup-postgres-tenant-snapshot.sh"
+      - "scripts/restore-postgres-encrypted.sh"
+      - "ops/backup/Dockerfile"
+      - "test/fixtures/backup-role-fixture.sql"
+      - ".github/workflows/tenant-snapshot-backup.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/backup-postgres-tenant-snapshot.sh"
+      - "scripts/restore-postgres-encrypted.sh"
+      - "ops/backup/Dockerfile"
+      - "test/fixtures/backup-role-fixture.sql"
+      - ".github/workflows/tenant-snapshot-backup.yml"
+permissions:
+  contents: read
+jobs:
+  tenant-snapshot-roundtrip:
+    runs-on: ubuntu-24.04
+    services:
+      source:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel_backup_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d keel_backup_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install PostgreSQL 18 client and age
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg age
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --batch --yes --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: Build dedicated backup worker image
+        run: docker build --pull -f ops/backup/Dockerfile -t keel-backup-worker:ci .
+      - name: Prepare source with forced RLS and least-privilege identity
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci" -X -v ON_ERROR_STOP=1 -f test/fixtures/backup-role-fixture.sql
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci" -X -v ON_ERROR_STOP=1 -f db/migrations/020_rls_aware_backup_identity.sql
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci" -X -v ON_ERROR_STOP=1 -c "ALTER ROLE keel_backup PASSWORD 'ci-backup-password'"
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/keel_backup_ci" -X -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000001'; SELECT count(*) FROM public.keel_ledger_journals"
+      - name: Create isolated restore PostgreSQL 18 cluster
+        run: |
+          docker run -d --name keel-restore-ci -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=keel_restore_ci postgres:18-bookworm
+          ready=false
+          for attempt in $(seq 1 60); do
+            if docker exec keel-restore-ci pg_isready -U postgres -d keel_restore_ci >/dev/null 2>&1; then ready=true; break; fi
+            sleep 2
+          done
+          [[ "$ready" == true ]] || { docker logs keel-restore-ci; exit 1; }
+      - name: Create independent age recovery identity
+        id: age
+        run: |
+          age-keygen -o "$RUNNER_TEMP/keel-age-identity.txt" 2>"$RUNNER_TEMP/age-keygen.log"
+          chmod 600 "$RUNNER_TEMP/keel-age-identity.txt"
+          recipient="$(age-keygen -y "$RUNNER_TEMP/keel-age-identity.txt")"
+          echo "recipient=$recipient" >> "$GITHUB_OUTPUT"
+      - name: Produce tenant-consistent encrypted snapshot
+        env:
+          DATABASE_URL: postgresql://keel_backup:ci-backup-password@127.0.0.1:5432/keel_backup_ci
+          KEEL_BACKUP_DIR: ${{ runner.temp }}/keel-backups
+          KEEL_BACKUP_AGE_RECIPIENT: ${{ steps.age.outputs.recipient }}
+          KEEL_BACKUP_DATABASE_ID: ci-source
+        run: |
+          mkdir -p "$KEEL_BACKUP_DIR"
+          bash -n scripts/backup-postgres-tenant-snapshot.sh
+          bash scripts/backup-postgres-tenant-snapshot.sh
+          backup_file="$(find "$KEEL_BACKUP_DIR" -maxdepth 1 -type f -name '*.tenant-snapshot.tar.gz.age' -print -quit)"
+          test -n "$backup_file"
+          test -s "$backup_file.sha256"
+          test -s "$backup_file.manifest.json"
+          echo "KEEL_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+      - name: Restore package into independent empty cluster and verify every tenant/table count
+        env:
+          KEEL_BACKUP_AGE_IDENTITY_FILE: ${{ runner.temp }}/keel-age-identity.txt
+          KEEL_RESTORE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/keel_restore_ci
+          KEEL_RESTORE_CONFIRM: RESTORE_TO_EMPTY_DATABASE
+          KEEL_RESTORE_EXPECTED_DATABASE_ID: ci-source
+        run: |
+          bash -n scripts/restore-postgres-encrypted.sh
+          bash scripts/restore-postgres-encrypted.sh
+          restored="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000001'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
+          test "$restored" = "journal-a"
+          hidden="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000002'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals")"
+          test "$hidden" = "journal-b"
+          global_count="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "SET ROLE keel_backup; SELECT count(*) FROM public.keel_global_reference")"
+          test "$global_count" = "2"
+          next_id="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 -c "INSERT INTO public.keel_global_reference(code) VALUES ('restore-probe') RETURNING id")"
+          test "$next_id" = "3"
+          echo "Tenant-consistent encrypted backup, global data, sequence state and isolated PostgreSQL 18 restore passed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect restore container diagnostics on failure
+        if: failure()
+        run: docker logs keel-restore-ci || true

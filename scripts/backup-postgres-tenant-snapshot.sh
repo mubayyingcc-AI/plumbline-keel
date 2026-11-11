@@ -2,19 +2,22 @@
 set -Eeuo pipefail
 umask 077
 
-: "\${DATABASE_URL:?DATABASE_URL must use the dedicated keel_backup login}"
-: "\${KEEL_BACKUP_DIR:?KEEL_BACKUP_DIR required}"
-: "\${KEEL_BACKUP_AGE_RECIPIENT:?KEEL_BACKUP_AGE_RECIPIENT required}"
-: "\${KEEL_BACKUP_DATABASE_ID:?KEEL_BACKUP_DATABASE_ID required}"
+: "${DATABASE_URL:?DATABASE_URL must use the dedicated keel_backup login}"
+: "${KEEL_BACKUP_DIR:?KEEL_BACKUP_DIR required}"
+: "${KEEL_BACKUP_AGE_RECIPIENT:?KEEL_BACKUP_AGE_RECIPIENT required}"
+: "${KEEL_BACKUP_DATABASE_ID:?KEEL_BACKUP_DATABASE_ID required}"
 
 for bin in psql pg_dump age sha256sum node tar awk grep sed; do
   command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }
 done
 
-psqlq() { psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 "$@"; }
+psqlq() { psql "$DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
 
-identity="$(psqlq -c "SELECT current_user||'|'||rolsuper||'|'||rolbypassrls||'|'||rolcreatedb||'|'||rolcreaterole||'|'||rolreplication FROM pg_roles WHERE rolname=current_user")"
-[[ "$identity" == "keel_backup|f|f|f|f|f" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
+identity="$(psqlq -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
+[[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
+
+unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','f','m') AND n.nspname NOT IN ('public','pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'" )"
+[[ "$unsupported" == 0 ]] || { echo "backup_blocked_non_public_data_relations" >&2; exit 78; }
 
 # A snapshot backup is supported only for ordinary public tables with a
 # single UUID tenant key, FORCE RLS, a tenant-setting policy and an enforceable
@@ -22,7 +25,8 @@ identity="$(psqlq -c "SELECT current_user||'|'||rolsuper||'|'||rolbypassrls||'|'
 unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('p','f','m')")"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_partitioned_foreign_or_materialized_relations" >&2; exit 78; }
 
-unsupported="$(psqlq -c "
+unsupported="$(
+psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
 SELECT count(*)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -74,7 +78,8 @@ AND (
       AND fk.confkey=ARRAY[tenant_key.attnum]::smallint[]
   ))
 )
-")"
+SQL
+)"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_unsupported_or_unprotected_tenant_table" >&2; exit 78; }
 
 large_objects="$(psqlq -c "SELECT count(*) FROM pg_largeobject_metadata")"
@@ -91,7 +96,7 @@ psqlq -c "SELECT tenant_id FROM public.keel_backup_tenant_ids() LIMIT 0" >/dev/n
 mkdir -p "$KEEL_BACKUP_DIR"
 chmod 700 "$KEEL_BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-work="$(mktemp -d "\${TMPDIR:-/tmp}/keel-backup.XXXXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/keel-backup.XXXXXXXX")"
 snapshot_pid=""
 cleanup() {
   if [[ -n "$snapshot_pid" ]]; then
@@ -150,10 +155,10 @@ snapshot="$(sed -n 's/^KEEL_SNAPSHOT=//p' "$work/snapshot.log" | head -n1)"
 mapfile -t tenants < <(sed -n 's/^KEEL_TENANT=//p' "$work/snapshot.log")
 mapfile -t tenant_tables < <(sed -n 's/^KEEL_TENANT_TABLE=//p' "$work/snapshot.log")
 mapfile -t global_tables < <(sed -n 's/^KEEL_GLOBAL_TABLE=//p' "$work/snapshot.log")
-(( \${#tenants[@]} > 0 )) || { echo "backup_refused_no_tenants_enumerated" >&2; exit 78; }
-(( \${#tenant_tables[@]} > 0 )) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
-for tenant in "\${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
-for table in "\${tenant_tables[@]}" "\${global_tables[@]}"; do [[ "$table" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
+(( ${#tenants[@]} > 0 )) || { echo "backup_refused_no_tenants_enumerated" >&2; exit 78; }
+(( ${#tenant_tables[@]} > 0 )) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
+for tenant in "${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
+for table in "${tenant_tables[@]}" "${global_tables[@]}"; do [[ "$table" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
 
 # Export role names/attributes without password hashes. Restore recreates
 # custom roles without passwords; credentials must be provisioned separately.
@@ -174,14 +179,16 @@ ORDER BY granted.rolname,member.rolname
 " >"$package/role-memberships.tsv"
 
 pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --schema-only --file="$package/schema.sql"
+# PostgreSQL creates the public schema in every database; omit the redundant CREATE on restore.
+sed -i '/^CREATE SCHEMA public;$/d' "$package/schema.sql"
 
 tenant_args=()
-for table in "\${tenant_tables[@]}"; do tenant_args+=( "--table=public.$table" ); done
+for table in "${tenant_tables[@]}"; do tenant_args+=( "--table=public.$table" ); done
 global_args=()
-for table in "\${global_tables[@]}"; do global_args+=( "--table=public.$table" ); done
+for table in "${global_tables[@]}"; do global_args+=( "--table=public.$table" ); done
 
-if (( \${#global_args[@]} > 0 )); then
-  pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --rows-per-insert=1 --no-owner --no-acl "\${global_args[@]}" --file="$package/global-data.sql"
+if (( ${#global_args[@]} > 0 )); then
+  pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --inserts --rows-per-insert=1 --no-owner --no-acl "${global_args[@]}" --file="$package/global-data.sql"
 else
   : >"$package/global-data.sql"
 fi
@@ -193,9 +200,9 @@ count_rows() {
   if [[ "$tenant" == "GLOBAL" ]]; then
     value="$(psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   else
-    value="$(PGOPTIONS="\${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
+    value="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c role=keel_backup -c keel.tenant_id=$tenant" psqlq -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot_id'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
   fi
-  [[ "$value" =~ ^[0-9]+$ ]] || { echo "backup_row_count_failed:$tenant:$table" >&2; exit 1; }
+  [[ "$value" =~ ^[0-9]+$ ]] || { printf "backup_row_count_failed:%s:%s:output=%q\\n" "$tenant" "$table" "$value" >&2; exit 1; }
   printf '%s' "$value"
 }
 count_inserts() {
@@ -204,6 +211,7 @@ count_inserts() {
     $1=="INSERT" && $2=="INTO" {
       name=$3
       sub(/^public\./,"",name)
+      sub(/\(.*/,"",name)
       gsub(/"/,"",name)
       if (name==expected) count++
     }
@@ -212,23 +220,23 @@ count_inserts() {
 }
 
 global_dump="$package/global-data.sql"
-for table in "\${global_tables[@]}"; do
+for table in "${global_tables[@]}"; do
   expected="$(count_rows GLOBAL "$table" "$snapshot")"
   actual="$(count_inserts "$global_dump" "$table")"
   [[ "$expected" == "$actual" ]] || { echo "backup_global_row_coverage_mismatch:$table:$expected:$actual" >&2; exit 78; }
   printf 'GLOBAL\t-\t%s\t%s\t%s\n' "$table" "$expected" "$actual" >>"$coverage"
 done
 
-for index in "\${!tenants[@]}"; do
-  tenant="\${tenants[$index]}"
+for index in "${!tenants[@]}"; do
+  tenant="${tenants[$index]}"
   printf -v number '%06d' "$((index+1))"
   dump_file="$package/tenants/tenant-$number.sql"
-  pg_dump "$DATABASE_URL" --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --rows-per-insert=1 --no-owner --no-acl "\${tenant_args[@]}" --file="$dump_file"
+  PGOPTIONS="-c keel.tenant_id=$tenant -c row_security=on" pg_dump --dbname="$DATABASE_URL" --role=keel_backup --snapshot="$snapshot" --schema=public --data-only --enable-row-security --inserts --rows-per-insert=1 --no-owner --no-acl "${tenant_args[@]}" --file="$dump_file"
   test -f "$dump_file"
-  for table in "\${tenant_tables[@]}"; do
+  for table in "${tenant_tables[@]}"; do
     expected="$(count_rows "$tenant" "$table" "$snapshot")"
     actual="$(count_inserts "$dump_file" "$table")"
-    [[ "$expected" == "$actual" ]] || { echo "backup_tenant_row_coverage_mismatch:$tenant:$table:$expected:$actual" >&2; exit 78; }
+    [[ "$expected" == "$actual" ]] || { echo "backup_tenant_row_coverage_mismatch:$tenant:$table:$expected:$actual" >&2; grep -n '^INSERT' "$dump_file" | head -n 20 >&2 || true; exit 78; }
     printf 'TENANT\t%s\t%s\t%s\t%s\n' "$tenant" "$table" "$expected" "$actual" >>"$coverage"
   done
 done
@@ -241,7 +249,7 @@ done
 } >"$package/sequences.sql"
 
 version="$(psqlq -c 'SHOW server_version')"
-node - "$package" "$stamp" "$version" "$KEEL_BACKUP_DATABASE_ID" "$snapshot" "\${#tenants[@]}" "\${#tenant_tables[@]}" "\${#global_tables[@]}" <<'NODE'
+node - "$package" "$stamp" "$version" "$KEEL_BACKUP_DATABASE_ID" "$snapshot" "${#tenants[@]}" "${#tenant_tables[@]}" "${#global_tables[@]}" <<'NODE'
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const [dir,createdAt,postgresVersion,databaseId,snapshot,tenantCount,tenantTableCount,globalTableCount]=process.argv.slice(2);
 const digest=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'),files=[];
@@ -258,7 +266,7 @@ mv "$work/backup.age" "$encrypted"
 chmod 600 "$encrypted"
 sha256sum "$encrypted" >"$encrypted.sha256"
 chmod 600 "$encrypted.sha256"
-node - "$encrypted" "$work/manifest.json" "$stamp" "$version" "$KEEL_BACKUP_DATABASE_ID" "$KEEL_BACKUP_AGE_RECIPIENT" "\${#tenants[@]}" <<'NODE'
+node - "$encrypted" "$work/manifest.json" "$stamp" "$version" "$KEEL_BACKUP_DATABASE_ID" "$KEEL_BACKUP_AGE_RECIPIENT" "${#tenants[@]}" <<'NODE'
 const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:path');
 const [file,out,createdAt,postgresVersion,databaseId,recipient,tenantCount]=process.argv.slice(2),bytes=fs.readFileSync(file);
 fs.writeFileSync(out,JSON.stringify({format:'keel-encrypted-postgres-backup/v2',createdAt,databaseId,postgresVersion,encryption:'age',recipientFingerprint:crypto.createHash('sha256').update(recipient).digest('hex'),artifact:path.basename(file),bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),tenantCount:Number(tenantCount)},null,2)+'\n',{mode:0o600,flag:'wx'});
@@ -266,14 +274,14 @@ NODE
 mv "$work/manifest.json" "$encrypted.manifest.json"
 chmod 600 "$encrypted.manifest.json"
 
-if [[ -n "\${KEEL_BACKUP_S3_BUCKET:-}" ]]; then
-  : "\${KEEL_BACKUP_S3_ENDPOINT:?KEEL_BACKUP_S3_ENDPOINT required}"
-  : "\${KEEL_BACKUP_S3_REGION:?KEEL_BACKUP_S3_REGION required}"
-  : "\${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID required}"
-  : "\${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY required}"
-  [[ "$KEEL_BACKUP_S3_ENDPOINT" == https://* || "\${KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT:-false}" == true ]] || { echo "remote_backup_endpoint_must_use_https" >&2; exit 2; }
+if [[ -n "${KEEL_BACKUP_S3_BUCKET:-}" ]]; then
+  : "${KEEL_BACKUP_S3_ENDPOINT:?KEEL_BACKUP_S3_ENDPOINT required}"
+  : "${KEEL_BACKUP_S3_REGION:?KEEL_BACKUP_S3_REGION required}"
+  : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID required}"
+  : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY required}"
+  [[ "$KEEL_BACKUP_S3_ENDPOINT" == https://* || "${KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT:-false}" == true ]] || { echo "remote_backup_endpoint_must_use_https" >&2; exit 2; }
   command -v aws >/dev/null 2>&1 || { echo "aws_cli_required" >&2; exit 127; }
-  prefix="\${KEEL_BACKUP_S3_PREFIX:-keel}/$KEEL_BACKUP_DATABASE_ID/$stamp"
+  prefix="${KEEL_BACKUP_S3_PREFIX:-keel}/$KEEL_BACKUP_DATABASE_ID/$stamp"
   # Upload the manifest last; its presence is the remote commit marker.
   for file in "$encrypted" "$encrypted.sha256" "$encrypted.manifest.json"; do
     aws --endpoint-url "$KEEL_BACKUP_S3_ENDPOINT" --region "$KEEL_BACKUP_S3_REGION" s3 cp --only-show-errors "$file" "s3://$KEEL_BACKUP_S3_BUCKET/$prefix/$(basename "$file")"

@@ -4,6 +4,8 @@ on:
     paths:
       - "ops/backup/**"
       - "scripts/backup-postgres-encrypted.sh"
+      - "scripts/restore-postgres-encrypted.sh"
+      - "scripts/backup-postgres-tenant-snapshot.sh"
       - ".github/workflows/backup-worker.yml"
   push:
     branches: [main]
@@ -19,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate backup script syntax
-        run: bash -n scripts/backup-postgres-encrypted.sh
+        run: |
+          bash -n scripts/backup-postgres-encrypted.sh
+          bash -n scripts/backup-postgres-tenant-snapshot.sh
+          bash -n scripts/restore-postgres-encrypted.sh
       - name: Build isolated backup worker image
         run: docker build --pull -f ops/backup/Dockerfile -t keel-backup-worker:ci .
