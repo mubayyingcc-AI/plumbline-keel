@@ -121,7 +121,7 @@ tar -C "$work" -czf "$work/package.tar.gz" package
 encrypted="$KEEL_BACKUP_DIR/keel-$stamp.tenant-snapshot.tar.gz.age"
 age --encrypt --recipient "$KEEL_BACKUP_AGE_RECIPIENT" --output "$work/backup.age" "$work/package.tar.gz"
 mv "$work/backup.age" "$encrypted"; chmod 600 "$encrypted"
-sha256sum "$encrypted" > "$encrypted.sha256"; chmod 600 "$encrypted.sha256"
+(cd "$KEEL_BACKUP_DIR" && sha256sum "$(basename "$encrypted")") > "$encrypted.sha256"; chmod 600 "$encrypted.sha256"
 node - "$encrypted" "$work/manifest.json" "$stamp" "$version" "$KEEL_BACKUP_DATABASE_ID" "$KEEL_BACKUP_AGE_RECIPIENT" "${#tenants[@]}" <<'NODE'
 const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:path');
 const [file,out,createdAt,postgresVersion,databaseId,recipient,tenantCount]=process.argv.slice(2),bytes=fs.readFileSync(file);
