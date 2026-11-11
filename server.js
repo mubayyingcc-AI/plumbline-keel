@@ -26,6 +26,7 @@ const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
+const aiReleaseAssuranceApi = require('./src/ai-release-assurance-api');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
@@ -467,6 +468,7 @@ const server = http.createServer(async (req,res) => {
         integrations:'customer-configured; no external registries connected'
       });
     }
+    if (await aiReleaseAssuranceApi.handle({req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto})) return;
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
     if (route.startsWith('/api/consumer/') || route.startsWith('/api/partners/card-')) return send(res,503,{error:'consumer_card_tenant_isolation_not_enabled',message:'Consumer identity and card services are temporarily disabled until tenant-bound ownership and provider authority are enforced.'});
     if (await consumerCardSecurityApi.handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser})) return;
