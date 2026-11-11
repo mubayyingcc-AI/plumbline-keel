@@ -34,7 +34,7 @@ jobs:
       KEEL_BACKUP_S3_REGION: us-east-1
       KEEL_BACKUP_ALLOW_INSECURE_TEST_ENDPOINT: "true"
       AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_SECRET_ACCESS_KEY: testpassword
       AWS_DEFAULT_REGION: us-east-1
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_source
     steps:
@@ -61,10 +61,18 @@ jobs:
       - name: Create isolated S3 test bucket
         run: |
           aws configure set default.s3.addressing_style path
+          ops/isolated-backup-worker
           docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
+
+          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z server /data --console-address ":9001"
+          trap 'docker logs keel-s3-test 2>&1 | tail -n 200 || true' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ || true)"
+         main
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
@@ -97,7 +105,10 @@ jobs:
           KEEL_RESTORE_EXPECTED_DATABASE_ID: ci-source
           PGPASSWORD: postgres
         run: |
-          backup_file="$(find "$RUNNER_TEMP/keel-backups" -maxdepth 1 -name '*.dump.age' -print -quit)"
+          remote_dir="$RUNNER_TEMP/keel-remote-roundtrip"
+          mkdir -p "$remote_dir"
+          aws --endpoint-url http://127.0.0.1:9000 --region us-east-1 s3 cp --recursive s3://keel-ci-backups/keel/ci-source/ "$remote_dir/"
+          backup_file="$(find "$remote_dir" -type f -name '*.dump.age' -print -quit)"
           test -n "$backup_file"
           test -s "$backup_file.manifest.json"
           node -e 'const fs=require("node:fs"),c=require("node:crypto");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const b=fs.readFileSync(process.argv[2]);if(m.sha256!==c.createHash("sha256").update(b).digest("hex")||m.databaseId!=="ci-source")process.exit(1)' "$backup_file.manifest.json" "$backup_file"
@@ -121,9 +132,9 @@ jobs:
       PGBACKREST_REPO1_S3_ENDPOINT: 127.0.0.1:9000
       PGBACKREST_REPO1_S3_REGION: us-east-1
       PGBACKREST_REPO1_S3_KEY: test
-      PGBACKREST_REPO1_S3_KEY_SECRET: test
+      PGBACKREST_REPO1_S3_KEY_SECRET: testpassword
       AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_SECRET_ACCESS_KEY: testpassword
       AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
@@ -135,19 +146,45 @@ jobs:
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           sudo pg_ctlcluster 16 main start
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'postgres'"
-      - name: Start S3-compatible test service and create disposable bucket
+      - name: Start TLS-enabled S3-compatible test service and create disposable bucket
         run: |
+          set -euo pipefail
           aws configure set default.s3.addressing_style path
+       ops/isolated-backup-worker
           docker run -d --name keel-s3-test -p 9000:9000 -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword minio/minio:RELEASE.2025-04-22T22-12-26Z server /data --address ":9000"
           ready=false
           for attempt in $(seq 1 30); do
             code="$(curl --max-time 2 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/minio/health/ready || true)"
+
+          cert_dir="$RUNNER_TEMP/minio-certs"
+          mkdir -p "$cert_dir"
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout "$cert_dir/private.key" -out "$cert_dir/public.crt" \
+            -subj "/CN=127.0.0.1" \
+            -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+          chmod 600 "$cert_dir/private.key"
+          docker run -d --name keel-s3-test -p 9000:9000 -p 9001:9001 \
+            -v "$cert_dir:/certs:ro" \
+            -e MINIO_ROOT_USER=test -e MINIO_ROOT_PASSWORD=testpassword \
+            ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data --certs-dir /certs --console-address ":9001"
+          export AWS_CA_BUNDLE="$cert_dir/public.crt"
+          echo "AWS_CA_BUNDLE=$cert_dir/public.crt" >> "$GITHUB_ENV"
+          ready=false
+          for attempt in $(seq 1 30); do
+            code="$(curl --cacert "$cert_dir/public.crt" --max-time 2 -s -o /dev/null -w '%{http_code}' https://127.0.0.1:9000/ || true)"
+         main
             if [[ "$code" != "000" && -n "$code" ]]; then ready=true; break; fi
             sleep 2
           done
           [[ "$ready" == true ]] || { docker logs keel-s3-test; exit 1; }
+          ops/isolated-backup-worker
           aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://keel-ci-backups
           aws --endpoint-url http://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+
+          aws --endpoint-url https://127.0.0.1:9000 s3 mb s3://keel-ci-backups
+          aws --endpoint-url https://127.0.0.1:9000 s3 ls s3://keel-ci-backups
+          main
       - name: Execute full backup, WAL archive and named restore-point test
         run: |
           bash -n scripts/ci-pgbackrest-pitr.sh

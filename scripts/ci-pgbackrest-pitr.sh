@@ -23,10 +23,11 @@ repo1-s3-region=$PGBACKREST_REPO1_S3_REGION
 repo1-s3-key=$PGBACKREST_REPO1_S3_KEY
 repo1-s3-key-secret=$PGBACKREST_REPO1_S3_KEY_SECRET
 repo1-s3-uri-style=path
-repo1-s3-verify-tls=n
+repo1-storage-verify-tls=n
 repo1-retention-full=2
 start-fast=y
-log-level-console=info
+log-level-console=debug
+log-level-file=debug
 [keel]
 pg1-path=$PGDATA
 pg1-port=$PGPORT
@@ -35,7 +36,7 @@ EOF
 chmod 600 /etc/pgbackrest/pgbackrest.conf
 chown postgres:postgres /etc/pgbackrest/pgbackrest.conf
 echo "phase=stanza-create"
-timeout 60 runuser -u postgres -- pgbackrest --stanza=keel stanza-create
+timeout 120 runuser -u postgres -- pgbackrest --log-level-console=debug --stanza=keel stanza-create
 psql -X -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET archive_mode='on'"
 psql -X -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET archive_command='pgbackrest --stanza=keel archive-push %p'"
 psql -X -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET archive_timeout='30s'"
