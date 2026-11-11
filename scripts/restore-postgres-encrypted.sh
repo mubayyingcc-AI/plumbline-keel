@@ -2,19 +2,19 @@
 set -Eeuo pipefail
 umask 077
 
-: "\${KEEL_BACKUP_FILE:?KEEL_BACKUP_FILE required}"
-: "\${KEEL_BACKUP_AGE_IDENTITY_FILE:?KEEL_BACKUP_AGE_IDENTITY_FILE required}"
-: "\${KEEL_RESTORE_DATABASE_URL:?KEEL_RESTORE_DATABASE_URL required}"
-: "\${KEEL_RESTORE_CONFIRM:?Set RESTORE_TO_EMPTY_DATABASE after checking target}"
-: "\${KEEL_RESTORE_EXPECTED_DATABASE_ID:?Expected source database identity required}"
+: "${KEEL_BACKUP_FILE:?KEEL_BACKUP_FILE required}"
+: "${KEEL_BACKUP_AGE_IDENTITY_FILE:?KEEL_BACKUP_AGE_IDENTITY_FILE required}"
+: "${KEEL_RESTORE_DATABASE_URL:?KEEL_RESTORE_DATABASE_URL required}"
+: "${KEEL_RESTORE_CONFIRM:?Set RESTORE_TO_EMPTY_DATABASE after checking target}"
+: "${KEEL_RESTORE_EXPECTED_DATABASE_ID:?Expected source database identity required}"
 [[ "$KEEL_RESTORE_CONFIRM" == RESTORE_TO_EMPTY_DATABASE ]] || { echo "restore_confirmation_invalid" >&2; exit 2; }
-[[ -f "$KEEL_BACKUP_FILE" && -f "$KEEL_BACKUP_AGE_IDENTITY_FILE" && -f "\${KEEL_BACKUP_FILE}.sha256" && -f "\${KEEL_BACKUP_FILE}.manifest.json" ]] || { echo "required_restore_file_missing" >&2; exit 2; }
+[[ -f "$KEEL_BACKUP_FILE" && -f "$KEEL_BACKUP_AGE_IDENTITY_FILE" && -f "${KEEL_BACKUP_FILE}.sha256" && -f "${KEEL_BACKUP_FILE}.manifest.json" ]] || { echo "required_restore_file_missing" >&2; exit 2; }
 [[ "$(stat -c %a "$KEEL_BACKUP_AGE_IDENTITY_FILE")" == 600 ]] || { echo "decryption_identity_must_be_mode_0600" >&2; exit 2; }
 for bin in age age-keygen sha256sum psql node tar pg_restore; do command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }; done
 
 (cd "$(dirname "$KEEL_BACKUP_FILE")" && sha256sum --check "$(basename "$KEEL_BACKUP_FILE").sha256")
 recipient="$(age-keygen -y "$KEEL_BACKUP_AGE_IDENTITY_FILE")"
-node - "$KEEL_BACKUP_FILE" "\${KEEL_BACKUP_FILE}.manifest.json" "$KEEL_RESTORE_EXPECTED_DATABASE_ID" "$recipient" <<'NODE'
+node - "$KEEL_BACKUP_FILE" "${KEEL_BACKUP_FILE}.manifest.json" "$KEEL_RESTORE_EXPECTED_DATABASE_ID" "$recipient" <<'NODE'
 const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:path');
 const [artifact,manifestPath,expectedDatabaseId,recipient]=process.argv.slice(2);
 const m=JSON.parse(fs.readFileSync(manifestPath,'utf8')),bytes=fs.readFileSync(artifact);
@@ -38,7 +38,7 @@ if [[ "$format" == "keel-encrypted-postgres-backup/v1" ]]; then
   exit 0
 fi
 
-work="$(mktemp -d "\${TMPDIR:-/tmp}/keel-restore.XXXXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/keel-restore.XXXXXXXX")"
 trap 'rm -rf "$work"' EXIT
 plain="$work/package.tar.gz"
 age --decrypt --identity "$KEEL_BACKUP_AGE_IDENTITY_FILE" --output "$plain" "$KEEL_BACKUP_FILE"
