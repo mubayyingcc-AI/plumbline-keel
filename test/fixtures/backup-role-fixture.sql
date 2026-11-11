@@ -31,3 +31,12 @@ CREATE POLICY keel_legacy_unassigned_tenant_isolation ON public.keel_legacy_unas
   USING (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid)
   WITH CHECK (tenant_id = NULLIF(current_setting('keel.tenant_id',true),'')::uuid);
 INSERT INTO public.keel_legacy_unassigned(legacy_id,tenant_id) VALUES ('legacy-null',NULL);
+
+-- Global reference data is exported once, independently of tenant RLS.
+CREATE TABLE public.keel_global_reference (
+  id BIGSERIAL PRIMARY KEY,
+  reference_key text NOT NULL UNIQUE,
+  reference_value text NOT NULL
+);
+INSERT INTO public.keel_global_reference(reference_key,reference_value)
+VALUES ('currency-usd','USD'),('currency-ngn','NGN');
