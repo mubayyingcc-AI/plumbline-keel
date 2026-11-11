@@ -18,6 +18,9 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(fixtureResult.status, 0, fixtureResult.stderr);
   const migrationResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', migration], { encoding: 'utf8' });
   assert.equal(migrationResult.status, 0, migrationResult.stderr);
+  const integrityMigration = path.join(__dirname, '..', 'db', 'migrations', '021_backup_tenant_integrity_audit.sql');
+  const integrityResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', integrityMigration], { encoding: 'utf8' });
+  assert.equal(integrityResult.status, 0, integrityResult.stderr);
 
   const attributes = run("SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)::text FROM pg_roles WHERE rolname='keel_backup'");
   assert.equal(attributes, 'true');
@@ -31,6 +34,14 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(run("SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000001'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals"), 'journal-a');
   assert.equal(run("SET ROLE keel_backup; SET keel.tenant_id='00000000-0000-0000-0000-000000000002'; SELECT string_agg(journal_id,',') FROM public.keel_ledger_journals"), 'journal-b');
   assert.equal(run("SET ROLE keel_backup; SELECT count(*) FROM public.keel_backup_tenant_ids()"), '2');
+  assert.equal(run("SELECT unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE table_name='keel_legacy_unassigned'"), '1|0');
+  assert.equal(run("SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND rolbypassrls AND NOT rolcanlogin)::text FROM pg_roles WHERE rolname='keel_backup_audit_owner'"), 'true');
+  assert.equal(run("SELECT pg_has_role('keel_backup','keel_backup_audit_owner','MEMBER')::text"), 'false');
+  run("DELETE FROM public.keel_legacy_unassigned WHERE legacy_id='legacy-null'");
+  run("INSERT INTO public.keel_legacy_unassigned(legacy_id,tenant_id) VALUES ('orphan-row','00000000-0000-0000-0000-000000000099')");
+  assert.equal(run("SELECT unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE table_name='keel_legacy_unassigned'"), '0|1');
+  run("DELETE FROM public.keel_legacy_unassigned WHERE legacy_id='orphan-row'");
+  assert.equal(run("SELECT unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE table_name='keel_legacy_unassigned'"), '0|0');
 
   // Exercise pg_dump's documented RLS path: row-security enabled plus INSERT
   // output. The test's admin connection is switched to keel_backup at startup.
