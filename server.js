@@ -457,6 +457,10 @@ const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const route = url.pathname;
   try {
+    if (req.method === 'GET' && route === '/api/research/openbb/status') {
+      const status = await openbbAdapter.checkStatus();
+      return send(res, 200, status);
+    }
     if (req.method === 'GET' && route === '/api/health') {
       let database = 'not_configured';
       if (process.env.KEEL_RUNTIME_DATABASE_URL) {
