@@ -4,13 +4,14 @@ set -Eeuo pipefail
 : "${PGUSER:=postgres}"
 : "${PGHOST:=127.0.0.1}"
 : "${PGPORT:=5432}"
-: "${PGCONF:=/etc/postgresql/16/main/postgresql.conf}"
+: "${PGCONF:=/etc/postgresql/18/main/postgresql.conf}"
 : "${PGPASSWORD:?PGPASSWORD required}"
 : "${PGBACKREST_REPO1_S3_BUCKET:?PGBACKREST_REPO1_S3_BUCKET required}"
 : "${PGBACKREST_REPO1_S3_ENDPOINT:?PGBACKREST_REPO1_S3_ENDPOINT required}"
 : "${PGBACKREST_REPO1_S3_KEY:?PGBACKREST_REPO1_S3_KEY required}"
 : "${PGBACKREST_REPO1_S3_KEY_SECRET:?PGBACKREST_REPO1_S3_KEY_SECRET required}"
 : "${PGBACKREST_REPO1_S3_REGION:=us-east-1}"
+: "${PGBACKREST_REPO1_STORAGE_CA_FILE:=}"
 for bin in pgbackrest pg_ctl psql runuser timeout; do command -v "$bin" >/dev/null 2>&1 || { echo "missing:$bin" >&2; exit 127; }; done
 install -d -o postgres -g postgres -m 0750 /etc/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest /var/lib/pgbackrest
 cat >/etc/pgbackrest/pgbackrest.conf <<EOF
@@ -23,7 +24,12 @@ repo1-s3-region=$PGBACKREST_REPO1_S3_REGION
 repo1-s3-key=$PGBACKREST_REPO1_S3_KEY
 repo1-s3-key-secret=$PGBACKREST_REPO1_S3_KEY_SECRET
 repo1-s3-uri-style=path
-repo1-storage-verify-tls=n
+repo1-storage-verify-tls=y
+EOF
+if [[ -n "$PGBACKREST_REPO1_STORAGE_CA_FILE" ]]; then
+  printf "repo1-storage-ca-file=%s\\n" "$PGBACKREST_REPO1_STORAGE_CA_FILE" >> /etc/pgbackrest/pgbackrest.conf
+fi
+cat >>/etc/pgbackrest/pgbackrest.conf <<EOF
 repo1-retention-full=2
 start-fast=y
 log-level-console=debug
