@@ -209,6 +209,7 @@ count_inserts() {
     $1=="INSERT" && $2=="INTO" {
       name=$3
       sub(/^public\./,"",name)
+      sub(/\(.*/,"",name)
       gsub(/"/,"",name)
       if (name==expected) count++
     }
@@ -233,7 +234,7 @@ for index in "${!tenants[@]}"; do
   for table in "${tenant_tables[@]}"; do
     expected="$(count_rows "$tenant" "$table" "$snapshot")"
     actual="$(count_inserts "$dump_file" "$table")"
-    [[ "$expected" == "$actual" ]] || { echo "backup_tenant_row_coverage_mismatch:$tenant:$table:$expected:$actual" >&2; exit 78; }
+    [[ "$expected" == "$actual" ]] || { echo "backup_tenant_row_coverage_mismatch:$tenant:$table:$expected:$actual" >&2; grep -n '^INSERT' "$dump_file" | head -n 20 >&2 || true; exit 78; }
     printf 'TENANT\t%s\t%s\t%s\t%s\n' "$tenant" "$table" "$expected" "$actual" >>"$coverage"
   done
 done
