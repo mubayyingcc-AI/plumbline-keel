@@ -19,7 +19,7 @@ untrusted_policies="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELEC
 unsupported="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('f','m')")"
 [[ "$unsupported" == 0 ]] || { echo "backup_blocked_foreign_or_materialized_relations" >&2; exit 78; }
 audit="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT table_name||'|'||unassigned_rows||'|'||orphaned_rows FROM public.keel_backup_tenant_integrity_audit() WHERE unassigned_rows>0 OR orphaned_rows>0 ORDER BY table_name")"
-[[ -z "$audit" ]] || { echo "backup_blocked_unassigned_or_orphaned_tenant_rows" >&2; printf '%s\\n' "$audit" >&2; exit 78; }
+[[ -z "$audit" ]] || { echo "backup_blocked_unassigned_or_orphaned_tenant_rows" >&2; printf '%s\n' "$audit" >&2; exit 78; }
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT tenant_id FROM public.keel_backup_tenant_ids() LIMIT 0" >/dev/null
 mkdir -p "$KEEL_BACKUP_DIR"; chmod 700 "$KEEL_BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -47,22 +47,7 @@ mapfile -t global_tables < <(sed -n 's/^KEEL_GLOBAL_TABLE=//p' "$work/snapshot.l
 for tenant in "${tenants[@]}"; do [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "invalid_tenant_identifier" >&2; exit 78; }; done
 for table in "${tenant_tables[@]}" "${global_tables[@]}"; do [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "unsupported_table_identifier" >&2; exit 78; }; done
 (("${#tenant_tables[@]}" > 0)) || { echo "backup_refused_no_tenant_tables" >&2; exit 78; }
-printf '%s\\n' "${tenants[@]}" > "$package/tenant-ids.txt"
-: > "$package/tenant-row-counts.tsv"
-for tenant in "${tenants[@]}"; do
-  for table in "${tenant_tables[@]}"; do
-    counts="$(PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c keel.tenant_id=$tenant" psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot'; SELECT count(*)::text||'|'||count(*) FILTER (WHERE tenant_id IS DISTINCT FROM '$tenant'::uuid)::text FROM public.\"$table\"; COMMIT;")"
-    IFS='|' read -r visible cross_tenant <<< "$counts"
-    [[ "$visible" =~ ^[0-9]+$ && "$cross_tenant" == 0 ]] || { echo "tenant_snapshot_visibility_check_failed:$tenant:$table" >&2; exit 78; }
-    printf '%s\t%s\t%s\n' "$tenant" "$table" "$visible" >> "$package/tenant-row-counts.tsv"
-  done
-done
-: > "$package/global-row-counts.tsv"
-for table in "${global_tables[@]}"; do
-  visible="$(psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT '$snapshot'; SELECT count(*) FROM public.\"$table\"; COMMIT;")"
-  [[ "$visible" =~ ^[0-9]+$ ]] || { echo "global_snapshot_count_failed:$table" >&2; exit 78; }
-  printf '%s\t%s\n' "$table" "$visible" >> "$package/global-row-counts.tsv"
-done
+printf '%s\n' "${tenants[@]}" > "$package/tenant-ids.txt"
 : > "$package/tenant-row-counts.tsv"
 for tenant in "${tenants[@]}"; do
   for table in "${tenant_tables[@]}"; do
