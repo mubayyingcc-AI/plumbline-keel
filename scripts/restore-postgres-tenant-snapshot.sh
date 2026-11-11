@@ -39,7 +39,7 @@ if tar -tvzf "$archive" | awk '$1 !~ /^[-d]/ {bad=1} END {exit bad}'; then :; el
 mkdir "$work/extracted"
 tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$work/extracted"
 package="$work/extracted/package"
-[[ -d "$package" && -f "$package/PACKAGE-MANIFEST.json" && -f "$package/schema.sql" && -f "$package/global-data.sql" && -f "$package/sequences.sql" && -f "$package/tenant-ids.txt" ]] || { echo "backup_package_incomplete" >&2; exit 4; }
+[[ -d "$package" && -f "$package/PACKAGE-MANIFEST.json" && -f "$package/schema.sql" && -f "$package/global-data.sql" && -f "$package/sequences.sql" && -f "$package/tenant-ids.txt" && -f "$package/tenant-row-counts.tsv" && -f "$package/global-row-counts.tsv" && -f "$package/role-bootstrap.sql" && -f "$package/security-definer-owners.sql" ]] || { echo "backup_package_incomplete" >&2; exit 4; }
 node - "$package" "$KEEL_RESTORE_EXPECTED_DATABASE_ID" <<'NODE'
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const [root,expectedDatabaseId]=process.argv.slice(2),m=JSON.parse(fs.readFileSync(path.join(root,'PACKAGE-MANIFEST.json'),'utf8'));
@@ -62,15 +62,53 @@ if(tenants.length!==m.tenantCount||new Set(tenants).size!==tenants.length||tenan
 const tenantFiles=fs.readdirSync(path.join(root,'tenants')).filter(x=>/^tenant-[0-9]{6}\\.sql$/.test(x));
 if(tenantFiles.length!==m.tenantCount)throw Error('backup_package_tenant_export_count_mismatch');
 NODE
-# Schema, global reference data, each tenant's rows, and sequence high-water marks
-# are restored in that order. Run only against the isolated empty target.
+# The restore principal must be able to recreate roles and grants. No role
+# passwords are present in the backup; login credentials are provisioned separately.
+can_create_roles="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT (rolsuper OR rolcreaterole)::text FROM pg_roles WHERE rolname=current_user")"
+[[ "$can_create_roles" == true ]] || { echo "restore_requires_superuser_or_createrole" >&2; exit 8; }
+psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/role-bootstrap.sql"
+# Schema includes ACLs; restore the SECURITY DEFINER owners before data checks.
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/schema.sql"
+psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/security-definer-owners.sql"
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/global-data.sql"
 while IFS= read -r tenant_file; do
   [[ -f "$tenant_file" ]] || { echo "tenant_export_missing" >&2; exit 5; }
   psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$tenant_file"
 done < <(find "$package/tenants" -maxdepth 1 -type f -name 'tenant-*.sql' | sort)
 psql "$KEEL_RESTORE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$package/sequences.sql"
+# Verify restored row counts against the exported common snapshot.
+while IFS=
+expected="$(wc -l < "$package/tenant-ids.txt" | tr -d ' ')"
+actual="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_tenants")"
+[[ "$actual" == "$expected" ]] || { echo "restored_tenant_count_mismatch:expected=$expected actual=$actual" >&2; exit 6; }
+while IFS= read -r tenant; do
+  found="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_tenants WHERE tenant_id='$tenant'")"
+  [[ "$found" == 1 ]] || { echo "restored_tenant_missing:$tenant" >&2; exit 6; }
+done < "$package/tenant-ids.txt"
+rls_missing="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)")"
+[[ "$rls_missing" == 0 ]] || { echo "restored_tenant_rls_boundary_missing:$rls_missing" >&2; exit 7; }
+echo "tenant_snapshot_restore_completed=true"
+\\t' read -r tenant table expected_rows; do
+  [[ "$tenant" =~ ^[0-9a-fA-F-]{36}$ && "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$expected_rows" =~ ^[0-9]+$ ]] || { echo "tenant_row_count_manifest_invalid" >&2; exit 9; }
+  actual_rows="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.\\"$table\\" WHERE tenant_id='$tenant'")"
+  [[ "$actual_rows" == "$expected_rows" ]] || { echo "tenant_row_count_mismatch:$tenant:$table expected=$expected_rows actual=$actual_rows" >&2; exit 9; }
+done < "$package/tenant-row-counts.tsv"
+while IFS=
+expected="$(wc -l < "$package/tenant-ids.txt" | tr -d ' ')"
+actual="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_tenants")"
+[[ "$actual" == "$expected" ]] || { echo "restored_tenant_count_mismatch:expected=$expected actual=$actual" >&2; exit 6; }
+while IFS= read -r tenant; do
+  found="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_tenants WHERE tenant_id='$tenant'")"
+  [[ "$found" == 1 ]] || { echo "restored_tenant_missing:$tenant" >&2; exit 6; }
+done < "$package/tenant-ids.txt"
+rls_missing="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype AND a.attnum>0 AND NOT a.attisdropped) AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)")"
+[[ "$rls_missing" == 0 ]] || { echo "restored_tenant_rls_boundary_missing:$rls_missing" >&2; exit 7; }
+echo "tenant_snapshot_restore_completed=true"
+\\t' read -r table expected_rows; do
+  [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$expected_rows" =~ ^[0-9]+$ ]] || { echo "global_row_count_manifest_invalid" >&2; exit 9; }
+  actual_rows="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.\\"$table\\"")"
+  [[ "$actual_rows" == "$expected_rows" ]] || { echo "global_row_count_mismatch:$table expected=$expected_rows actual=$actual_rows" >&2; exit 9; }
+done < "$package/global-row-counts.tsv"
 # Confirm exact tenant identity coverage and the restored RLS boundary.
 expected="$(wc -l < "$package/tenant-ids.txt" | tr -d ' ')"
 actual="$(psql "$KEEL_RESTORE_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM public.keel_tenants")"
