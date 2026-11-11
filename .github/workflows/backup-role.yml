@@ -63,4 +63,5 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/pg-bin/"*
           echo "$RUNNER_TEMP/pg-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pg-bin:$PATH"
           node --test test/backup-role.integration.test.js
