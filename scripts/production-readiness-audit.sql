@@ -214,10 +214,10 @@ WHERE d.datname = current_database();
 SELECT
   n.nspname AS schema_name,
   pg_get_userbyid(n.nspowner) AS owner_role,
-  has_schema_privilege('keel_runtime', n.oid, 'USAGE') AS runtime_usage,
-  has_schema_privilege('keel_runtime', n.oid, 'CREATE') AS runtime_create,
-  has_schema_privilege('keel_backup', n.oid, 'USAGE') AS backup_usage,
-  has_schema_privilege('keel_backup', n.oid, 'CREATE') AS backup_create
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_schema_privilege('keel_runtime', n.oid, 'USAGE') END AS runtime_usage,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_schema_privilege('keel_runtime', n.oid, 'CREATE') END AS runtime_create,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_schema_privilege('keel_backup', n.oid, 'USAGE') END AS backup_usage,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_schema_privilege('keel_backup', n.oid, 'CREATE') END AS backup_create
 FROM pg_namespace n
 WHERE n.nspname NOT IN ('pg_catalog','information_schema')
   AND n.nspname NOT LIKE 'pg_toast%'
@@ -250,10 +250,10 @@ SELECT
   n.nspname AS schema_name,
   c.relname AS sequence_name,
   pg_get_userbyid(c.relowner) AS owner_role,
-  has_sequence_privilege('keel_runtime', c.oid, 'USAGE') AS runtime_usage,
-  has_sequence_privilege('keel_runtime', c.oid, 'UPDATE') AS runtime_update,
-  has_sequence_privilege('keel_backup', c.oid, 'USAGE') AS backup_usage,
-  has_sequence_privilege('keel_backup', c.oid, 'UPDATE') AS backup_update
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_sequence_privilege('keel_runtime', c.oid, 'USAGE') END AS runtime_usage,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_sequence_privilege('keel_runtime', c.oid, 'UPDATE') END AS runtime_update,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_sequence_privilege('keel_backup', c.oid, 'USAGE') END AS backup_usage,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_sequence_privilege('keel_backup', c.oid, 'UPDATE') END AS backup_update
 FROM pg_class c
 JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE c.relkind='S'
@@ -283,12 +283,12 @@ SELECT
   pg_get_userbyid(d.datdba) AS database_owner,
   d.datallowconn,
   d.datconnlimit,
-  has_database_privilege('keel_runtime',d.oid,'CONNECT') AS runtime_connect,
-  has_database_privilege('keel_runtime',d.oid,'CREATE') AS runtime_create,
-  has_database_privilege('keel_runtime',d.oid,'TEMP') AS runtime_temp,
-  has_database_privilege('keel_backup',d.oid,'CONNECT') AS backup_connect,
-  has_database_privilege('keel_backup',d.oid,'CREATE') AS backup_create,
-  has_database_privilege('keel_backup',d.oid,'TEMP') AS backup_temp
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_database_privilege('keel_runtime',d.oid,'CONNECT') END AS runtime_connect,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_database_privilege('keel_runtime',d.oid,'CREATE') END AS runtime_create,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_database_privilege('keel_runtime',d.oid,'TEMP') END AS runtime_temp,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_database_privilege('keel_backup',d.oid,'CONNECT') END AS backup_connect,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_database_privilege('keel_backup',d.oid,'CREATE') END AS backup_create,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_database_privilege('keel_backup',d.oid,'TEMP') END AS backup_temp
 FROM pg_database d
 WHERE d.datname=current_database();
 
