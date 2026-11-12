@@ -22,7 +22,7 @@ SELECT
   session_user AS session_role,
   current_setting('server_version') AS server_version,
   current_setting('transaction_read_only') AS transaction_read_only,
-  current_setting('ssl') AS ssl_in_use,
+  (SELECT s.ssl FROM pg_stat_ssl s WHERE s.pid = pg_backend_pid()) AS connection_ssl,
   current_setting('keel.tenant_id', true) AS transaction_tenant_context;
 
 -- 2. Privileges of the connected role. Expected application runtime:
