@@ -208,5 +208,112 @@ SELECT
 FROM pg_database d
 WHERE d.datname = current_database();
 
+
+-- 12. Schema-level privileges and ownership. Review CREATE/USAGE grants,
+--     PUBLIC grants, and schemas writable by runtime/backup identities.
+SELECT
+  n.nspname AS schema_name,
+  pg_get_userbyid(n.nspowner) AS owner_role,
+  has_schema_privilege('keel_runtime', n.oid, 'USAGE') AS runtime_usage,
+  has_schema_privilege('keel_runtime', n.oid, 'CREATE') AS runtime_create,
+  has_schema_privilege('keel_backup', n.oid, 'USAGE') AS backup_usage,
+  has_schema_privilege('keel_backup', n.oid, 'CREATE') AS backup_create
+FROM pg_namespace n
+WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+  AND n.nspname NOT LIKE 'pg_toast%'
+ORDER BY n.nspname;
+
+SELECT
+  COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
+  n.nspname AS schema_name,
+  x.privilege_type,
+  x.is_grantable
+FROM pg_namespace n
+CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) x
+LEFT JOIN pg_roles grantee ON grantee.oid=x.grantee
+WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+ORDER BY n.nspname, grantee, x.privilege_type;
+
+-- 13. Sequence grants and ownership. Sequence mutation privileges must be
+--     narrowly scoped; a backup identity must not gain sequence write access.
+SELECT
+  grantee,
+  object_schema,
+  object_name,
+  privilege_type,
+  is_grantable
+FROM information_schema.role_usage_grants
+WHERE grantee IN ('keel_runtime','keel_backup',current_user,session_user)
+ORDER BY grantee, object_schema, object_name, privilege_type;
+
+SELECT
+  n.nspname AS schema_name,
+  c.relname AS sequence_name,
+  pg_get_userbyid(c.relowner) AS owner_role,
+  has_sequence_privilege('keel_runtime', c.oid, 'USAGE') AS runtime_usage,
+  has_sequence_privilege('keel_runtime', c.oid, 'UPDATE') AS runtime_update,
+  has_sequence_privilege('keel_backup', c.oid, 'USAGE') AS backup_usage,
+  has_sequence_privilege('keel_backup', c.oid, 'UPDATE') AS backup_update
+FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE c.relkind='S'
+  AND n.nspname NOT IN ('pg_catalog','information_schema')
+ORDER BY n.nspname,c.relname;
+
+-- 14. Default privileges. These affect objects created in future migrations
+--     and can silently reintroduce broad grants.
+SELECT
+  pg_get_userbyid(d.defaclrole) AS owner_role,
+  COALESCE(n.nspname,'<all schemas>') AS schema_name,
+  d.defaclobjtype AS object_type,
+  COALESCE(grantee.rolname,'PUBLIC') AS grantee,
+  x.privilege_type,
+  x.is_grantable
+FROM pg_default_acl d
+LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
+CROSS JOIN LATERAL aclexplode(d.defaclacl) x
+LEFT JOIN pg_roles grantee ON grantee.oid=x.grantee
+WHERE pg_get_userbyid(d.defaclrole) IN ('keel_runtime','keel_backup')
+   OR grantee.rolname IN ('keel_runtime','keel_backup')
+ORDER BY owner_role,schema_name,object_type,grantee,privilege_type;
+
+-- 15. Database connect/temp privileges and database-level defaults.
+SELECT
+  d.datname,
+  pg_get_userbyid(d.datdba) AS database_owner,
+  d.datallowconn,
+  d.datconnlimit,
+  has_database_privilege('keel_runtime',d.oid,'CONNECT') AS runtime_connect,
+  has_database_privilege('keel_runtime',d.oid,'CREATE') AS runtime_create,
+  has_database_privilege('keel_runtime',d.oid,'TEMP') AS runtime_temp,
+  has_database_privilege('keel_backup',d.oid,'CONNECT') AS backup_connect,
+  has_database_privilege('keel_backup',d.oid,'CREATE') AS backup_create,
+  has_database_privilege('keel_backup',d.oid,'TEMP') AS backup_temp
+FROM pg_database d
+WHERE d.datname=current_database();
+
+-- 16. Ownership inventory. Table owners and schema owners can bypass ordinary
+--     grants and require explicit trusted migration/owner-role governance.
+SELECT
+  n.nspname AS schema_name,
+  c.relname AS object_name,
+  c.relkind,
+  pg_get_userbyid(c.relowner) AS owner_role
+FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE c.relkind IN ('r','p','S','v','m','f')
+  AND n.nspname NOT IN ('pg_catalog','information_schema')
+ORDER BY n.nspname,c.relname;
+
+-- 17. Replication slots and publication/subscription metadata. Recovery and
+--     replication readiness are not implied by a successful PITR CI exercise.
+SELECT slot_name, slot_type, database, active, restart_lsn, confirmed_flush_lsn
+FROM pg_replication_slots
+ORDER BY slot_name;
+
+SELECT pubname, puballtables, pubinsert, pubupdate, pubdelete, pubtruncate
+FROM pg_publication
+ORDER BY pubname;
+
 -- No writes have been issued. End the read-only transaction explicitly.
 ROLLBACK;
