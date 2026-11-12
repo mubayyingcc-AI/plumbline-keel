@@ -120,8 +120,10 @@ SELECT
   p.prosecdef AS security_definer,
   p.proconfig AS function_settings,
   pg_get_function_identity_arguments(p.oid) AS identity_arguments,
-  has_function_privilege('keel_runtime', p.oid, 'EXECUTE') AS runtime_can_execute,
-  has_function_privilege('keel_backup', p.oid, 'EXECUTE') AS backup_can_execute
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime')
+       THEN has_function_privilege('keel_runtime', p.oid, 'EXECUTE') END AS runtime_can_execute,
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup')
+       THEN has_function_privilege('keel_backup', p.oid, 'EXECUTE') END AS backup_can_execute
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname NOT IN ('pg_catalog','information_schema')
