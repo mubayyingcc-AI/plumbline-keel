@@ -68,7 +68,7 @@ async function main() {
 
     await client.query('SELECT pg_advisory_lock($1,$2)', [73654, 12]);
     locked = true;
-    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql', '014_accounting_books_and_periods.sql', '015_period_close_dual_control.sql', '016_global_tenant_rls_and_auth.sql', '017_provider_outbox_inbox_reconciliation.sql', '018_keel_authority_action_assurance.sql', '019_kAAA_provider_authority_event_type.sql', '020_rls_aware_backup_identity.sql', '021_ai_release_assessments.sql', '022_direct_tenant_fk_coverage.sql']) {
+    for (const version of ['012_double_entry_ledger.sql', '013_ledger_posting_and_reservations.sql', '014_accounting_books_and_periods.sql', '015_period_close_dual_control.sql', '016_global_tenant_rls_and_auth.sql', '017_provider_outbox_inbox_reconciliation.sql', '018_keel_authority_action_assurance.sql', '019_kAAA_provider_authority_event_type.sql', '020_rls_aware_backup_identity.sql', '021_ai_release_assessments.sql', '022_direct_tenant_fk_coverage.sql', '023_backup_role_connection_capacity.sql']) {
       const file = path.join(__dirname, '..', 'db', 'migrations', version);
       const sql = fs.readFileSync(file, 'utf8');
       const checksum = crypto.createHash('sha256').update(sql).digest('hex');
