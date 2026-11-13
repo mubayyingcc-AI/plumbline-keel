@@ -1,0 +1,71 @@
+name: Production readiness audit SQL
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/production-readiness-audit.sql'
+      - '.github/workflows/production-readiness-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/production-readiness-audit.sql'
+      - '.github/workflows/production-readiness-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit-sql:
+    name: Read-only audit SQL · PostgreSQL ${{ matrix.postgres-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [16, 18]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d keel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Create a deliberately restricted audit identity
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          psql "postgresql://postgres@127.0.0.1:5432/keel_test" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE keel_readonly_audit
+            LOGIN PASSWORD 'audit_test_only'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOINHERIT NOREPLICATION NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE keel_test TO keel_readonly_audit;
+          SQL
+      - name: Execute the complete inventory as the restricted identity
+        env:
+          PGPASSWORD: audit_test_only
+          KEEL_READONLY_AUDIT_URL: postgresql://keel_readonly_audit@127.0.0.1:5432/keel_test
+        run: |
+          set -euo pipefail
+          psql "$KEEL_READONLY_AUDIT_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/production-readiness-audit.sql
+      - name: Record engine and least-privilege execution result
+        run: |
+          echo "### Read-only readiness inventory" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PostgreSQL: ${{ matrix.postgres-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Executed using: keel_readonly_audit (non-superuser, no BYPASSRLS)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Target: disposable CI database only" >> "$GITHUB_STEP_SUMMARY"
