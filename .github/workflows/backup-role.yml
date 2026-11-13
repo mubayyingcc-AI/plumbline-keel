@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "db/migrations/020_rls_aware_backup_identity.sql"
+      - "db/migrations/023_backup_role_connection_capacity.sql"
       - "test/backup-role.integration.test.js"
       - "test/fixtures/backup-role-fixture.sql"
       - ".github/workflows/backup-role.yml"
