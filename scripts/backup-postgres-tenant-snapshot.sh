@@ -27,7 +27,7 @@ unsupported="$(psqlq -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON 
 
 unsupported="$(
 psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
-SELECT count(*)
+SELECT COALESCE(string_agg(c.relname, ',' ORDER BY c.relname),'')
 FROM pg_class c
 JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname='public' AND c.relkind='r'
@@ -80,7 +80,7 @@ AND (
 )
 SQL
 )"
-[[ "$unsupported" == 0 ]] || { echo "backup_blocked_unsupported_or_unprotected_tenant_table" >&2; exit 78; }
+[[ -z "$unsupported" ]] || { echo "backup_blocked_unsupported_or_unprotected_tenant_table:$unsupported" >&2; exit 78; }
 
 large_objects="$(psqlq -c "SELECT count(*) FROM pg_largeobject_metadata")"
 [[ "$large_objects" == 0 ]] || { echo "backup_blocked_unmapped_large_objects" >&2; exit 78; }
