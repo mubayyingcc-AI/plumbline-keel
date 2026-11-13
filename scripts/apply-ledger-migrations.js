@@ -25,7 +25,7 @@ async function main() {
   const runtimePassword = process.env.KEEL_RUNTIME_DB_PASSWORD;
   const backupPassword = process.env.KEEL_BACKUP_DB_PASSWORD;
   if (!connectionString) throw new Error('admin_database_url_required');
-  if (!runtimePassword || runtimePassword.length < 32) throw new Error('runtime_database_password_minimum_32_chars_required');
+  if (runtimePassword && runtimePassword.length < 32) throw new Error('runtime_database_password_minimum_32_chars_required');
   if (!backupPassword || backupPassword.length < 32) throw new Error('backup_database_password_minimum_32_chars_required');
   let ssl = false;
   if (process.env.KEEL_MIGRATION_TARGET !== 'ci') {
@@ -57,8 +57,9 @@ async function main() {
     const owner = ownerResult.rows[0].owner;
     const role = await client.query("SELECT 1 FROM pg_roles WHERE rolname='keel_runtime'");
     if (role.rowCount) {
-      await client.query('ALTER ROLE keel_runtime WITH LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
+      if (runtimePassword) await client.query('ALTER ROLE keel_runtime WITH LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
     } else {
+      if (!runtimePassword) throw new Error('runtime_database_role_missing_and_no_provisioning_password_supplied');
       await client.query('CREATE ROLE keel_runtime LOGIN PASSWORD ' + quoteLiteral(runtimePassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
     }
 
