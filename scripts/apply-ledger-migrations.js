@@ -23,11 +23,28 @@ async function main() {
   assertTarget();
   const connectionString = process.env.DATABASE_URL || process.env.PG_ADMIN_URL;
   const runtimePassword = process.env.KEEL_RUNTIME_DB_PASSWORD;
+  const backupPassword = process.env.KEEL_BACKUP_DB_PASSWORD;
   if (!connectionString) throw new Error('admin_database_url_required');
-  if (!runtimePassword || runtimePassword.length < 16) throw new Error('runtime_database_password_required');
+  if (!runtimePassword || runtimePassword.length < 32) throw new Error('runtime_database_password_minimum_32_chars_required');
+  if (!backupPassword || backupPassword.length < 32) throw new Error('backup_database_password_minimum_32_chars_required');
+  let ssl = false;
+  if (process.env.KEEL_MIGRATION_TARGET !== 'ci') {
+    ssl = { rejectUnauthorized:true };
+    if (process.env.PGSSLROOTCERT_B64) {
+      const encoded = String(process.env.PGSSLROOTCERT_B64).trim();
+      const decoded = Buffer.from(encoded, 'base64');
+      const ca = decoded.toString('utf8');
+      if (!encoded || !ca.includes('-----BEGIN CERTIFICATE-----') || !ca.includes('-----END CERTIFICATE-----')) throw new Error('database_ca_bundle_invalid');
+      ssl.ca = ca;
+    } else if (process.env.PGSSLROOTCERT) {
+      ssl.ca = fs.readFileSync(process.env.PGSSLROOTCERT, 'utf8');
+    } else {
+      throw new Error('database_ca_bundle_required_for_staging_migrations');
+    }
+  }
   const pool = new Pool({
     connectionString,
-    ssl: process.env.KEEL_MIGRATION_TARGET === 'ci' ? false : { rejectUnauthorized:true, ...(process.env.PGSSLROOTCERT ? { ca:fs.readFileSync(process.env.PGSSLROOTCERT,'utf8') } : {}) },
+    ssl,
     max: 2,
     connectionTimeoutMillis: 10000
   });
@@ -71,6 +88,25 @@ async function main() {
         throw error;
       }
     }
+
+    // Provision the backup login only after migration 020 has created its
+    // restricted role and membership. Passwords are supplied by the deploy
+    // environment and are never logged or stored in the repository.
+    await client.query('ALTER ROLE keel_backup WITH LOGIN PASSWORD ' + quoteLiteral(backupPassword) + ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT');
+    const backupBoundary = await client.query(`
+      SELECT r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls,
+        EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid JOIN pg_roles member ON member.oid=m.member WHERE granted.rolname='keel_backup_reader' AND member.rolname='keel_backup') AS member_of_reader,
+        (SELECT count(*) FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid JOIN pg_roles member ON member.oid=m.member WHERE member.rolname='keel_backup' AND granted.rolname<>'keel_backup_reader') AS unexpected_memberships,
+        has_table_privilege('keel_backup','public.keel_ledger_journals','INSERT') AS can_insert_ledger,
+        has_table_privilege('keel_backup','public.keel_ledger_journals','UPDATE') AS can_update_ledger,
+        has_table_privilege('keel_backup','public.keel_ledger_journals','DELETE') AS can_delete_ledger
+      FROM pg_roles r WHERE r.rolname='keel_backup'
+    `);
+    const backup = backupBoundary.rows[0];
+    if (!backup || !backup.rolcanlogin || backup.rolsuper || backup.rolcreatedb || backup.rolcreaterole || backup.rolreplication || backup.rolbypassrls || !backup.member_of_reader || Number(backup.unexpected_memberships) !== 0 || backup.can_insert_ledger || backup.can_update_ledger || backup.can_delete_ledger) {
+      throw new Error('backup_role_privilege_boundary_failed');
+    }
+    console.log('backup_role_ready keel_backup (read-only, RLS constrained)');
 
     const rlsAudit = await client.query(`
       SELECT c.relname
