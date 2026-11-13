@@ -85,8 +85,8 @@ SQL
 large_objects="$(psqlq -c "SELECT count(*) FROM pg_largeobject_metadata")"
 [[ "$large_objects" == 0 ]] || { echo "backup_blocked_unmapped_large_objects" >&2; exit 78; }
 
-privileged_roles="$(psqlq -c "SELECT count(*) FROM pg_roles WHERE rolname !~ '^pg_' AND rolname<>'postgres' AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR (rolbypassrls AND rolname<>'keel_auth_owner'))")"
-[[ "$privileged_roles" == 0 ]] || { echo "backup_blocked_unapproved_privileged_database_role" >&2; exit 78; }
+privileged_roles="$(psqlq -c "SELECT COALESCE(string_agg(rolname||':super='||rolsuper||':createdb='||rolcreatedb||':createrole='||rolcreaterole||':replication='||rolreplication||':bypassrls='||rolbypassrls, ',' ORDER BY rolname),'') FROM pg_roles WHERE rolname !~ '^pg_' AND rolname<>'postgres' AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR (rolbypassrls AND rolname<>'keel_auth_owner'))")"
+[[ -z "$privileged_roles" ]] || { echo "backup_blocked_unapproved_privileged_database_role:$privileged_roles" >&2; exit 78; }
 auth_owner="$(psqlq -c "SELECT count(*) FROM pg_roles WHERE rolname='keel_auth_owner' AND NOT rolsuper AND NOT rolcanlogin AND rolbypassrls AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication")"
 [[ "$auth_owner" == 1 ]] || { echo "backup_blocked_keel_auth_owner_boundary_invalid" >&2; exit 78; }
 auth_owner_members="$(psqlq -c "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid WHERE r.rolname='keel_auth_owner'")"
