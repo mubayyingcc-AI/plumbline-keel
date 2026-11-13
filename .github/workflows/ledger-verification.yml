@@ -39,7 +39,8 @@ jobs:
     env:
       PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_test
       PGSSLMODE: disable
-      KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_test
+      KEEL_LEDGER_TEST_DATABASE_URL: postgresql://keel_runtime:keel_runtime_ci_test_password_32_chars@127.0.0.1:5432/keel_test
+      KEEL_BACKUP_DB_PASSWORD: keel_backup_ci_test_password_32_chars
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,14 +51,20 @@ jobs:
       - name: Apply ledger migrations and verify restricted runtime role
         env:
           KEEL_MIGRATION_TARGET: ci
-          KEEL_RUNTIME_DB_PASSWORD: keel_runtime_test
+          KEEL_RUNTIME_DB_PASSWORD: keel_runtime_ci_test_password_32_chars
         run: node scripts/apply-ledger-migrations.js
+      - name: Verify dedicated backup login can authenticate without elevated privileges
+        run: |
+          PGPASSWORD="$KEEL_BACKUP_DB_PASSWORD" psql "postgresql://keel_backup@127.0.0.1:5432/keel_test" -X -v ON_ERROR_STOP=1 -Atc "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user" | grep -Fx 'keel_backup|f|f'
+          if PGPASSWORD="$KEEL_BACKUP_DB_PASSWORD" psql "postgresql://keel_backup@127.0.0.1:5432/keel_test" -X -v ON_ERROR_STOP=1 -c "INSERT INTO public.keel_ledger_journals DEFAULT VALUES"; then
+            echo 'backup login unexpectedly wrote to the ledger' >&2; exit 1
+          fi
       - name: Run unit and PostgreSQL integration tests
         run: npm test
       - name: Verify tenant-scoped ledger state before backup
         env:
           KEEL_RECOVERY_TARGET: isolated
-          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_test
+          DATABASE_URL: postgresql://keel_runtime:keel_runtime_ci_test_password_32_chars@127.0.0.1:5432/keel_test
         run: node scripts/verify-recovery-state.js
       - name: Create isolated logical backup and restore into a clean database
         shell: bash
@@ -91,5 +98,5 @@ jobs:
         env:
           KEEL_RECOVERY_TARGET: isolated
           PG_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/keel_restore_test
-          DATABASE_URL: postgresql://keel_runtime:keel_runtime_test@127.0.0.1:5432/keel_restore_test
+          DATABASE_URL: postgresql://keel_runtime:keel_runtime_ci_test_password_32_chars@127.0.0.1:5432/keel_restore_test
         run: node scripts/verify-recovery-state.js
