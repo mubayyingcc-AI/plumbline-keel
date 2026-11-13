@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Staging backup preflight refresh after tenant-FK coverage migration 022.
+# Staging backup preflight refresh after tenant-FK coverage migration 022 and synthetic staging tenant.
 set -Eeuo pipefail
 umask 077
 
