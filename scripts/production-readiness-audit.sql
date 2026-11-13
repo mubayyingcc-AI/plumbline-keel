@@ -103,13 +103,13 @@ ORDER BY grantee, table_schema, table_name, privilege_type;
 
 SELECT
   grantee,
-  object_schema,
-  object_name,
+  routine_schema,
+  routine_name,
   privilege_type,
   is_grantable
 FROM information_schema.role_routine_grants
 WHERE grantee IN ('keel_runtime','keel_backup',current_user,session_user)
-ORDER BY grantee, object_schema, object_name, privilege_type;
+ORDER BY grantee, routine_schema, routine_name, privilege_type;
 
 -- 7. Security-definer functions and owners. Each must have a fixed safe
 --    search_path, narrow EXECUTE grants and reviewed ownership.
