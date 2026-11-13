@@ -9,6 +9,7 @@ const databaseUrl = process.env.KEEL_BACKUP_TEST_DATABASE_URL;
 test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl }, () => {
   const migration = path.join(__dirname, '..', 'db', 'migrations', '020_rls_aware_backup_identity.sql');
   const fixture = path.join(__dirname, 'fixtures', 'backup-role-fixture.sql');
+  const connectionMigration = path.join(__dirname, '..', 'db', 'migrations', '023_backup_role_connection_capacity.sql');
   const run = (sql, expected = 0) => {
     const result = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-A', '-t', '-c', sql], { encoding: 'utf8' });
     assert.equal(result.status, expected, result.stderr || result.stdout);
@@ -18,7 +19,11 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(fixtureResult.status, 0, fixtureResult.stderr);
   const migrationResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', migration], { encoding: 'utf8' });
   assert.equal(migrationResult.status, 0, migrationResult.stderr);
+  const connectionMigrationResult = spawnSync('psql', [databaseUrl, '-X', '-v', 'ON_ERROR_STOP=1', '-f', connectionMigration], { encoding: 'utf8' });
+  assert.equal(connectionMigrationResult.status, 0, connectionMigrationResult.stderr);
 
+  const connectionLimit = run("SELECT rolconnlimit FROM pg_roles WHERE rolname='keel_backup'");
+  assert.equal(connectionLimit, '6');
   const attributes = run("SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)::text FROM pg_roles WHERE rolname='keel_backup'");
   assert.equal(attributes, 'true');
   assert.equal(run("SELECT pg_has_role('keel_backup','keel_backup_reader','MEMBER')::text"), 'true');
