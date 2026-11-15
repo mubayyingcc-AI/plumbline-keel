@@ -375,3 +375,20 @@ test('KAAA authority endpoints reject unauthenticated envelope, approval and pro
  ];
  for(const [path,method] of cases){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:method==='POST'?'{}':undefined});assert.equal(r.status,401,path);}
 });
+
+test('organisational control-plane sandbox is served by the real backend policy core',async()=>{
+ const list=await fetch(base+'/api/control/sandbox/scenarios'),catalogue=await list.json();
+ assert.equal(list.status,200);assert.deepEqual(catalogue.scenarios.map(x=>x.id),['ACP-001','ACP-002','ACP-003']);
+ const expected=['READY_FOR_AUTHORITY','REQUIRE_APPROVAL','DENY'];
+ for(let i=0;i<expected.length;i++){
+  const r=await fetch(base+'/api/control/sandbox/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenarioId:catalogue.scenarios[i].id})});
+  const d=await r.json();assert.equal(r.status,200);assert.equal(d.result.decision,expected[i]);assert.equal(d.passed,true);assert.equal(d.execution,'DISABLED');assert.equal(d.synthetic,true);
+ }
+});
+test('organisational control-plane tenant endpoints require authentication',async()=>{
+ for(const [url,method] of [['/api/control/integrations','GET'],['/api/control/actions','GET'],['/api/control/integrations','POST'],['/api/control/actions/evaluate','POST']]){
+  const r=await fetch(base+url,{method,headers:{'Content-Type':'application/json'},body:method==='POST'?'{}':undefined});
+  assert.equal(r.status,401,url+' '+method);
+  assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+ }
+});
