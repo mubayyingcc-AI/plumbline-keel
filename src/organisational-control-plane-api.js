@@ -45,7 +45,9 @@ async function handle(ctx){
   const q=await pool.query("SELECT * FROM public.keel_integration_capabilities WHERE tenant_id=$1 AND integration_id=$2 AND principal_id=$3 AND status='active' ORDER BY created_at DESC LIMIT 1",[actor.tenant_id,integrationId,actor.principal_id]);
   if(!q.rowCount)return reply(send,res,403,{error:'active_integration_registration_not_found'});
   const registration=q.rows[0],manifest=registration.manifest;
-  if(!manifest||manifest.manifestFingerprint!==registration.manifest_fingerprint)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
+  if(!manifest)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
+  const recomputed=normalizeManifest(manifest);
+  if(recomputed.manifestFingerprint!==registration.manifest_fingerprint||manifest.manifestFingerprint!==registration.manifest_fingerprint)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
   const envelope=await pool.query('SELECT status,approval_required,approver_principal_id FROM public.keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2',[actor.tenant_id,envelopeId]);
   if(!envelope.rowCount)return reply(send,res,404,{error:'authority_envelope_not_found'});
   const capability=evaluateCapabilityRequest({registration,tenantId:actor.tenant_id,actorPrincipalId:actor.principal_id,operation,resourceType});
@@ -81,7 +83,7 @@ async function handle(ctx){
      return reply(send,res,202,{ok:true,decision:'REQUIRE_APPROVAL',requestId:currentRequestId,requestFingerprint,approvalEndpoint:'/api/assurance/authority/approvals',approvalMustBindExactFingerprint:true,execution:'NOT_EXECUTED'});
     }
    }
-   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId:'integration:'+integrationId,requestFingerprint,executionRef:currentRequestId});
+   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId,additionalResourceIds:['integration:'+integrationId],requestFingerprint,executionRef:currentRequestId});
    if(existing.rowCount)await client.query("UPDATE public.keel_control_action_requests SET decision='PERMIT',status='authorized',proof_id=$3,updated_at=NOW() WHERE tenant_id=$1 AND request_id=$2",[actor.tenant_id,currentRequestId,proof.proofId]);
    else await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status,proof_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PERMIT','authorized',$11)",[actor.tenant_id,currentRequestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint,proof.proofId]);
    await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),currentRequestId,'ACTION_AUTHORIZED',digest({requestFingerprint,proofId:proof.proofId,event:'ACTION_AUTHORIZED'}),JSON.stringify({requestFingerprint,proofId:proof.proofId,operation,resourceId})]);
