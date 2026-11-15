@@ -67,3 +67,17 @@ The isolated `feat/organisational-control-plane-v1` development branch adds a te
 - Authenticated tenant endpoints: `POST/GET /api/control/integrations`, `POST /api/control/integrations/revoke`, `POST /api/control/actions/evaluate`, `GET /api/control/actions`
 
 The API evaluates and records authorisation only. It does not execute external plugin actions or issue an execution token. Production enforcement requires a Keel-mediated connector/gateway or equivalent native enforcement, scoped credentials, verified workload identity, connector-specific security testing and customer approval. Migration 024 is included in the guarded migration runner but has **not** been applied to any environment.
+
+
+## Infrastructure Finance & Assurance
+
+Keel's Infrastructure Finance & Assurance foundation provides tenant-scoped infrastructure project registration and immutable, reproducible assessment history. It connects asset value, existing encumbrances, haircut assumptions, contracted versus collected revenue, operating costs, debt service, deployed capacity, utilisation and source-evidence states.
+
+- Assessment engine: `src/infrastructure-finance-assurance.js`
+- Authenticated API: `src/infrastructure-finance-assurance-api.js`
+- Migration: `db/migrations/025_infrastructure_finance_assurance.sql`
+- Public synthetic scenarios: `GET /api/infrastructure/sandbox/scenarios`, `POST /api/infrastructure/sandbox/runs`
+- Tenant project API: `GET/POST /api/infrastructure/projects`
+- Tenant assessment API: `POST /api/infrastructure/assessments`, `GET /api/infrastructure/assessments?projectId=<projectId>`
+
+The engine reports deterministic diagnostics and explicit evidence gaps. It does not provide a credit rating, valuation opinion, legal-title conclusion, financing recommendation or lending decision. Inputs must be independently sourced and verified. No telemetry, bank, custodian, asset registry or NVIDIA connector is connected. Migration 025 has not been applied outside disposable CI.
