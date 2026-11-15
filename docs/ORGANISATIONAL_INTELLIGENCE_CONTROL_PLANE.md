@@ -47,3 +47,8 @@ A production adapter must authenticate the external workload identity; expose a 
 ## Explicitly not included in v1
 
 No live Microsoft 365, Google Workspace, Salesforce, Slack, ERP, HR, CRM, cloud, bank, custodian or government connector is connected. No external tool action is executed by the public website demo. No guarantee is made against bypass when customers retain direct credentials. Production requires independent security review, connector-specific tests, key lifecycle, rate/cost limits, concurrency/replay testing, incident response and customer approval.
+
+
+## Relationship to PositionSeal and financial evidence
+
+PositionSeal is a specialised financial-position evidence format, not a second authority system. The existing draft implementation in PR #110 remains separate and is not merged or exposed through this control-plane API. When integrated, it should register as a typed evidence producer under the same tenant/principal and capability framework, and its signed position records should link to Keel's shared evidence lineage. Its issuer-key lifecycle, tenant-bound persistence, freshness policy, and proof-boundary semantics must be verified before that integration is enabled. Do not treat a PositionSeal signature as proof of legal title, priority, or unencumbered status beyond the issuer's declared source boundary.
