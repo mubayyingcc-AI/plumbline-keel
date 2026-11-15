@@ -40,7 +40,7 @@ async function handle(ctx){
   if(!sameOriginIfBrowser(req))return reply(send,res,403,{error:'origin_not_allowed'});
   if(!actor.principal_id||actor.role!=='integration')return reply(send,res,403,{error:'named_integration_principal_required'});
   const body=await readBody(req);
-  const integrationId=String(body.integrationId||'').trim(),operation=String(body.operation||'').trim(),resourceId=String(body.resourceId||'').trim(),resourceType=String(body.resourceType||'').trim(),envelopeId=String(body.envelopeId||req.headers['x-keel-authority-envelope']||'').trim();
+  const integrationId=String(body.integrationId||'').trim(),operation=String(body.operation||'').trim(),resourceId=String(body.resourceId||'').trim(),resourceType=String(body.resourceType||'').trim(),envelopeId=String(body.envelopeId||req.headers['x-keel-authority-envelope']||'').trim(),amountMinor=body.amountMinor,currency=body.currency===undefined?undefined:String(body.currency).toUpperCase();
   if(!integrationId||!operation||!resourceId||!resourceType||!envelopeId||!body.payload||typeof body.payload!=='object'||Array.isArray(body.payload))return reply(send,res,400,{error:'integration_operation_resource_payload_and_authority_envelope_required'});
   const q=await pool.query("SELECT * FROM public.keel_integration_capabilities WHERE tenant_id=$1 AND integration_id=$2 AND principal_id=$3 AND status='active' ORDER BY created_at DESC LIMIT 1",[actor.tenant_id,integrationId,actor.principal_id]);
   if(!q.rowCount)return reply(send,res,403,{error:'active_integration_registration_not_found'});
@@ -48,11 +48,15 @@ async function handle(ctx){
   if(!manifest)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
   const recomputed=normalizeManifest(manifest);
   if(recomputed.manifestFingerprint!==registration.manifest_fingerprint||manifest.manifestFingerprint!==registration.manifest_fingerprint)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
-  const envelope=await pool.query('SELECT status,approval_required,approver_principal_id FROM public.keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2',[actor.tenant_id,envelopeId]);
+  const envelope=await pool.query('SELECT status,approval_required,approver_principal_id,max_amount_minor,currency FROM public.keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2',[actor.tenant_id,envelopeId]);
   if(!envelope.rowCount)return reply(send,res,404,{error:'authority_envelope_not_found'});
+  if(envelope.rows[0].status!=='active')return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes:['AUTHORITY_ENVELOPE_NOT_ACTIVE'],execution:'NOT_EXECUTED'});
+  if(amountMinor!==undefined&&(typeof amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(amountMinor)))return reply(send,res,400,{error:'amount_minor_must_be_an_exact_integer_string'});
+  if(currency!==undefined&&!/^[A-Z]{3}$/.test(currency))return reply(send,res,400,{error:'currency_must_be_an_iso_alpha3_code'});
+  if(envelope.rows[0].max_amount_minor!==null&&(amountMinor===undefined||!currency))return reply(send,res,400,{error:'authority_amount_limit_requires_exact_amount_minor_and_currency'});
   const capability=evaluateCapabilityRequest({registration,tenantId:actor.tenant_id,actorPrincipalId:actor.principal_id,operation,resourceType});
   const payloadFingerprint=digest(body.payload);
-  const requestMaterial={tenantId:actor.tenant_id,capabilityId:registration.capability_id,manifestFingerprint:registration.manifest_fingerprint,principalId:actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint};
+  const requestMaterial={tenantId:actor.tenant_id,capabilityId:registration.capability_id,manifestFingerprint:registration.manifest_fingerprint,principalId:actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,amountMinor:amountMinor===undefined?null:amountMinor,currency:currency===undefined?null:currency};
   const requestFingerprint=digest(requestMaterial),requestId=crypto.randomUUID();
   const persistDenied=async reasonCodes=>{
    const denied=await pool.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DENY','denied') ON CONFLICT(tenant_id,request_fingerprint) DO NOTHING RETURNING request_id",[actor.tenant_id,requestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
@@ -84,7 +88,7 @@ async function handle(ctx){
      return reply(send,res,202,{ok:true,decision:'REQUIRE_APPROVAL',requestId:currentRequestId,requestFingerprint,approvalEndpoint:'/api/assurance/authority/approvals',approvalMustBindExactFingerprint:true,execution:'NOT_EXECUTED'});
     }
    }
-   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId,additionalResourceIds:['integration:'+integrationId],requestFingerprint,executionRef:currentRequestId});
+   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId,additionalResourceIds:['integration:'+integrationId],amountMinor,currency,requestFingerprint,executionRef:currentRequestId});
    if(existing.rowCount)await client.query("UPDATE public.keel_control_action_requests SET decision='PERMIT',status='authorized',proof_id=$3,updated_at=NOW() WHERE tenant_id=$1 AND request_id=$2",[actor.tenant_id,currentRequestId,proof.proofId]);
    else await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status,proof_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PERMIT','authorized',$11)",[actor.tenant_id,currentRequestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint,proof.proofId]);
    await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),currentRequestId,'ACTION_AUTHORIZED',digest({requestFingerprint,proofId:proof.proofId,event:'ACTION_AUTHORIZED'}),JSON.stringify({requestFingerprint,proofId:proof.proofId,operation,resourceId})]);
