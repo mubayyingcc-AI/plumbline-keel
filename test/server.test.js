@@ -394,3 +394,18 @@ test('organisational control-plane tenant endpoints require authentication',asyn
   assert.equal((await r.json()).error,'valid_tenant_api_key_required');
  }
 });
+
+test('infrastructure finance sandbox returns deterministic synthetic assessments without credit decisions',async()=>{
+ const list=await fetch(base+'/api/infrastructure/sandbox/scenarios'),catalogue=await list.json();
+ assert.equal(list.status,200);assert.deepEqual(catalogue.scenarios.map(x=>x.id),['IFA-001','IFA-002','IFA-003']);
+ for(const id of ['IFA-001','IFA-002','IFA-003']){
+  const r=await fetch(base+'/api/infrastructure/sandbox/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenarioId:id})}),d=await r.json();
+  assert.equal(r.status,200);assert.equal(d.synthetic,true);assert.equal(d.creditDecision,false);assert.equal(d.execution,'DISABLED');assert.equal(d.result.schema,'keel.infrastructure-finance-assessment.v1');
+ }
+});
+test('infrastructure tenant APIs require a valid tenant API key',async()=>{
+ for(const [url,method] of [['/api/infrastructure/projects','GET'],['/api/infrastructure/projects','POST'],['/api/infrastructure/assessments','POST'],['/api/infrastructure/assessments?projectId=gpu-factory-001','GET']]){
+  const r=await fetch(base+url,{method,headers:{'Content-Type':'application/json'},body:method==='POST'?'{}':undefined});
+  assert.equal(r.status,401,url+' '+method);assert.equal((await r.json()).error,'valid_tenant_api_key_required');
+ }
+});
