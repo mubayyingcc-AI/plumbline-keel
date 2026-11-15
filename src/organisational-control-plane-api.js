@@ -52,6 +52,8 @@ async function handle(ctx){
   if(!envelope.rowCount)return reply(send,res,404,{error:'authority_envelope_not_found'});
   if(envelope.rows[0].status!=='active')return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes:['AUTHORITY_ENVELOPE_NOT_ACTIVE'],execution:'NOT_EXECUTED'});
   if(amountMinor!==undefined&&(typeof amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(amountMinor)))return reply(send,res,400,{error:'amount_minor_must_be_an_exact_integer_string'});
+  if(amountMinor!==undefined&&(!currency||body.payload.amountMinor!==amountMinor||String(body.payload.currency||'').toUpperCase()!==currency))return reply(send,res,400,{error:'amount_and_currency_must_match_the_canonical_action_payload'});
+  if(amountMinor===undefined&&currency!==undefined)return reply(send,res,400,{error:'currency_without_amount_minor_forbidden'});
   if(currency!==undefined&&!/^[A-Z]{3}$/.test(currency))return reply(send,res,400,{error:'currency_must_be_an_iso_alpha3_code'});
   if(envelope.rows[0].max_amount_minor!==null&&(amountMinor===undefined||!currency))return reply(send,res,400,{error:'authority_amount_limit_requires_exact_amount_minor_and_currency'});
   const capability=evaluateCapabilityRequest({registration,tenantId:actor.tenant_id,actorPrincipalId:actor.principal_id,operation,resourceType});
