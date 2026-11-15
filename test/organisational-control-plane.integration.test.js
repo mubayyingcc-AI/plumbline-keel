@@ -34,7 +34,7 @@ test('organisational control plane persists, authorizes, holds, approves and enf
   assert.equal(permitted.status,200,JSON.stringify(permitted.data));assert.equal(permitted.data.decision,'PERMIT');assert.equal(permitted.data.execution,'NOT_EXECUTED');assert.ok(permitted.data.proof.proofId);
   const highEnvelope=await post('/api/assurance/authority/envelopes',ownerKey.token,{granteePrincipalId:agentId,scopes:['integration:tool:invoke'],resourceIds:[integrationResource,paymentResource],currency:'USD',maxAmountMinor:'1000',approvalRequired:true,approverPrincipalId:approverId,expiresAt});
   assert.equal(highEnvelope.status,201,JSON.stringify(highEnvelope.data));
-  const highAction={integrationId:manifest.integrationId,operation:'payment.release',resourceId:paymentResource,resourceType:'payment',payload:{paymentRef:'opaque-'+suffix},amountMinor:'900',currency:'USD',envelopeId:highEnvelope.data.envelope.envelopeId};
+  const highAction={integrationId:manifest.integrationId,operation:'payment.release',resourceId:paymentResource,resourceType:'payment',payload:{paymentRef:'opaque-'+suffix,amountMinor:'900',currency:'USD'},amountMinor:'900',currency:'USD',envelopeId:highEnvelope.data.envelope.envelopeId};
   const held=await post('/api/control/actions/evaluate',agentKey.token,highAction);
   assert.equal(held.status,202,JSON.stringify(held.data));assert.equal(held.data.decision,'REQUIRE_APPROVAL');assert.equal(held.data.execution,'NOT_EXECUTED');
   const approved=await post('/api/assurance/authority/approvals',approverKey.token,{envelopeId:highEnvelope.data.envelope.envelopeId,requestFingerprint:held.data.requestFingerprint,decision:'approve',rationale:'Independent approval for exact request fingerprint'});
@@ -43,9 +43,9 @@ test('organisational control plane persists, authorizes, holds, approves and enf
   assert.equal(afterApproval.status,200,JSON.stringify(afterApproval.data));assert.equal(afterApproval.data.decision,'PERMIT');
   const replay=await post('/api/control/actions/evaluate',agentKey.token,highAction);
   assert.equal(replay.status,409,'authorized action request cannot be replayed as a fresh authorization');
-  const overLimit=await post('/api/control/actions/evaluate',agentKey.token,{...highAction,payload:{paymentRef:'over-limit-'+suffix},amountMinor:'1001'});
+  const overLimit=await post('/api/control/actions/evaluate',agentKey.token,{...highAction,payload:{paymentRef:'over-limit-'+suffix,amountMinor:'1001',currency:'USD'},amountMinor:'1001',currency:'USD'});
   assert.equal(overLimit.status,403,JSON.stringify(overLimit.data));assert.equal(overLimit.data.decision,'DENY');
-  const altered=await post('/api/control/actions/evaluate',agentKey.token,{...highAction,payload:{paymentRef:'altered-'+suffix}});
+  const altered=await post('/api/control/actions/evaluate',agentKey.token,{...highAction,payload:{paymentRef:'altered-'+suffix,amountMinor:'900',currency:'USD'}});
   assert.equal(altered.status,202,'changed payload must not inherit the prior approval');
   const list=await fetch(base+'/api/control/actions',{headers:{'Authorization':'Bearer '+ownerKey.token}});
   const history=await list.json();assert.equal(list.status,200);assert.ok(history.actions.length>=4);
