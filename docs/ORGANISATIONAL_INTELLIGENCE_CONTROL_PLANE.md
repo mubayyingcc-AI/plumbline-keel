@@ -29,7 +29,7 @@ A declaration is not proof that the plugin actually behaves as declared. Registr
 1. The organisation registers an integration against a named Keel principal.
 2. A human administrator creates an Authority Envelope for that principal, with exact scope integration:tool:invoke and both resource integration:<integrationId> and the exact target resource ID, plus validity bounds and an explicit approver when required.
 3. The integration authenticates with its own tenant key; caller-supplied agent names are not trusted.
-4. The action request binds tenant, integration, manifest fingerprint, principal, operation, resource type, resource ID, payload fingerprint, request ID and envelope.
+4. The action request binds tenant, integration, manifest fingerprint, principal, operation, resource type, resource ID, payload fingerprint, request ID and envelope. If an amount limit applies, the exact integer-string amount and ISO currency must also match the canonical action payload.
 5. Keel checks that operation and resource type are declared and the integration, principal and tenant are active.
 6. Existing Authority Envelope evaluation checks grantee, expiry, scope, resource, revocation and any amount/currency constraints. The request fingerprint is used for independent human approval.
 7. Keel writes the existing Action Proof Object and a tenant-scoped control action record. A changed payload creates a different fingerprint and cannot reuse an earlier approval.
