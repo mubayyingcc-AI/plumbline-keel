@@ -66,6 +66,8 @@ async function handle(ctx){
    return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes,requestFingerprint,execution:'NOT_EXECUTED'});
   };
   if(capability.decision==='DENY')return persistDenied(capability.reasonCodes);
+  if(envelope.rows[0].max_amount_minor!==null&&BigInt(amountMinor)>BigInt(envelope.rows[0].max_amount_minor))return persistDenied(['AMOUNT_LIMIT_EXCEEDED']);
+  if(envelope.rows[0].currency&&currency&&envelope.rows[0].currency!==currency)return persistDenied(['CURRENCY_SCOPE_MISMATCH']);
   const needsApproval=capability.decision==='REQUIRE_APPROVAL'||envelope.rows[0].approval_required===true;
   if(capability.decision==='REQUIRE_APPROVAL'&&(!envelope.rows[0].approval_required||!envelope.rows[0].approver_principal_id))return reply(send,res,409,{ok:false,decision:'REQUIRE_APPROVAL',reasonCodes:['CAPABILITY_REQUIRES_APPROVAL_BUT_ENVELOPE_HAS_NO_INDEPENDENT_APPROVER'],requestFingerprint,execution:'NOT_EXECUTED'});
   const client=await pool.connect();
