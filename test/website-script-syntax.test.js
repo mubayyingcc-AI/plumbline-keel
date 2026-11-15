@@ -11,6 +11,8 @@ test('website inline JavaScript parses without syntax errors', () => {
   assert.match(html, /id="control-plane"/);
   assert.match(html, /api\/control\/sandbox\/runs/);
   assert.match(html, /Agent & Plugin Control/);
+  assert.ok(html.includes('id="infrastructure-finance"'));
+  assert.ok(html.includes('/api/infrastructure/sandbox/runs'));
   for (const [index, source] of scripts.entries()) {
     assert.doesNotThrow(() => new vm.Script(source, { filename: 'index.html:inline-script-' + (index + 1) }));
   }
