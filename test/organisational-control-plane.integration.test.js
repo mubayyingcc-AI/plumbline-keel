@@ -13,6 +13,7 @@ test('organisational control plane persists, authorizes, holds, approves and enf
  const ownerKey=issueTenantKey(),agentKey=issueTenantKey(),approverKey=issueTenantKey();
  const now=Date.now(),expiresAt=new Date(now+3600000).toISOString();
  try{
+  runtime=await dbPool();
   await admin.query("INSERT INTO keel_tenants(tenant_id,tenant_name,tenant_slug,status) VALUES($1,$2,$3,'active')",[tenantId,baseTenant+suffix,'keel-control-'+suffix]);
   await admin.query("INSERT INTO keel_principals(principal_id,tenant_id,display_name,email,identity_assurance,principal_kind) VALUES($1,$4,'Control Owner',$5,'externally_verified','human'),($2,$4,'CRM Agent',$6,'self_asserted','ai_agent'),($3,$4,'Independent Approver',$7,'externally_verified','human')",[ownerId,agentId,approverId,tenantId,'owner-'+suffix+'@example.test','agent-'+suffix+'@example.test','approver-'+suffix+'@example.test']);
   await admin.query("INSERT INTO keel_tenant_keys(key_id,tenant_id,token_hash,label,role,principal_id) VALUES($1,$4,$5,'Owner','owner',$7),($2,$4,$6,'Agent','integration',$8),($3,$4,$9,'Approver','reviewer',$10)",[ownerKey.keyId,agentKey.keyId,approverKey.keyId,tenantId,ownerKey.tokenHash,agentKey.tokenHash,ownerId,agentId,approverKey.tokenHash,approverId]);
@@ -50,7 +51,6 @@ test('organisational control plane persists, authorizes, holds, approves and enf
   const history=await list.json();assert.equal(list.status,200);assert.ok(history.actions.length>=4);
   const proofCount=await admin.query('SELECT count(*)::int AS count FROM keel_action_proof_objects WHERE tenant_id=$1',[tenantId]);
   assert.ok(proofCount.rows[0].count>=2);
-  runtime=await dbPool();
  }finally{
   if(started)await new Promise(resolve=>server.close(resolve));
   if(runtime)await runtime.end();
