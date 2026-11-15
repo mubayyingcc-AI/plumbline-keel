@@ -27,12 +27,14 @@ const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
 const aiReleaseAssuranceApi = require('./src/ai-release-assurance-api');
+const organisationalControlPlaneApi = require('./src/organisational-control-plane-api');
+const organisationalControlPlane = require('./src/organisational-control-plane');
 const openbbAdapter = require('./src/openbb-adapter');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
+const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/control/sandbox/runs': 30, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
 const rateBuckets = new Map();
 
 const products = [
@@ -43,6 +45,7 @@ const products = [
   { id:'evidence', name:'Keel Evidence', category:'Evidence and audit', stage:'POC', description:'Package source references, timestamps, evidence classes, policy versions and record fingerprints.', outputs:['Evidence manifest','Decision fingerprint','Scope and limitation record'], integration:'REST API / structured CSV' },
   { id:'assurance', name:'Keel Assurance Fabric', category:'Decision assurance', stage:'Foundation', description:'Bind source provenance, model context, policy trace, human witness, drift signals and bounded fallback into a persistent ProofDocket.', outputs:['OriginMark provenance','ModelCensus','DecisionWitness','RuleTrace','DriftSentinel','FallbackMandate','ProofDocket'], integration:'Token-restricted REST API / PostgreSQL' },
   { id:'ai-release-assurance', name:'Keel AI Release Assurance', category:'Cross-industry AI system release assurance', stage:'Tenant-authenticated API and immutable evidence store in CI · production rollout pending', description:'Assess changes to models, prompts, retrieval, datasets, tools, agents, workflows, policies, runtimes and integrations against required evidence-backed checks, scoped human approvals and rollback requirements.', outputs:['Versioned component inventory and fingerprints','Evidence-linked release checks','Risk-tiered approval and rollback gates','Tamper-evident release assessment fingerprint'], integration:'Vendor-neutral Node.js core library; CI, model registry and enterprise API adapters are in progress' },
+  { id:'organisational-control-plane', name:'Keel Organisational Control Plane', category:'Agent, plugin and delegated tool authority', stage:'v1 backend foundation · no external connector execution', description:'Register AI agents and plugins against tenant-owned principals, declare resource-scoped capabilities, evaluate every action against human-issued authority, bind approvals to exact request fingerprints and preserve immutable action evidence.', outputs:['Tenant-scoped integration registry','Capability manifests and risk tiers','Authority-bound action decisions','Human approval and revocation boundary','Action Proof Object linkage'], integration:'Authenticated REST API; connector gateway, short-lived execution tokens and external adapters remain subsequent work' },
   { id:'payment-authority', name:'Keel Payment Authority & Agent Control', category:'Mandates and payment lifecycle', stage:'Foundation · non-executing', description:'Evaluate human-issued mandates, purpose and payee scope, spend limits and evidence-backed availability before any authorised provider workflow.', outputs:['Versioned mandates','Spend envelopes','Human approval boundary','Availability-aware decision','Lifecycle and recovery model'], integration:'Internal deterministic evaluator; persistent API integration pending' },
   { id:'card-control', name:'Keel Human Card & Institutional Card Control', category:'Consumer identity, card authority and spend control', stage:'Consumer identity foundation · partner issuance pending', description:'Build a physical-first human card journey with verified consumer identity, partner card-order requests, delivery proof, secure-element pairing, independent recovery and issuer-gated virtual activation.', outputs:['Consumer identity and short-lived session foundation','Physical card order request lifecycle','Delivery and hardware pairing gates','Recovery and issuer-eligibility controls'], integration:'PostgreSQL schema and signed provider-event API; no identity provider, manufacturer or issuer connected' },
   { id:'remittance-integrity', name:'Keel Remittance & Embedded Finance Integrity', category:'Transfer lifecycle and reconciliation', stage:'POC · synthetic reconciliation only', description:'Compare expected transfer records with declared provider events, preserving exact amounts, event identity, duplicate detection, partial payouts, missing events and late arrivals.', outputs:['Canonical transfer matching','Idempotency and duplicate detection','Partial and late-event exceptions','Provider evidence boundary'], integration:'Synthetic reconciliation API; no MTO, bank, wallet or issuer adapter connected' }
@@ -394,6 +397,12 @@ const apiDescription = {
     '/api/ledger/reservations':{post:{summary:'Create a tenant-scoped funds reservation'}},
     '/api/ledger/events/verify':{get:{summary:'Verify the append-only ledger event chain'}},
     '/api/assurance/status':{get:{summary:'Assurance Fabric availability'}},
+    '/api/control/integrations':{get:{summary:'List tenant-scoped plugin and agent registrations'},post:{summary:'Register capability manifest against an existing agent or service principal'}},
+    '/api/control/integrations/revoke':{post:{summary:'Revoke an integration capability registration'}},
+    '/api/control/actions':{get:{summary:'List tenant-scoped action decisions and evidence'}},
+    '/api/control/actions/evaluate':{post:{summary:'Evaluate a plugin action against capability and human-issued authority; never executes the action'}},
+    '/api/control/sandbox/scenarios':{get:{summary:'Synthetic organisational control-plane scenarios'}},
+    '/api/control/sandbox/runs':{post:{summary:'Run a deterministic synthetic capability-control test; no external action'}},
     '/api/assurance/authority/envelopes':{post:{summary:'Create a human-granted, scoped Authority Envelope'}},
     '/api/assurance/authority/envelopes/revoke':{post:{summary:'Revoke an Authority Envelope'}},
     '/api/assurance/authority/approvals':{post:{summary:'Record independent human approval bound to a request fingerprint'}},
@@ -486,6 +495,7 @@ const server = http.createServer(async (req,res) => {
       });
     }
     if (await aiReleaseAssuranceApi.handle({req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto})) return;
+    if (await organisationalControlPlaneApi.handle({req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto})) return;
     if (await humanCardRecoveryApi.handle({req,res,route,authenticateTenant,dbPool,send,readBody,sameOriginIfBrowser,recordEventWithClient,crypto,cleanString})) return;
     if (route.startsWith('/api/consumer/') || route.startsWith('/api/partners/card-')) return send(res,503,{error:'consumer_card_tenant_isolation_not_enabled',message:'Consumer identity and card services are temporarily disabled until tenant-bound ownership and provider authority are enforced.'});
     if (await consumerCardSecurityApi.handle({req,res,route,send,dbPool,readBody,sameOriginIfBrowser})) return;
@@ -1245,6 +1255,15 @@ const server = http.createServer(async (req,res) => {
         return send(res,result.valid?200:409,{ok:result.valid,...result});
       }
       return send(res,404,{error:'ledger_endpoint_not_found'});
+    }
+    if (req.method === 'GET' && route === '/api/control/sandbox/scenarios') {
+      return send(res,200,{scenarios:[{id:'ACP-001',name:'Declared low-risk read'},{id:'ACP-002',name:'Critical payment release requires human approval'},{id:'ACP-003',name:'Undeclared dataset export is denied'}],synthetic:true,execution:'DISABLED'});
+    }
+    if (req.method === 'POST' && route === '/api/control/sandbox/runs') {
+      if (!sameOriginIfBrowser(req)) return send(res,403,{error:'origin_not_allowed'});
+      if (rateLimited(req,route)) return send(res,429,{error:'rate_limit_exceeded'},undefined,{'Retry-After':'60'});
+      const body=await readBody(req),result=organisationalControlPlane.sandboxEvaluate(body.scenarioId);
+      return send(res,200,result);
     }
     if (req.method === 'GET' && route === '/api/products') {
       return send(res,200,{products,notice:'Stage labels describe current product maturity; no external financial data sources are connected by default.'});

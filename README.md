@@ -53,3 +53,17 @@ Keel now includes a domain-neutral deterministic release-assessment core for AI 
 - Tests: `test/ai-release-assurance.test.js`
 
 The current implementation includes a deterministic assessment library, a tenant-authenticated API for immutable PostgreSQL-backed assessments, and Ed25519 release-attestation signing/verification. The API derives tenant identity from the authenticated key and enforces forced RLS; high/critical releases remain on HOLD until an authenticated independent-review workflow is available. Keel does not yet execute CI pipelines or independently authenticate external evidence producers. OIDC/workload identity, CI and model-registry adapters, trusted key registration/revocation, and production rollout remain integration work. The product catalogue marks this status explicitly.
+
+
+## Organisational Intelligence Control Plane
+
+The isolated `feat/organisational-control-plane-v1` development branch adds a tenant-scoped plugin and agent capability registry, deterministic capability policy evaluation, human-approval-aware action requests, exact target-resource authority binding and immutable evidence linkage to Keel's existing Authority Envelopes and Action Proof Objects. The website includes a synthetic control-plane test lab backed by the same Node.js policy module.
+
+- Architecture: `docs/ORGANISATIONAL_INTELLIGENCE_CONTROL_PLANE.md`
+- Policy core: `src/organisational-control-plane.js`
+- Tenant API: `src/organisational-control-plane-api.js`
+- Migration: `db/migrations/024_organisational_control_plane.sql`
+- Public test endpoints: `GET /api/control/sandbox/scenarios`, `POST /api/control/sandbox/runs`
+- Authenticated tenant endpoints: `POST/GET /api/control/integrations`, `POST /api/control/integrations/revoke`, `POST /api/control/actions/evaluate`, `GET /api/control/actions`
+
+The API evaluates and records authorisation only. It does not execute external plugin actions or issue an execution token. Production enforcement requires a Keel-mediated connector/gateway or equivalent native enforcement, scoped credentials, verified workload identity, connector-specific security testing and customer approval. Migration 024 is included in the guarded migration runner but has **not** been applied to any environment.
