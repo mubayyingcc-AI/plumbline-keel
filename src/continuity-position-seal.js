@@ -45,7 +45,7 @@ function isoTime(value, field) {
 function validatePayload(p) {
   if (!isPlainObject(p)) fail('position_seal_payload_required');
   if (p.schemaVersion !== '1.0.0') fail('unsupported_position_seal_schema');
-  for (const field of ['evidenceId', 'tenantId', 'issuerId', 'accountRef', 'currency', 'availabilityBasisVersion', 'signingKeyId']) {
+  for (const field of ['evidenceId', 'tenantId', 'issuerId', 'accountRef', 'currency', 'signingKeyId']) {
     if (typeof p[field] !== 'string' || !ID.test(p[field])) fail('invalid_' + field);
   }
   if (!CURRENCY.test(p.currency)) fail('invalid_currency');
@@ -78,7 +78,7 @@ function signingBytes(payload) {
   return Buffer.from(DOMAIN + canonicalize(payload), 'utf8');
 }
 
-function verifyKeyRegistration(registration, payload) {
+function verifyKeyRegistration(registration, payload, now) {
   if (!isPlainObject(registration)) fail('issuer_trust_anchor_required');
   if (registration.tenantId !== payload.tenantId) fail('tenant_scope_mismatch');
   if (registration.issuerId !== payload.issuerId) fail('issuer_identity_mismatch');
@@ -88,7 +88,9 @@ function verifyKeyRegistration(registration, payload) {
   let key;
   try { key = crypto.createPublicKey(registration.publicKeyPem); } catch { fail('invalid_issuer_public_key'); }
   if (key.asymmetricKeyType !== 'ed25519') fail('issuer_key_must_be_ed25519');
-  const now = Date.now();
+  for (const field of ['validFrom', 'validUntil']) {
+    if (registration[field] !== undefined && (!Number.isFinite(Date.parse(registration[field])) || typeof registration[field] !== 'string')) fail('invalid_issuer_key_' + field);
+  }
   if (registration.validFrom && now < Date.parse(registration.validFrom)) fail('issuer_key_not_yet_valid');
   if (registration.validUntil && now > Date.parse(registration.validUntil)) fail('issuer_key_expired');
   return key;
@@ -98,14 +100,14 @@ function verifyPositionSeal(envelope, registration, options = {}) {
   if (!isPlainObject(envelope) || !isPlainObject(envelope.payload)) fail('position_seal_envelope_required');
   const payload = envelope.payload;
   const { asOf, issuedAt } = validatePayload(payload);
-  const key = verifyKeyRegistration(registration, payload);
+  const nowDate = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  if (!Number.isFinite(nowDate.getTime())) fail('invalid_verification_time');
+  const key = verifyKeyRegistration(registration, payload, nowDate.getTime());
   if (typeof envelope.signature !== 'string' || !/^[A-Za-z0-9_-]{80,120}$/.test(envelope.signature)) fail('invalid_position_seal_signature');
   let signatureValid = false;
   try { signatureValid = crypto.verify(null, signingBytes(payload), key, Buffer.from(envelope.signature, 'base64url')); } catch { /* normalized below */ }
   if (!signatureValid) fail('position_seal_signature_invalid');
 
-  const nowDate = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
-  if (!Number.isFinite(nowDate.getTime())) fail('invalid_verification_time');
   const now = nowDate.getTime();
   if (asOf > now + MAX_FUTURE_SKEW_MS || issuedAt > now + MAX_FUTURE_SKEW_MS) fail('position_seal_from_future');
   const ageMs = Math.max(0, now - asOf);
