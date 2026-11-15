@@ -15,7 +15,9 @@ const tables = [
   'keel_regulatory_obligations',
   'keel_integration_capabilities',
   'keel_control_action_requests',
-  'keel_control_action_events'
+  'keel_control_action_events',
+  'keel_infrastructure_projects',
+  'keel_infrastructure_assessments'
 ];
 
 test('finance and regulatory tenant tables have validated direct tenant registry foreign keys', { skip: !databaseUrl }, () => {
