@@ -6,8 +6,7 @@ function reply(send,res,status,payload){send(res,status,payload);return true;}
 async function handle(ctx){
  const {req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto}=ctx;
  if(!route.startsWith(ROOT+'/'))return false;
- const actor=await authenticateTenant(req);
- if(!actor)return reply(send,res,401,{error:'valid_tenant_api_key_required'});
+ const actor=await authenticateTenant(req);if(!actor)return reply(send,res,401,{error:'valid_tenant_api_key_required'});
  const base=await dbPool();if(!base)return reply(send,res,503,{error:'control_plane_storage_unavailable'});
  const pool=tenantScopedPool(base,actor.tenant_id);if(!pool)return reply(send,res,503,{error:'control_plane_storage_unavailable'});
  if(req.method==='GET'&&route===ROOT+'/integrations'){
@@ -29,8 +28,7 @@ async function handle(ctx){
  if(req.method==='POST'&&route===ROOT+'/integrations/revoke'){
   if(!sameOriginIfBrowser(req))return reply(send,res,403,{error:'origin_not_allowed'});
   if(!['owner','admin'].includes(actor.role)||!actor.principal_id)return reply(send,res,403,{error:'named_tenant_admin_required'});
-  const body=await readBody(req),integrationId=String(body.integrationId||'').trim();
-  if(!integrationId)return reply(send,res,400,{error:'integration_id_required'});
+  const body=await readBody(req),integrationId=String(body.integrationId||'').trim();if(!integrationId)return reply(send,res,400,{error:'integration_id_required'});
   const q=await pool.query("UPDATE public.keel_integration_capabilities SET status='revoked',revoked_at=NOW() WHERE tenant_id=$1 AND integration_id=$2 AND status='active' RETURNING capability_id",[actor.tenant_id,integrationId]);
   return reply(send,res,q.rowCount?200:404,{ok:q.rowCount>0,revokedCount:q.rowCount});
  }
@@ -48,36 +46,47 @@ async function handle(ctx){
   if(!q.rowCount)return reply(send,res,403,{error:'active_integration_registration_not_found'});
   const registration=q.rows[0],manifest=registration.manifest;
   if(!manifest||manifest.manifestFingerprint!==registration.manifest_fingerprint)return reply(send,res,409,{error:'registered_manifest_fingerprint_mismatch'});
+  const envelope=await pool.query('SELECT status,approval_required,approver_principal_id FROM public.keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2',[actor.tenant_id,envelopeId]);
+  if(!envelope.rowCount)return reply(send,res,404,{error:'authority_envelope_not_found'});
   const capability=evaluateCapabilityRequest({registration,tenantId:actor.tenant_id,actorPrincipalId:actor.principal_id,operation,resourceType});
   const payloadFingerprint=digest(body.payload);
   const requestMaterial={tenantId:actor.tenant_id,capabilityId:registration.capability_id,manifestFingerprint:registration.manifest_fingerprint,principalId:actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint};
   const requestFingerprint=digest(requestMaterial),requestId=crypto.randomUUID();
-  if(capability.decision==='DENY'){
+  const persistDenied=async reasonCodes=>{
    await pool.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DENY','denied') ON CONFLICT(tenant_id,request_fingerprint) DO NOTHING",[actor.tenant_id,requestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
-   return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes:capability.reasonCodes,requestFingerprint,execution:'NOT_EXECUTED'});
-  }
-  const envelope=await pool.query('SELECT status,approval_required,approver_principal_id FROM public.keel_authority_envelopes WHERE tenant_id=$1 AND envelope_id=$2',[actor.tenant_id,envelopeId]);
-  if(!envelope.rowCount)return reply(send,res,404,{error:'authority_envelope_not_found'});
+   return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes,requestFingerprint,execution:'NOT_EXECUTED'});
+  };
+  if(capability.decision==='DENY')return persistDenied(capability.reasonCodes);
   const needsApproval=capability.decision==='REQUIRE_APPROVAL'||envelope.rows[0].approval_required===true;
-  if(capability.decision==='REQUIRE_APPROVAL'&&(!envelope.rows[0].approval_required||!envelope.rows[0].approver_principal_id)){
-   return reply(send,res,409,{ok:false,decision:'REQUIRE_APPROVAL',reasonCodes:['CAPABILITY_REQUIRES_APPROVAL_BUT_ENVELOPE_HAS_NO_INDEPENDENT_APPROVER'],requestFingerprint,execution:'NOT_EXECUTED'});
-  }
+  if(capability.decision==='REQUIRE_APPROVAL'&&(!envelope.rows[0].approval_required||!envelope.rows[0].approver_principal_id))return reply(send,res,409,{ok:false,decision:'REQUIRE_APPROVAL',reasonCodes:['CAPABILITY_REQUIRES_APPROVAL_BUT_ENVELOPE_HAS_NO_INDEPENDENT_APPROVER'],requestFingerprint,execution:'NOT_EXECUTED'});
   const client=await pool.connect();
   try{
    await client.query('BEGIN');
+   let existing=await client.query('SELECT request_id,status FROM public.keel_control_action_requests WHERE tenant_id=$1 AND request_fingerprint=$2 FOR UPDATE',[actor.tenant_id,requestFingerprint]);
+   let currentRequestId=existing.rowCount?existing.rows[0].request_id:requestId;
+   if(existing.rowCount&&['authorized','denied','cancelled'].includes(existing.rows[0].status)){await client.query('ROLLBACK');return reply(send,res,409,{error:'action_request_terminal',status:existing.rows[0].status,requestId:currentRequestId});}
    if(needsApproval){
-    const existing=await client.query('SELECT request_id,status FROM public.keel_control_action_requests WHERE tenant_id=$1 AND request_fingerprint=$2',[actor.tenant_id,requestFingerprint]);
-    if(existing.rowCount&&existing.rows[0].status==='authorized'){await client.query('ROLLBACK');return reply(send,res,409,{error:'action_request_already_authorized',requestId:existing.rows[0].request_id});}
-    const inserted=await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REQUIRE_APPROVAL','awaiting_approval') ON CONFLICT(tenant_id,request_fingerprint) DO NOTHING RETURNING request_id",[actor.tenant_id,requestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
-    if(inserted.rowCount)await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),requestId,'ACTION_HELD_FOR_APPROVAL',digest({requestFingerprint,event:'ACTION_HELD_FOR_APPROVAL'}),JSON.stringify({requestFingerprint,operation,resourceId,reason:'independent_human_approval_required'})]);
-    await client.query('COMMIT');
-    return reply(send,res,202,{ok:true,decision:'REQUIRE_APPROVAL',requestId:inserted.rows[0]?.request_id||requestId,requestFingerprint,approvalEndpoint:'/api/assurance/authority/approvals',approvalMustBindExactFingerprint:true,execution:'NOT_EXECUTED'});
+    const approvals=await client.query("SELECT approver_principal_id,decision FROM public.keel_authority_action_approvals WHERE tenant_id=$1 AND envelope_id=$2 AND request_fingerprint=$3",[actor.tenant_id,envelopeId,requestFingerprint]);
+    const approved=approvals.rows.some(x=>x.approver_principal_id===envelope.rows[0].approver_principal_id&&x.approver_principal_id!==actor.principal_id&&x.decision==='approve');
+    const rejected=approvals.rows.some(x=>x.approver_principal_id===envelope.rows[0].approver_principal_id&&x.decision==='reject');
+    if(rejected){
+     if(existing.rowCount)await client.query("UPDATE public.keel_control_action_requests SET decision='DENY',status='denied',updated_at=NOW() WHERE tenant_id=$1 AND request_id=$2",[actor.tenant_id,currentRequestId]);
+     else await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DENY','denied')",[actor.tenant_id,currentRequestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
+     await client.query('COMMIT');return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes:['INDEPENDENT_HUMAN_REJECTED'],requestFingerprint,execution:'NOT_EXECUTED'});
+    }
+    if(!approved){
+     if(!existing.rowCount)await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REQUIRE_APPROVAL','awaiting_approval')",[actor.tenant_id,currentRequestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
+     if(!existing.rowCount)await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),currentRequestId,'ACTION_HELD_FOR_APPROVAL',digest({requestFingerprint,event:'ACTION_HELD_FOR_APPROVAL'}),JSON.stringify({requestFingerprint,operation,resourceId,reason:'independent_human_approval_required'})]);
+     await client.query('COMMIT');
+     return reply(send,res,202,{ok:true,decision:'REQUIRE_APPROVAL',requestId:currentRequestId,requestFingerprint,approvalEndpoint:'/api/assurance/authority/approvals',approvalMustBindExactFingerprint:true,execution:'NOT_EXECUTED'});
+    }
    }
-   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId:'integration:'+integrationId,requestFingerprint,executionRef:requestId});
-   await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status,proof_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PERMIT','authorized',$11)",[actor.tenant_id,requestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint,proof.proofId]);
-   await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),requestId,'ACTION_AUTHORIZED',digest({requestFingerprint,proofId:proof.proofId,event:'ACTION_AUTHORIZED'}),JSON.stringify({requestFingerprint,proofId:proof.proofId,operation,resourceId})]);
+   const proof=await authorityPersistence.authorizeAndRecord(client,{tenantId:actor.tenant_id,actor,envelopeId,action:'integration:tool:invoke',resourceId:'integration:'+integrationId,requestFingerprint,executionRef:currentRequestId});
+   if(existing.rowCount)await client.query("UPDATE public.keel_control_action_requests SET decision='PERMIT',status='authorized',proof_id=$3,updated_at=NOW() WHERE tenant_id=$1 AND request_id=$2",[actor.tenant_id,currentRequestId,proof.proofId]);
+   else await client.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status,proof_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PERMIT','authorized',$11)",[actor.tenant_id,currentRequestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint,proof.proofId]);
+   await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),currentRequestId,'ACTION_AUTHORIZED',digest({requestFingerprint,proofId:proof.proofId,event:'ACTION_AUTHORIZED'}),JSON.stringify({requestFingerprint,proofId:proof.proofId,operation,resourceId})]);
    await client.query('COMMIT');
-   return reply(send,res,200,{ok:true,decision:'PERMIT',requestId,requestFingerprint,proof,execution:'NOT_EXECUTED',notice:'This is a Keel authorization decision and proof record only. It is not an external execution token and no plugin action was performed.'});
+   return reply(send,res,200,{ok:true,decision:'PERMIT',requestId:currentRequestId,requestFingerprint,proof,execution:'NOT_EXECUTED',notice:'Authorization evidence only. No external plugin action was performed and no execution token was issued.'});
   }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
  }
  return reply(send,res,405,{error:'method_not_allowed'});
