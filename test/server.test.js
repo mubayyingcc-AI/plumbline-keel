@@ -16,7 +16,7 @@ test('product catalogue is served by the API', async () => {
   const response = await fetch(base + '/api/products');
   const data = await response.json();
   assert.equal(response.status, 200);
-  assert.equal(data.products.length, 11);
+  assert.equal(data.products.length, 12);
   assert.ok(data.products.some(p => p.id === 'ledger'));
   assert.ok(data.products.some(p => p.id === 'capacity'));
   assert.ok(data.products.some(p => p.id === 'payment-authority'));
@@ -24,6 +24,7 @@ test('product catalogue is served by the API', async () => {
   assert.ok(data.products.some(p => p.id === 'remittance-integrity'));
   assert.ok(data.products.some(p => p.id === 'ai-release-assurance' && p.stage.includes('production rollout pending')));
   assert.ok(data.products.some(p => p.id === 'organisational-control-plane' && p.stage.includes('no external connector execution')));
+  assert.ok(data.products.some(p => p.id === 'infrastructure-finance-assurance' && p.stage.includes('no credit decision')));
 });
 
 test('demo endpoint executes the decision engine', async () => {
