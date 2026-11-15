@@ -27,7 +27,7 @@ A declaration is not proof that the plugin actually behaves as declared. Registr
 ## Authorization sequence
 
 1. The organisation registers an integration against a named Keel principal.
-2. A human administrator creates an Authority Envelope for that principal, with exact scope integration:tool:invoke and resource integration:<integrationId>, plus validity bounds and an explicit approver when required.
+2. A human administrator creates an Authority Envelope for that principal, with exact scope integration:tool:invoke and both resource integration:<integrationId> and the exact target resource ID, plus validity bounds and an explicit approver when required.
 3. The integration authenticates with its own tenant key; caller-supplied agent names are not trusted.
 4. The action request binds tenant, integration, manifest fingerprint, principal, operation, resource type, resource ID, payload fingerprint, request ID and envelope.
 5. Keel checks that operation and resource type are declared and the integration, principal and tenant are active.
