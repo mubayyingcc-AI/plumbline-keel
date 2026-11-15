@@ -5,7 +5,7 @@ const ROOT='/api/control';
 function reply(send,res,status,payload){send(res,status,payload);return true;}
 async function handle(ctx){
  const {req,res,route,authenticateTenant,tenantScopedPool,dbPool,send,readBody,sameOriginIfBrowser,crypto}=ctx;
- if(!route.startsWith(ROOT+'/'))return false;
+ if(!route.startsWith(ROOT+'/')||route.startsWith(ROOT+'/sandbox/'))return false;
  const actor=await authenticateTenant(req);if(!actor)return reply(send,res,401,{error:'valid_tenant_api_key_required'});
  const base=await dbPool();if(!base)return reply(send,res,503,{error:'control_plane_storage_unavailable'});
  const pool=tenantScopedPool(base,actor.tenant_id);if(!pool)return reply(send,res,503,{error:'control_plane_storage_unavailable'});
