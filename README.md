@@ -81,3 +81,17 @@ Keel's Infrastructure Finance & Assurance foundation provides tenant-scoped infr
 - Tenant assessment API: `POST /api/infrastructure/assessments`, `GET /api/infrastructure/assessments?projectId=<projectId>`
 
 The engine reports deterministic diagnostics and explicit evidence gaps. It does not provide a credit rating, valuation opinion, legal-title conclusion, financing recommendation or lending decision. Inputs must be independently sourced and verified. No telemetry, bank, custodian, asset registry or NVIDIA connector is connected. Migration 025 has not been applied outside disposable CI.
+
+
+## Infrastructure Finance & Assurance
+
+Keel now has an isolated development implementation of a deterministic infrastructure finance assessment engine, tenant-scoped project registry, immutable assessment history and a synthetic website test lab. It evaluates declared asset value, encumbrances, haircut assumptions, contracted and collected revenue, operating costs, debt service, deployed/available capacity and evidence states.
+
+- Engine: `src/infrastructure-finance-assurance.js`
+- Tenant API: `src/infrastructure-finance-assurance-api.js`
+- Migration 025: `db/migrations/025_infrastructure_finance_assurance.sql`
+- Public synthetic scenarios: `GET /api/infrastructure/sandbox/scenarios`, `POST /api/infrastructure/sandbox/runs`
+- Tenant APIs: `GET/POST /api/infrastructure/projects`, `POST /api/infrastructure/assessments`, `GET /api/infrastructure/assessments?projectId=<projectId>`
+- Ecosystem partnership brief: `docs/NVIDIA_ECOSYSTEM_PARTNERSHIP_BRIEF.md`
+
+This is not a credit rating, valuation, legal-title conclusion, lending recommendation or financing execution service. No NVIDIA, bank, custodian, telemetry or asset-registry integration is connected. The partnership brief is a proposal only and makes no claim of NVIDIA endorsement or partnership. Migration 025 is registered in the guarded runner and has not been applied to staging or production.
