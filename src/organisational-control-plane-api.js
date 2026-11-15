@@ -89,7 +89,15 @@ async function handle(ctx){
    await client.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),currentRequestId,'ACTION_AUTHORIZED',digest({requestFingerprint,proofId:proof.proofId,event:'ACTION_AUTHORIZED'}),JSON.stringify({requestFingerprint,proofId:proof.proofId,operation,resourceId})]);
    await client.query('COMMIT');
    return reply(send,res,200,{ok:true,decision:'PERMIT',requestId:currentRequestId,requestFingerprint,proof,execution:'NOT_EXECUTED',notice:'Authorization evidence only. No external plugin action was performed and no execution token was issued.'});
-  }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
+  }catch(error){
+   await client.query('ROLLBACK').catch(()=>{});
+   if(error.status===400||error.status===403){
+    const denied=await pool.query("INSERT INTO public.keel_control_action_requests(tenant_id,request_id,capability_id,principal_id,envelope_id,operation,resource_id,resource_type,payload_fingerprint,request_fingerprint,decision,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DENY','denied') ON CONFLICT(tenant_id,request_fingerprint) DO UPDATE SET decision='DENY',status='denied',updated_at=NOW() RETURNING request_id",[actor.tenant_id,requestId,registration.capability_id,actor.principal_id,envelopeId,operation,resourceId,resourceType,payloadFingerprint,requestFingerprint]);
+    await pool.query('INSERT INTO public.keel_control_action_events(tenant_id,event_id,request_id,event_type,event_fingerprint,payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[actor.tenant_id,crypto.randomUUID(),denied.rows[0].request_id,'ACTION_DENIED',digest({requestFingerprint,reason:error.code||'AUTHORITY_DENIED',event:'ACTION_DENIED'}),JSON.stringify({requestFingerprint,reason:error.code||'AUTHORITY_DENIED',operation,resourceId})]);
+    return reply(send,res,403,{ok:false,decision:'DENY',reasonCodes:[error.code||'AUTHORITY_DENIED'],requestFingerprint,execution:'NOT_EXECUTED'});
+   }
+   throw error;
+  }finally{client.release();}
  }
  return reply(send,res,405,{error:'method_not_allowed'});
 }
