@@ -144,7 +144,7 @@ async function inspectDatabase(pool, options = {}) {
       WITH RECURSIVE inherited_roles(role_oid) AS (
         SELECT oid FROM pg_roles WHERE rolname=current_user
         UNION
-        SELECT m.roleid FROM pg_auth_members m JOIN inherited_roles ir ON m.member=ir.role_oid
+        SELECT m.roleid FROM pg_auth_members m JOIN inherited_roles ir ON m.member=ir.role_oid WHERE m.inherit_option
       )
       SELECT r.rolname, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls
       FROM inherited_roles ir JOIN pg_roles r ON r.oid=ir.role_oid
@@ -160,7 +160,7 @@ async function inspectDatabase(pool, options = {}) {
         )
     `),
     pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()'),
-    pool.query("SELECT (has_table_privilege('keel_backup','public.keel_ledger_journals','INSERT') OR has_table_privilege('keel_backup','public.keel_ledger_journals','UPDATE') OR has_table_privilege('keel_backup','public.keel_ledger_journals','DELETE')) AS can_write")
+    pool.query("SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (has_table_privilege('keel_backup','public.keel_ledger_journals','INSERT') OR has_table_privilege('keel_backup','public.keel_ledger_journals','UPDATE') OR has_table_privilege('keel_backup','public.keel_ledger_journals','DELETE')) ELSE TRUE END AS can_write")
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
