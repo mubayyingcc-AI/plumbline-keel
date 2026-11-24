@@ -57,6 +57,7 @@ function evaluateInventory(input) {
   const runtimeMemberships = input.runtimeMemberships || [];
   const unsafeMemberships = runtimeMemberships.map(role => role.rolname);
   const runtimeOwnership = input.runtimeOwnership || {};
+  const authOwner = input.authOwner || {};
   const unsafeBackupMemberships = (input.backupMemberships || []).filter(role => role.rolname !== 'keel_backup_reader' || role.rolcanlogin !== false || role.rolinherit !== true || role.rolsuper !== false || role.rolcreatedb !== false || role.rolcreaterole !== false || role.rolreplication !== false || role.rolbypassrls !== false).map(role => role.rolname);
   const gates = [
     gate('migration_manifest', missingMigrations.length === 0,
