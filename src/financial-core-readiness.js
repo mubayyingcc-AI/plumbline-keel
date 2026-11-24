@@ -125,11 +125,13 @@ async function inspectDatabase(pool, options = {}) {
     pool.query(`
       SELECT c.relname AS table, format_type(a.atttypid,a.atttypmod) AS "tenantIdType", c.relrowsecurity AS "rlsEnabled",
              c.relforcerowsecurity AS "rlsForced",
-             EXISTS (
+             EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname='public' AND p.tablename=c.relname)
+             AND NOT EXISTS (
                SELECT 1 FROM pg_policies p
-               WHERE p.schemaname='public' AND p.tablename=c.relname
-                 AND COALESCE(p.qual,'') LIKE '%keel.tenant_id%'
-                 AND COALESCE(p.with_check,'') LIKE '%keel.tenant_id%'
+               WHERE p.schemaname='public' AND p.tablename=c.relname AND (
+                 (p.cmd IN ('ALL','SELECT','UPDATE','DELETE') AND COALESCE(p.qual,'') NOT LIKE '%keel.tenant_id%')
+                 OR (p.cmd IN ('ALL','INSERT','UPDATE') AND COALESCE(p.with_check,'') NOT LIKE '%keel.tenant_id%')
+               )
              ) AS "tenantPolicy"
       FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
