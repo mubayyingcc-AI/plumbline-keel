@@ -58,6 +58,7 @@ function evaluateInventory(input) {
   const unsafeMemberships = runtimeMemberships.map(role => role.rolname);
   const runtimeOwnership = input.runtimeOwnership || {};
   const authOwner = input.authOwner || {};
+  const schemaPrivileges = input.schemaPrivileges || {};
   const unsafeBackupMemberships = (input.backupMemberships || []).filter(role => role.rolname !== 'keel_backup_reader' || role.rolcanlogin !== false || role.rolinherit !== true || role.rolsuper !== false || role.rolcreatedb !== false || role.rolcreaterole !== false || role.rolreplication !== false || role.rolbypassrls !== false).map(role => role.rolname);
   const gates = [
     gate('migration_manifest', missingMigrations.length === 0,
@@ -83,9 +84,11 @@ function evaluateInventory(input) {
       (input.backupMemberships || []).length === 1 && unsafeBackupMemberships.length === 0 && backup.canWriteLedger !== true,
       'Dedicated backup login must be non-privileged, capped at six connections, read-only and a member only of a non-login, non-privileged keel_backup_reader.',
       { unsafeInheritedRoles: unsafeBackupMemberships }),
-    gate('security_definer_public_grants', input.publicSecurityDefinerExecute === 0,
-      'SECURITY DEFINER functions must not be executable by PUBLIC.',
-      { unsafeFunctionCount: input.publicSecurityDefinerExecute }),
+    gate('public_schema_create_privileges', schemaPrivileges.publicCreate === false && schemaPrivileges.runtimeCreate === false && schemaPrivileges.backupCreate === false,
+      'PUBLIC, runtime and backup identities must not be able to create objects in the public schema.', schemaPrivileges),
+    gate('security_definer_public_grants', input.publicSecurityDefinerExecute === 0 && input.unsafeSecurityDefinerGrants === 0,
+      'SECURITY DEFINER functions must not be executable by PUBLIC or granted outside the explicit runtime/backup allowlist.',
+      { unsafeFunctionCount: input.publicSecurityDefinerExecute, unsafeGrants: input.unsafeSecurityDefinerGrants }),
     gate('database_tls', input.databaseSsl === true && input.clientVerifiesCertificate === true,
       'The active PostgreSQL connection must use TLS and the Node client must verify the server certificate.',
       { ssl: input.databaseSsl === true, certificateVerification: input.clientVerifiesCertificate === true })
@@ -120,7 +123,7 @@ async function inspectDatabase(pool, options = {}) {
   }
   const [
     migrationResult, runtimeResult, tenantTableResult, backupResult,
-    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult, runtimeOwnershipResult, authOwnerResult
+    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult, runtimeOwnershipResult, authOwnerResult, schemaPrivilegeResult, definerGrantResult
   ] = await Promise.all([
     pool.query('SELECT version FROM public.keel_schema_migrations WHERE version = ANY($1::text[])', [REQUIRED_MIGRATIONS]),
     pool.query("SELECT current_user AS role, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user"),
@@ -129,7 +132,7 @@ async function inspectDatabase(pool, options = {}) {
              c.relforcerowsecurity AS "rlsForced",
              EXISTS (
                SELECT 1 FROM pg_policies p
-               WHERE p.schemaname='public' AND p.tablename=c.relname
+               WHERE p.schemaname='public' AND p.tablename=c.relname AND p.permissive='PERMISSIVE'
                  AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
                  AND (
                    p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
@@ -189,7 +192,7 @@ async function inspectDatabase(pool, options = {}) {
     pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()'),
     pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`),
     pool.query(`SELECT
-      (SELECT COUNT(*)::int FROM pg_class c WHERE c.relowner=r.oid AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','v','m','S')) AS "publicRelationsOwned",
+      (SELECT COUNT(*)::int FROM pg_class c WHERE c.relowner=r.oid AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','v','m','S','f')) AS "publicRelationsOwned",
       (SELECT COUNT(*)::int FROM pg_proc p WHERE p.proowner=r.oid AND p.pronamespace='public'::regnamespace AND p.prosecdef) AS "securityDefinerFunctionsOwned",
       (SELECT n.nspowner=r.oid FROM pg_namespace n WHERE n.nspname='public') AS "publicSchemaOwnedByRuntime",
       (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_roles owner ON owner.oid=p.proowner
@@ -199,6 +202,20 @@ async function inspectDatabase(pool, options = {}) {
           ))
       ) AS "unsafeSecurityDefinerFunctions"
       FROM pg_roles r WHERE r.rolname=current_user`),
+    pool.query(`SELECT
+      EXISTS (SELECT 1 FROM aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='CREATE') AS public_create,
+      has_schema_privilege('keel_runtime','public','CREATE') AS runtime_create,
+      has_schema_privilege('keel_backup','public','CREATE') AS backup_create
+      FROM pg_namespace n WHERE n.nspname='public'`),
+    pool.query(`SELECT COUNT(*)::int AS count
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+      JOIN pg_roles grantee ON grantee.oid=acl.grantee
+      WHERE n.nspname='public' AND p.prosecdef AND acl.privilege_type='EXECUTE'
+        AND NOT (
+          (grantee.rolname='keel_runtime' AND p.proname IN ('keel_authenticate_tenant_key','keel_touch_tenant_key'))
+          OR (grantee.rolname='keel_backup_reader' AND p.proname='keel_backup_tenant_ids')
+        )`),
     pool.query(`WITH RECURSIVE auth_owner_members(member_oid) AS (
       SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
       UNION
@@ -222,7 +239,9 @@ async function inspectDatabase(pool, options = {}) {
     databaseSsl: tlsResult.rows[0] ? tlsResult.rows[0].ssl === true : false,
     clientVerifiesCertificate: !!ssl && typeof ssl === 'object' && ssl.rejectUnauthorized === true,
     runtimeOwnership: runtimeOwnershipResult.rows[0] || {publicRelationsOwned:null,securityDefinerFunctionsOwned:null},
-    authOwner: authOwnerResult.rows[0] || {exists:false}
+    authOwner: authOwnerResult.rows[0] || {exists:false},
+    schemaPrivileges: schemaPrivilegeResult.rows[0] ? {publicCreate:schemaPrivilegeResult.rows[0].public_create,runtimeCreate:schemaPrivilegeResult.rows[0].runtime_create,backupCreate:schemaPrivilegeResult.rows[0].backup_create} : {},
+    unsafeSecurityDefinerGrants: definerGrantResult.rows[0] ? definerGrantResult.rows[0].count : null
   });
 }
 
