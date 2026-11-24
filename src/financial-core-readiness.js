@@ -173,6 +173,7 @@ async function inspectDatabase(pool, options = {}) {
           ))
       ) AS "unsafeSecurityDefinerFunctions"
       FROM pg_roles r WHERE r.rolname=current_user`)
+    pool.query("SELECT r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,(SELECT COUNT(*)::int FROM pg_auth_members m WHERE m.roleid=r.oid) AS member_count FROM pg_roles r WHERE r.rolname='keel_auth_owner'")
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
@@ -187,7 +188,8 @@ async function inspectDatabase(pool, options = {}) {
     publicSecurityDefinerExecute: functionGrantResult.rows[0] ? functionGrantResult.rows[0].count : null,
     databaseSsl: tlsResult.rows[0] ? tlsResult.rows[0].ssl === true : false,
     clientVerifiesCertificate: !!ssl && typeof ssl === 'object' && ssl.rejectUnauthorized === true,
-    runtimeOwnership: runtimeOwnershipResult.rows[0] || {publicRelationsOwned:null,securityDefinerFunctionsOwned:null}
+    runtimeOwnership: runtimeOwnershipResult.rows[0] || {publicRelationsOwned:null,securityDefinerFunctionsOwned:null},
+    authOwner: authOwnerResult.rows[0] || {exists:false}
   });
 }
 
