@@ -121,3 +121,9 @@ test('non-UUID tenant_id columns block the tenant RLS inventory', () => {
   input.tenantTables[0].tenantIdType = 'text';
   assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
 });
+
+test('a broad additional permissive policy blocks tenant readiness', () => {
+  const input = readyInventory();
+  input.tenantTables[0].tenantPolicy = false;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
+});
