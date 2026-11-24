@@ -252,13 +252,13 @@ function readBody(req) {
   });
 }
 
-function requestIp(req) {
-  if (TRUSTED_PROXY_HOPS > 0) {
+function requestIp(req, trustedProxyHops = TRUSTED_PROXY_HOPS) {
+  if (Number.isInteger(trustedProxyHops) && trustedProxyHops > 0 && trustedProxyHops <= 10) {
     const forwarded = String(req.headers['x-forwarded-for'] || '')
       .split(',')
       .map(value => value.trim())
       .filter(value => net.isIP(value));
-    const clientIndex = forwarded.length - TRUSTED_PROXY_HOPS;
+    const clientIndex = forwarded.length - trustedProxyHops;
     if (clientIndex >= 0) return forwarded[clientIndex];
   }
   return req.socket && req.socket.remoteAddress || 'unknown';
