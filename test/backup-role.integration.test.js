@@ -28,6 +28,25 @@ test('keel_backup is read-only and tenant-RLS constrained', { skip: !databaseUrl
   assert.equal(attributes, 'true');
   assert.equal(run("SELECT pg_has_role('keel_backup','keel_backup_reader','MEMBER')::text"), 'true');
   assert.equal(run("SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles u ON u.oid=m.member WHERE u.rolname='keel_backup' AND r.rolname<>'keel_backup_reader'"), '0');
+  const membershipAudit=path.join(__dirname,'..','ops','backup','backup-role-memberships.sql');
+  const audit=(expected=0)=>spawnSync('psql',[databaseUrl,'-X','-v','ON_ERROR_STOP=1','-A','-t','-f',membershipAudit],{encoding:'utf8'});
+  const cleanMemberships=audit();
+  assert.equal(cleanMemberships.status,0,cleanMemberships.stderr);
+  assert.equal(cleanMemberships.stdout.trim(),'keel_backup_reader');
+
+  // A privileged role nested beneath the read-only group must also be visible.
+  run('CREATE ROLE keel_backup_test_delegate NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');
+  try {
+    run('GRANT pg_read_all_data TO keel_backup_test_delegate');
+    run('GRANT keel_backup_test_delegate TO keel_backup_reader');
+    const nestedMemberships=audit();
+    assert.equal(nestedMemberships.status,0,nestedMemberships.stderr);
+    assert.equal(nestedMemberships.stdout.trim(),'keel_backup_reader,keel_backup_test_delegate,pg_read_all_data');
+  } finally {
+    run('REVOKE keel_backup_test_delegate FROM keel_backup_reader');
+    run('REVOKE pg_read_all_data FROM keel_backup_test_delegate');
+    run('DROP ROLE keel_backup_test_delegate');
+  }
   assert.equal(run("SELECT has_table_privilege('keel_backup','public.keel_ledger_journals','SELECT')::text"), 'true');
   for (const privilege of ['INSERT','UPDATE','DELETE','TRUNCATE']) {
     assert.equal(run(`SELECT has_table_privilege('keel_backup','public.keel_ledger_journals','${privilege}')::text`), 'false');
