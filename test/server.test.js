@@ -35,6 +35,21 @@ test('raw body reader preserves the exact signed payload bytes', async () => {
   assert.equal(await pending, '{"amount":"100"}');
 });
 
+test('rate limiter ignores untrusted forwarded addresses and selects the client behind configured proxies', () => {
+  const req = {headers:{'x-forwarded-for':'198.51.100.10, 203.0.113.25'},socket:{remoteAddress:'127.0.0.1'}};
+  assert.equal(requestIp(req,0),'127.0.0.1');
+  assert.equal(requestIp(req,1),'203.0.113.25');
+  assert.equal(requestIp(req,2),'198.51.100.10');
+});
+
+test('rate limiter bounds its in-memory client bucket table', () => {
+  for (let i=0;i<5000;i++) {
+    const req = {headers:{},socket:{remoteAddress:'2001:db8::' + i}};
+    rateLimited(req,'/api/evaluate');
+  }
+  assert.ok(rateLimitStateSize() <= 4096);
+});
+
 test('product catalogue is served by the API', async () => {
   const response = await fetch(base + '/api/products');
   const data = await response.json();
