@@ -208,7 +208,18 @@ function send(res, status, payload, type='application/json; charset=utf-8', extr
 async function readRawBody(req,limit=MAX_BODY){
   return new Promise((resolve,reject)=>{
     const chunks=[];let size=0,finished=false;
-    req.on('data',chunk=>{size+=chunk.length;if(size>limit&&!finished){finished=true;reject(Object.assign(new Error('request_body_too_large'),{status:413}));req.destroy();return;}chunks.push(chunk);});
+    req.on('data',chunk=>{
+      if(finished)return;
+      size+=chunk.length;
+      if(size>limit){
+        finished=true;
+        chunks.length=0;
+        reject(Object.assign(new Error('request_body_too_large'),{status:413}));
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end',()=>{if(!finished){finished=true;resolve(Buffer.concat(chunks).toString('utf8'));}});
     req.on('error',error=>{if(!finished){finished=true;reject(error);}});
   });
