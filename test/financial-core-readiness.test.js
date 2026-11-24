@@ -10,7 +10,7 @@ function readyInventory() {
     runtimeRole: {role:'keel_runtime',rolcanlogin:true,rolinherit:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
     runtimeMemberships: [],
     backupRole: {exists:true,rolcanlogin:true,rolinherit:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false,rolconnlimit:6,canWriteLedger:false},
-    backupMemberships: [{rolname:'keel_backup_reader',rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false}],
+    backupMemberships: [{rolname:'keel_backup_reader',rolcanlogin:false,rolinherit:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false}],
     publicSecurityDefinerExecute: 0,
     databaseSsl: true,
     clientVerifiesCertificate: true,
