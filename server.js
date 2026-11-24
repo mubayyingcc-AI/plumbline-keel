@@ -35,7 +35,7 @@ const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
 const RATE_BUCKET_MAX = 4096;
-const configuredProxyHops = Number.parseInt(process.env.KEEL_TRUSTED_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'),10);
+const configuredProxyHops = Number.parseInt(process.env.KEEL_TRUSTED_PROXY_HOPS ?? '1',10);
 const TRUSTED_PROXY_HOPS = Number.isInteger(configuredProxyHops) && configuredProxyHops >= 0 && configuredProxyHops <= 10 ? configuredProxyHops : 0;
 const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
 const rateBuckets = new Map();
