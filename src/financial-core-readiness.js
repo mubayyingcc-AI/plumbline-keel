@@ -127,13 +127,35 @@ async function inspectDatabase(pool, options = {}) {
     pool.query(`
       SELECT c.relname AS table, format_type(a.atttypid,a.atttypmod) AS "tenantIdType", c.relrowsecurity AS "rlsEnabled",
              c.relforcerowsecurity AS "rlsForced",
-             EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname='public' AND p.tablename=c.relname)
+             EXISTS (
+               SELECT 1 FROM pg_policies p
+               WHERE p.schemaname='public' AND p.tablename=c.relname
+                 AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
+                 AND (
+                   p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
+                   AND regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]()]|::text', '', 'g')
+                     = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
+                 )
+                 AND (
+                   p.cmd IN ('ALL','INSERT','UPDATE')
+                   AND regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]()]|::text', '', 'g')
+                     = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
+                   OR p.cmd IN ('SELECT','DELETE')
+                 )
+             )
              AND NOT EXISTS (
                SELECT 1 FROM pg_policies p
-               WHERE p.schemaname='public' AND p.tablename=c.relname AND (
-                 (p.cmd IN ('ALL','SELECT','UPDATE','DELETE') AND COALESCE(p.qual,'') NOT LIKE '%keel.tenant_id%')
-                 OR (p.cmd IN ('ALL','INSERT','UPDATE') AND COALESCE(p.with_check,'') NOT LIKE '%keel.tenant_id%')
-               )
+               WHERE p.schemaname='public' AND p.tablename=c.relname
+                 AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
+                 AND (
+                   (p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
+                     AND regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]()]|::text', '', 'g')
+                       <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
+                   OR
+                   (p.cmd IN ('ALL','INSERT','UPDATE')
+                     AND regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]()]|::text', '', 'g')
+                       <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
+                 )
              ) AS "tenantPolicy"
       FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -177,7 +199,14 @@ async function inspectDatabase(pool, options = {}) {
           ))
       ) AS "unsafeSecurityDefinerFunctions"
       FROM pg_roles r WHERE r.rolname=current_user`),
-    pool.query("SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,(SELECT COUNT(*)::int FROM pg_auth_members m WHERE m.roleid=r.oid) AS member_count FROM pg_roles r WHERE r.rolname='keel_auth_owner'")
+    pool.query(`WITH RECURSIVE auth_owner_members(member_oid) AS (
+      SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
+      UNION
+      SELECT m.member FROM pg_auth_members m JOIN auth_owner_members aom ON m.roleid=aom.member_oid
+    )
+    SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,
+      (SELECT COUNT(DISTINCT member_oid)::int FROM auth_owner_members) AS member_count
+    FROM pg_roles r WHERE r.rolname='keel_auth_owner'`)
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
