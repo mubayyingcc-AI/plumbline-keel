@@ -21,7 +21,7 @@ test('rate limiter ignores untrusted forwarded addresses and selects the client 
 
 test('rate limiter bounds its in-memory client bucket table', () => {
   for (let i=0;i<5000;i++) {
-    const req = {headers:{},socket:{remoteAddress:'192.0.2.' + (i % 250) + ':' + i}};
+    const req = {headers:{},socket:{remoteAddress:'2001:db8::' + i}};
     rateLimited(req,'/api/evaluate');
   }
   assert.ok(rateLimitStateSize() <= 4096);
