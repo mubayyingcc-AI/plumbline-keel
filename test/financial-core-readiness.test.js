@@ -14,7 +14,7 @@ function readyInventory() {
     publicSecurityDefinerExecute: 0,
     databaseSsl: true,
     clientVerifiesCertificate: true,
-    runtimeOwnership: {tenantTablesOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0}
+    runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0}
   };
 }
 
