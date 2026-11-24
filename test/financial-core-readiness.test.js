@@ -15,7 +15,7 @@ function readyInventory() {
     databaseSsl: true,
     clientVerifiesCertificate: true,
     runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0},
-    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolbypassrls:true,member_count:0},
+    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:true,member_count:0,inherited_role_count:0},
     schemaPrivileges: {publicCreate:false,runtimeCreate:false,backupCreate:false},
     unsafeSecurityDefinerGrants: 0
   };
@@ -137,4 +137,13 @@ test('public schema creation and unapproved security-definer grants block readin
   const result = evaluateInventory(input);
   assert.equal(result.gates.find(item=>item.id==='public_schema_create_privileges').status,'FAIL');
   assert.equal(result.gates.find(item=>item.id==='security_definer_public_grants').status,'FAIL');
+});
+
+test('dedicated function owner cannot inherit another role or replication privilege', () => {
+  const input = readyInventory();
+  input.authOwner.inherited_role_count = 1;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
+  input.authOwner.inherited_role_count = 0;
+  input.authOwner.rolreplication = true;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
 });
