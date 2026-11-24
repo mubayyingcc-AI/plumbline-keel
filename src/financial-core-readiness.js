@@ -50,7 +50,7 @@ function evaluateInventory(input) {
   const tables = new Map((input.tenantTables || []).map(row => [row.table, row]));
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
   const unsafeRls = (input.tenantTables || []).filter(row =>
-    !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy
+    !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy || row.tenantIdType !== 'uuid'
   ).map(row => row.table);
   const runtime = input.runtimeRole || {};
   const backup = input.backupRole || {};
@@ -123,7 +123,7 @@ async function inspectDatabase(pool, options = {}) {
     pool.query('SELECT version FROM public.keel_schema_migrations WHERE version = ANY($1::text[])', [REQUIRED_MIGRATIONS]),
     pool.query("SELECT current_user AS role, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user"),
     pool.query(`
-      SELECT c.relname AS table, c.relrowsecurity AS "rlsEnabled",
+      SELECT c.relname AS table, format_type(a.atttypid,a.atttypmod) AS "tenantIdType", c.relrowsecurity AS "rlsEnabled",
              c.relforcerowsecurity AS "rlsForced",
              EXISTS (
                SELECT 1 FROM pg_policies p
@@ -135,7 +135,7 @@ async function inspectDatabase(pool, options = {}) {
       JOIN pg_namespace n ON n.oid=c.relnamespace
       JOIN pg_attribute a ON a.attrelid=c.oid
       WHERE n.nspname='public' AND c.relkind IN ('r','p')
-        AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype
+        AND a.attname='tenant_id'
         AND a.attnum>0 AND NOT a.attisdropped
       ORDER BY c.relname
     `),
@@ -169,7 +169,7 @@ async function inspectDatabase(pool, options = {}) {
       (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_roles owner ON owner.oid=p.proowner
         WHERE p.pronamespace='public'::regnamespace AND p.prosecdef
           AND (owner.rolname<>'keel_auth_owner' OR NOT EXISTS (
-            SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg WHERE cfg LIKE 'search_path=%'
+            SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg WHERE replace(lower(cfg),' ','')='search_path=pg_catalog,public'
           ))
       ) AS "unsafeSecurityDefinerFunctions"
       FROM pg_roles r WHERE r.rolname=current_user`)
