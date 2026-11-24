@@ -15,7 +15,9 @@ function readyInventory() {
     databaseSsl: true,
     clientVerifiesCertificate: true,
     runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0},
-    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolbypassrls:true,member_count:0}
+    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolbypassrls:true,member_count:0},
+    schemaPrivileges: {publicCreate:false,runtimeCreate:false,backupCreate:false},
+    unsafeSecurityDefinerGrants: 0
   };
 }
 
@@ -126,4 +128,13 @@ test('a broad additional permissive policy blocks tenant readiness', () => {
   const input = readyInventory();
   input.tenantTables[0].tenantPolicy = false;
   assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
+});
+
+test('public schema creation and unapproved security-definer grants block readiness', () => {
+  const input = readyInventory();
+  input.schemaPrivileges.publicCreate = true;
+  input.unsafeSecurityDefinerGrants = 1;
+  const result = evaluateInventory(input);
+  assert.equal(result.gates.find(item=>item.id==='public_schema_create_privileges').status,'FAIL');
+  assert.equal(result.gates.find(item=>item.id==='security_definer_public_grants').status,'FAIL');
 });
