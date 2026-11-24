@@ -140,7 +140,16 @@ async function inspectDatabase(pool, options = {}) {
     `),
     pool.query("SELECT r.rolname, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls, r.rolconnlimit FROM pg_roles r WHERE r.rolname='keel_backup'"),
     pool.query("SELECT granted.rolname FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid JOIN pg_roles member ON member.oid=m.member WHERE member.rolname='keel_backup' ORDER BY granted.rolname"),
-    pool.query("SELECT granted.rolname, granted.rolsuper, granted.rolcreatedb, granted.rolcreaterole, granted.rolreplication, granted.rolbypassrls FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid JOIN pg_roles member ON member.oid=m.member WHERE member.rolname=current_user ORDER BY granted.rolname"),
+    pool.query(`
+      WITH RECURSIVE inherited_roles(role_oid) AS (
+        SELECT oid FROM pg_roles WHERE rolname=current_user
+        UNION
+        SELECT m.roleid FROM pg_auth_members m JOIN inherited_roles ir ON m.member=ir.role_oid
+      )
+      SELECT r.rolname, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls
+      FROM inherited_roles ir JOIN pg_roles r ON r.oid=ir.role_oid
+      WHERE r.rolname<>current_user ORDER BY r.rolname
+    `),
     pool.query(`
       SELECT COUNT(*)::int AS count
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
