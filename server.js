@@ -26,6 +26,7 @@ const paymentAuthority = require('./src/payment-authority');
 const authorityPersistence = require('./src/authority-persistence');
 const cardControl = require('./src/card-control');
 const reconciliationEngine = require('./src/reconciliation-engine');
+const financialCoreReadiness = require('./src/financial-core-readiness');
 const aiReleaseAssuranceApi = require('./src/ai-release-assurance-api');
 const openbbAdapter = require('./src/openbb-adapter');
 const PORT = Number(process.env.PORT || 3000);
@@ -176,11 +177,13 @@ async function dbPool() {
   if (!poolPromise) {
     const { Pool } = require('pg');
     poolPromise = (async () => {
-      const pool = new Pool({ connectionString: runtimeUrl, ssl: databaseSslOptions(), max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
+      const sslOptions = databaseSslOptions();
+      const pool = new Pool({ connectionString: runtimeUrl, ssl: sslOptions, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statement_timeout: 8000, query_timeout: 10000 });
       try {
         const identity = await pool.query('SELECT current_user AS runtime_role, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls FROM pg_roles WHERE rolname=current_user');
         const role = identity.rows[0];
         if (!role || role.runtime_role !== 'keel_runtime' || role.rolsuper || role.rolcreatedb || role.rolcreaterole || role.rolbypassrls) throw new Error('runtime_database_role_boundary_failed');
+        pool.readinessSslOptions = sslOptions;
         return pool;
       } catch (error) { await pool.end().catch(() => {}); throw error; }
     })().catch(error => { poolPromise = null; throw error; });
@@ -956,35 +959,26 @@ const server = http.createServer(async (req,res) => {
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
     }
     if (req.method === 'GET' && route === '/api/ledger/status') {
-      const pool = await dbPool();
-      if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
-      const [migrations, role, ledgerRls, accountingRls] = await Promise.all([
-        pool.query("SELECT version, applied_at FROM keel_schema_migrations WHERE version = ANY($1::text[]) ORDER BY version",[['012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql','014_accounting_books_and_periods.sql','015_period_close_dual_control.sql']]),
-        pool.query("SELECT current_user AS role, r.rolsuper AS is_superuser, r.rolbypassrls AS bypasses_rls FROM pg_roles r WHERE r.rolname=current_user"),
-        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines','keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads','keel_ledger_events']]),
-        pool.query("SELECT COUNT(*)::int AS tables, COUNT(*) FILTER (WHERE c.relrowsecurity)::int AS enabled, COUNT(*) FILTER (WHERE c.relforcerowsecurity)::int AS forced FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relname = ANY($1::text[])",[['keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods','keel_accounting_period_close_requests','keel_accounting_period_closures']])
-      ]);
-      const runtime = role.rows[0] || {};
-      const ledger = ledgerRls.rows[0] || {};
-      const accounting = accountingRls.rows[0] || {};
-      const migrationsReady = migrations.rowCount === 4;
-      const roleReady = runtime.role === 'keel_runtime' && runtime.is_superuser === false && runtime.bypasses_rls === false;
-      const rlsReady = ledger.tables === 7 && ledger.enabled === 7 && ledger.forced === 7 && accounting.tables === 5 && accounting.enabled === 5 && accounting.forced === 5;
-      const ready = migrationsReady && roleReady && rlsReady;
-      return send(res,ready?200:503,{
-        ok:ready,
-        status:ready?'READY':'BLOCKED',
-        runtimeRole:runtime.role || 'unknown',
-        privilegedRuntime:runtime.is_superuser === true || runtime.bypasses_rls === true,
-        migrations:migrations.rows,
-        rowLevelSecurity:{
-          ledgerTables:ledger.tables,ledgerEnabled:ledger.enabled,ledgerForced:ledger.forced,
-          accountingTables:accounting.tables,accountingEnabled:accounting.enabled,accountingForced:accounting.forced,
-          totalTables:(ledger.tables||0)+(accounting.tables||0),
-          totalForced:(ledger.forced||0)+(accounting.forced||0)
-        },
-        boundary:'Double-entry ledger, book and period schema with tenant RLS and dual-control final close evidence. Period reopen approvals, durable provider reconciliation and external settlement remain separate capabilities.'
-      });
+      let pool;
+      try {
+        pool = await dbPool();
+        if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured',readiness:{databaseReadiness:'FAIL',promotionEligible:false}});
+        const readiness = await financialCoreReadiness.inspectDatabase(pool,{ssl:pool.readinessSslOptions});
+        const ready = readiness.databaseReadiness === 'PASS';
+        return send(res,ready?200:503,{
+          ok:ready,
+          status:readiness.status,
+          runtimeRole:readiness.gates.find(gate=>gate.id==='runtime_role')?.role || 'unknown',
+          readiness
+        });
+      } catch (error) {
+        console.error('financial_core_readiness_inspection_failed',{name:error.name});
+        return send(res,503,{
+          ok:false,status:'BLOCKED',
+          reason:'readiness_inspection_failed',
+          readiness:{databaseReadiness:'UNKNOWN',promotionEligible:false,releaseApproval:'NOT_ASSESSED'}
+        });
+      }
     }
     if(route==='/api/assurance/authority/envelopes' && req.method==='POST'){
       if(!sameOriginIfBrowser(req))return send(res,403,{error:'origin_not_allowed'});

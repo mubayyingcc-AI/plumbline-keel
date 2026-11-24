@@ -124,7 +124,16 @@ The candidate implementation adds a durable lifecycle foundation in migration 01
 - Replayed provider event IDs with changed payloads are rejected; exact replays are idempotent.
 - Reconciliation records matched, pending or exception outcomes without automatically posting, reversing, settling or writing off a ledger journal.
 
-Candidate CI evidence on commit `934107779ccde747897016a57a7ee03243d4ff32`: application CI plus PostgreSQL 16 and PostgreSQL 18 migration, restricted-role and integration suites passed. The tests run against disposable databases; they are not evidence of a production deployment or a real provider connection.
+### Historical CI evidence correction (2026-11-24)
+
+The earlier statement that candidate commit `934107779ccde747897016a57a7ee03243d4ff32` passed application CI and PostgreSQL 16/18 ledger verification was incorrect and is superseded by the actual workflow records:
+
+- Application CI run [#482](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/42842512615) failed on malformed merge residue, including an unexpected `>>` token and duplicate `pool` declaration.
+- Ledger verification run [#313](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/42842512918) failed on the same source defect in PostgreSQL 16 and 18 integration jobs.
+- This contract's candidate commit `3733de7474da9b5a2c9a54bcbd32288ba92d3be2` also failed application CI [#320](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/42842760597) and ledger verification [#189](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/42842760958); the readiness endpoint returned 500 where the test required a fail-closed 503.
+- Later candidate commit `349eb952d027656916b25b760b377a3ee736f14a` associated with PR #95 has successful application CI [#696](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/43232675860), disaster-recovery verification [#175](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/43232675769), and ledger verification [#529](https://github.com/mubayyingcc-AI/plumbline-keel/actions/runs/43232675912), including PostgreSQL 16 and 18 jobs. Those results apply only to that exact candidate commit and its tested scope. They do not retroactively validate the PR #32 or PR #34 candidate commits, nor do they establish readiness of a different mainline or deployment SHA.
+
+PR #34 merged this architecture contract; its merge is not a test pass, certification, staging assurance or production approval. All CI evidence must be bound to the exact release candidate SHA. Disposable-database tests are not evidence of a production deployment or a real provider connection.
 
 This is a durable core primitive, not a complete provider integration. Provider-specific signature formats, key custody/rotation, mutual TLS, callback registration, provider sandbox certification, operational worker deployment, alerts, and real-money end-to-end certification remain open.
 
