@@ -282,6 +282,8 @@ function rateLimited(req, route) {
   const bucket = rateBuckets.get(key);
   if (bucket && now - bucket.startedAt < RATE_WINDOW_MS) {
     bucket.count += 1;
+    rateBuckets.delete(key);
+    rateBuckets.set(key,bucket);
     return bucket.count > limit;
   }
   rateBuckets.delete(key);
