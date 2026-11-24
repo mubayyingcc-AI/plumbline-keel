@@ -6,7 +6,7 @@ const { REQUIRED_MIGRATIONS, REQUIRED_TABLES, evaluateInventory } = require('../
 function readyInventory() {
   return {
     migrations: [...REQUIRED_MIGRATIONS],
-    tenantTables: REQUIRED_TABLES.map(table => ({table,rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
+    tenantTables: REQUIRED_TABLES.map(table => ({table,tenantIdType:'uuid',rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
     runtimeRole: {role:'keel_runtime',rolcanlogin:true,rolinherit:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
     runtimeMemberships: [],
     backupRole: {exists:true,rolcanlogin:true,rolinherit:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false,rolconnlimit:6,canWriteLedger:false},
@@ -114,4 +114,10 @@ test('dedicated BYPASSRLS function owner must remain non-login and unassumable',
   input.authOwner.member_count = 0;
   input.authOwner.rolcanlogin = true;
   assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
+});
+
+test('non-UUID tenant_id columns block the tenant RLS inventory', () => {
+  const input = readyInventory();
+  input.tenantTables[0].tenantIdType = 'text';
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
 });
