@@ -75,7 +75,7 @@ function evaluateInventory(input) {
       runtime.rolbypassrls === false && unsafeMemberships.length === 0,
       'Runtime role identity, role attributes and inherited memberships must remain least-privileged.',
       { role: runtime.role || 'unknown', unsafeMemberships }),
-    gate('auth_function_owner', authOwner.exists === true && authOwner.rolcanlogin === false && authOwner.rolsuper === false && authOwner.rolcreatedb === false && authOwner.rolcreaterole === false && authOwner.rolbypassrls === true && authOwner.member_count === 0, 'Dedicated BYPASSRLS function owner must be non-login and not assumable through role membership.', authOwner),
+    gate('auth_function_owner', authOwner.exists === true && authOwner.rolcanlogin === false && authOwner.rolsuper === false && authOwner.rolcreatedb === false && authOwner.rolcreaterole === false && authOwner.rolreplication === false && authOwner.rolbypassrls === true && authOwner.member_count === 0 && authOwner.inherited_role_count === 0, 'Dedicated BYPASSRLS function owner must be non-login and not assumable through role membership.', authOwner),
     gate('runtime_object_ownership', runtimeOwnership.publicRelationsOwned === 0 && runtimeOwnership.securityDefinerFunctionsOwned === 0 && runtimeOwnership.publicSchemaOwnedByRuntime === false && runtimeOwnership.unsafeSecurityDefinerFunctions === 0,
       'The runtime login must not own public relations, the public schema or SECURITY DEFINER functions; privileged functions must use the dedicated owner and fixed search_path.', runtimeOwnership),
     gate('backup_role', backup.exists === true && backup.rolcanlogin === true && backup.rolinherit === true &&
@@ -217,13 +217,20 @@ async function inspectDatabase(pool, options = {}) {
           (grantee.rolname='keel_runtime' AND p.oid IN (to_regprocedure('public.keel_authenticate_tenant_key(text)'),to_regprocedure('public.keel_touch_tenant_key(text,uuid)')))
           OR (grantee.rolname='keel_backup_reader' AND p.oid=to_regprocedure('public.keel_backup_tenant_ids()'))
         )`),
-    pool.query(`WITH RECURSIVE auth_owner_members(member_oid) AS (
-      SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
-      UNION
-      SELECT m.member FROM pg_auth_members m JOIN auth_owner_members aom ON m.roleid=aom.member_oid
-    )
-    SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,
-      (SELECT COUNT(DISTINCT member_oid)::int FROM auth_owner_members) AS member_count
+    pool.query(`WITH RECURSIVE
+      auth_owner_members(member_oid) AS (
+        SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
+        UNION
+        SELECT m.member FROM pg_auth_members m JOIN auth_owner_members aom ON m.roleid=aom.member_oid
+      ),
+      auth_owner_inherited_roles(role_oid) AS (
+        SELECT oid FROM pg_roles WHERE rolname='keel_auth_owner'
+        UNION
+        SELECT m.roleid FROM pg_auth_members m JOIN auth_owner_inherited_roles aor ON m.member=aor.role_oid
+      )
+    SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls,
+      (SELECT COUNT(DISTINCT member_oid)::int FROM auth_owner_members) AS member_count,
+      (SELECT GREATEST(COUNT(DISTINCT role_oid)-1,0)::int FROM auth_owner_inherited_roles) AS inherited_role_count
     FROM pg_roles r WHERE r.rolname='keel_auth_owner'`)
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
