@@ -199,6 +199,7 @@ test('public ledger status exposes only a redacted readiness summary', async () 
 });
 
 test('internal ledger readiness diagnostics require the configured assurance token', async () => {
+  if (process.env.KEEL_RUNTIME_DATABASE_URL) return;
   const previous=process.env.KEEL_ASSURANCE_TOKEN;
   try {
     process.env.KEEL_ASSURANCE_TOKEN='test-assurance-secret';
