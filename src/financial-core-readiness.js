@@ -75,7 +75,7 @@ function evaluateInventory(input) {
       { role: runtime.role || 'unknown', unsafeMemberships }),
     gate('runtime_object_ownership', runtimeOwnership.tenantTablesOwned === 0 && runtimeOwnership.securityDefinerFunctionsOwned === 0 && runtimeOwnership.publicSchemaOwnedByRuntime === false && runtimeOwnership.unsafeSecurityDefinerFunctions === 0,
       'The runtime login must not own tenant tables or SECURITY DEFINER functions.', runtimeOwnership),
-    gate('backup_role', backup.exists === true && backup.rolcanlogin === true &&
+    gate('backup_role', backup.exists === true && backup.rolcanlogin === true && backup.rolinherit === true &&
       backup.rolsuper === false && backup.rolcreatedb === false && backup.rolcreaterole === false &&
       backup.rolreplication === false && backup.rolbypassrls === false && backup.rolconnlimit === 6 &&
       (input.backupMemberships || []).length === 1 && unsafeBackupMemberships.length === 0 && backup.canWriteLedger !== true,
@@ -139,7 +139,7 @@ async function inspectDatabase(pool, options = {}) {
         AND a.attnum>0 AND NOT a.attisdropped
       ORDER BY c.relname
     `),
-    pool.query("SELECT r.rolname, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls, r.rolconnlimit FROM pg_roles r WHERE r.rolname='keel_backup'"),
+    pool.query("SELECT r.rolname, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls, r.rolconnlimit FROM pg_roles r WHERE r.rolname='keel_backup'"),
     pool.query(`WITH RECURSIVE backup_roles(role_oid) AS (SELECT oid FROM pg_roles WHERE rolname='keel_backup' UNION SELECT m.roleid FROM pg_auth_members m JOIN backup_roles br ON m.member=br.role_oid) SELECT r.rolname,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls FROM backup_roles br JOIN pg_roles r ON r.oid=br.role_oid WHERE r.rolname<>'keel_backup' ORDER BY r.rolname`),
     pool.query(`
       WITH RECURSIVE inherited_roles(role_oid) AS (
