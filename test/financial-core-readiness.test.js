@@ -14,7 +14,8 @@ function readyInventory() {
     publicSecurityDefinerExecute: 0,
     databaseSsl: true,
     clientVerifiesCertificate: true,
-    runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0}
+    runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0},
+    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolbypassrls:true,member_count:0}
   };
 }
 
@@ -104,4 +105,13 @@ test('runtime role inheritance and ownership of protected objects block readines
   input.runtimeRole.rolinherit = false;
   input.runtimeOwnership.publicSchemaOwnedByRuntime = true;
   assert.equal(evaluateInventory(input).gates.find(item=>item.id==='runtime_object_ownership').status,'FAIL');
+});
+
+test('dedicated BYPASSRLS function owner must remain non-login and unassumable', () => {
+  const input = readyInventory();
+  input.authOwner.member_count = 1;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
+  input.authOwner.member_count = 0;
+  input.authOwner.rolcanlogin = true;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
 });
