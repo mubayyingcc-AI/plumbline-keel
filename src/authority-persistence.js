@@ -3,7 +3,7 @@ const crypto=require('node:crypto');
 const {canonical}=require('./authority-chain');
 function fail(code,status=403){const e=new Error(code);e.code=code;e.status=status;throw e;}
 function digest(v){return crypto.createHash('sha256').update(canonical(v)).digest('hex');}
-const ACTIONS=new Set(['ledger:journal:post','ledger:reservation:create','ledger:reservation:release','ledger:reservation:consume','provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired','provider:instruction:outcome']);
+const ACTIONS=new Set(['ledger:journal:post','ledger:reservation:create','ledger:reservation:release','ledger:reservation:consume','provider:instruction:enqueue','provider:instruction:dispatch','provider:instruction:recover_expired','provider:instruction:outcome','integration:tool:invoke']);
 function normalizeEnvelope(input,grantorPrincipalId){
  if(!input||typeof input!=='object'||Array.isArray(input))fail('authority_envelope_required',400);
  const granteePrincipalId=String(input.granteePrincipalId||'').trim();
@@ -23,7 +23,7 @@ function normalizeEnvelope(input,grantorPrincipalId){
  return {grantorPrincipalId,granteePrincipalId,scopes,resourceIds,currency,maxAmountMinor,approvalRequired,approverPrincipalId,validFrom:new Date(validFrom).toISOString(),expiresAt:new Date(expiresAt).toISOString(),allowSubdelegation:false};
 }
 async function authorizeAndRecord(client,context){
- const {tenantId,actor,envelopeId,action,resourceId,amountMinor,currency,requestFingerprint,executionRef}=context;
+ const {tenantId,actor,envelopeId,action,resourceId,additionalResourceIds,amountMinor,currency,requestFingerprint,executionRef}=context;
  if(!actor||!actor.principal_id||!actor.key_id)fail('named_actor_principal_required');
  if(!ACTIONS.has(action))fail('financial_action_not_supported',400);
  if(!envelopeId)fail('authority_envelope_header_required');
@@ -39,6 +39,7 @@ async function authorizeAndRecord(client,context){
  const now=Date.now();if(now<Date.parse(e.valid_from)||now>=Date.parse(e.expires_at))reasons.push('DELEGATION_NOT_CURRENT');
  const scopes=Array.isArray(e.scopes)?e.scopes:[];if(!scopes.includes(action))reasons.push('ACTION_OUTSIDE_ENVELOPE');
  const resources=Array.isArray(e.resource_ids)?e.resource_ids:[];if(!resources.length)reasons.push('RESOURCE_SCOPE_REQUIRED');else if(!resourceId||!resources.includes(resourceId))reasons.push('RESOURCE_OUTSIDE_ENVELOPE');
+ if(Array.isArray(additionalResourceIds)&&additionalResourceIds.some(id=>typeof id!=='string'||!resources.includes(id)))reasons.push('ADDITIONAL_RESOURCE_OUTSIDE_ENVELOPE');
  if(amountMinor!==undefined&&amountMinor!==null){
   if(typeof amountMinor!=='string'||!/^(0|[1-9][0-9]*)$/.test(amountMinor))reasons.push('ACTION_AMOUNT_INVALID');
   else if(e.max_amount_minor!==null&&BigInt(amountMinor)>BigInt(e.max_amount_minor))reasons.push('AMOUNT_LIMIT_EXCEEDED');

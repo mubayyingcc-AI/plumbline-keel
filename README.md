@@ -53,3 +53,45 @@ Keel now includes a domain-neutral deterministic release-assessment core for AI 
 - Tests: `test/ai-release-assurance.test.js`
 
 The current implementation includes a deterministic assessment library, a tenant-authenticated API for immutable PostgreSQL-backed assessments, and Ed25519 release-attestation signing/verification. The API derives tenant identity from the authenticated key and enforces forced RLS; high/critical releases remain on HOLD until an authenticated independent-review workflow is available. Keel does not yet execute CI pipelines or independently authenticate external evidence producers. OIDC/workload identity, CI and model-registry adapters, trusted key registration/revocation, and production rollout remain integration work. The product catalogue marks this status explicitly.
+
+
+## Organisational Intelligence Control Plane
+
+The isolated `feat/organisational-control-plane-v1` development branch adds a tenant-scoped plugin and agent capability registry, deterministic capability policy evaluation, human-approval-aware action requests, exact target-resource authority binding and immutable evidence linkage to Keel's existing Authority Envelopes and Action Proof Objects. The website includes a synthetic control-plane test lab backed by the same Node.js policy module.
+
+- Architecture: `docs/ORGANISATIONAL_INTELLIGENCE_CONTROL_PLANE.md`
+- Policy core: `src/organisational-control-plane.js`
+- Tenant API: `src/organisational-control-plane-api.js`
+- Migration: `db/migrations/024_organisational_control_plane.sql`
+- Public test endpoints: `GET /api/control/sandbox/scenarios`, `POST /api/control/sandbox/runs`
+- Authenticated tenant endpoints: `POST/GET /api/control/integrations`, `POST /api/control/integrations/revoke`, `POST /api/control/actions/evaluate`, `GET /api/control/actions`
+
+The API evaluates and records authorisation only. It does not execute external plugin actions or issue an execution token. Production enforcement requires a Keel-mediated connector/gateway or equivalent native enforcement, scoped credentials, verified workload identity, connector-specific security testing and customer approval. Migration 024 is included in the guarded migration runner but has **not** been applied to any environment.
+
+
+## Infrastructure Finance & Assurance
+
+Keel's Infrastructure Finance & Assurance foundation provides tenant-scoped infrastructure project registration and immutable, reproducible assessment history. It connects asset value, existing encumbrances, haircut assumptions, contracted versus collected revenue, operating costs, debt service, deployed capacity, utilisation and source-evidence states.
+
+- Assessment engine: `src/infrastructure-finance-assurance.js`
+- Authenticated API: `src/infrastructure-finance-assurance-api.js`
+- Migration: `db/migrations/025_infrastructure_finance_assurance.sql`
+- Public synthetic scenarios: `GET /api/infrastructure/sandbox/scenarios`, `POST /api/infrastructure/sandbox/runs`
+- Tenant project API: `GET/POST /api/infrastructure/projects`
+- Tenant assessment API: `POST /api/infrastructure/assessments`, `GET /api/infrastructure/assessments?projectId=<projectId>`
+
+The engine reports deterministic diagnostics and explicit evidence gaps. It does not provide a credit rating, valuation opinion, legal-title conclusion, financing recommendation or lending decision. Inputs must be independently sourced and verified. No telemetry, bank, custodian, asset registry or NVIDIA connector is connected. Migration 025 has not been applied outside disposable CI.
+
+
+## Infrastructure Finance & Assurance
+
+Keel now has an isolated development implementation of a deterministic infrastructure finance assessment engine, tenant-scoped project registry, immutable assessment history and a synthetic website test lab. It evaluates declared asset value, encumbrances, haircut assumptions, contracted and collected revenue, operating costs, debt service, deployed/available capacity and evidence states.
+
+- Engine: `src/infrastructure-finance-assurance.js`
+- Tenant API: `src/infrastructure-finance-assurance-api.js`
+- Migration 025: `db/migrations/025_infrastructure_finance_assurance.sql`
+- Public synthetic scenarios: `GET /api/infrastructure/sandbox/scenarios`, `POST /api/infrastructure/sandbox/runs`
+- Tenant APIs: `GET/POST /api/infrastructure/projects`, `POST /api/infrastructure/assessments`, `GET /api/infrastructure/assessments?projectId=<projectId>`
+- Ecosystem partnership brief: `docs/NVIDIA_ECOSYSTEM_PARTNERSHIP_BRIEF.md`
+
+This is not a credit rating, valuation, legal-title conclusion, lending recommendation or financing execution service. No NVIDIA, bank, custodian, telemetry or asset-registry integration is connected. The partnership brief is a proposal only and makes no claim of NVIDIA endorsement or partnership. Migration 025 is registered in the guarded runner and has not been applied to staging or production.
