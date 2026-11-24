@@ -73,6 +73,7 @@ function evaluateInventory(input) {
       runtime.rolbypassrls === false && unsafeMemberships.length === 0,
       'Runtime role identity, role attributes and inherited memberships must remain least-privileged.',
       { role: runtime.role || 'unknown', unsafeMemberships }),
+    gate('auth_function_owner', authOwner.exists === true && authOwner.rolcanlogin === false && authOwner.rolsuper === false && authOwner.rolcreatedb === false && authOwner.rolcreaterole === false && authOwner.rolbypassrls === true && authOwner.member_count === 0, 'Dedicated BYPASSRLS function owner must be non-login and not assumable through role membership.', authOwner),
     gate('runtime_object_ownership', runtimeOwnership.publicRelationsOwned === 0 && runtimeOwnership.securityDefinerFunctionsOwned === 0 && runtimeOwnership.publicSchemaOwnedByRuntime === false && runtimeOwnership.unsafeSecurityDefinerFunctions === 0,
       'The runtime login must not own public relations, the public schema or SECURITY DEFINER functions; privileged functions must use the dedicated owner and fixed search_path.', runtimeOwnership),
     gate('backup_role', backup.exists === true && backup.rolcanlogin === true && backup.rolinherit === true &&
