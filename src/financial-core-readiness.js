@@ -172,7 +172,7 @@ async function inspectDatabase(pool, options = {}) {
             SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg WHERE replace(lower(cfg),' ','')='search_path=pg_catalog,public'
           ))
       ) AS "unsafeSecurityDefinerFunctions"
-      FROM pg_roles r WHERE r.rolname=current_user`)
+      FROM pg_roles r WHERE r.rolname=current_user`),
     pool.query("SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,(SELECT COUNT(*)::int FROM pg_auth_members m WHERE m.roleid=r.oid) AS member_count FROM pg_roles r WHERE r.rolname='keel_auth_owner'")
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
