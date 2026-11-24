@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { server } = require('../server');
+const { server, rateLimited, requestIp, rateLimitStateSize } = require('../server');
 
 let base;
 test.before(async () => {
@@ -10,6 +10,21 @@ test.before(async () => {
 });
 test.after(async () => {
   await new Promise(resolve => server.close(resolve));
+});
+
+test('rate limiter ignores untrusted forwarded addresses and selects the client behind configured proxies', () => {
+  const req = {headers:{'x-forwarded-for':'198.51.100.10, 203.0.113.25'},socket:{remoteAddress:'127.0.0.1'}};
+  assert.equal(requestIp(req,0),'127.0.0.1');
+  assert.equal(requestIp(req,1),'203.0.113.25');
+  assert.equal(requestIp(req,2),'198.51.100.10');
+});
+
+test('rate limiter bounds its in-memory client bucket table', () => {
+  for (let i=0;i<5000;i++) {
+    const req = {headers:{},socket:{remoteAddress:'192.0.2.' + (i % 250) + ':' + i}};
+    rateLimited(req,'/api/evaluate');
+  }
+  assert.ok(rateLimitStateSize() <= 4096);
 });
 
 test('product catalogue is served by the API', async () => {
