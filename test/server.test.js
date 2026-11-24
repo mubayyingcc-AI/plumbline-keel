@@ -1,7 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { server } = require('../server');
+const { server, readRawBody } = require('../server');
+const { EventEmitter } = require('node:events');
 
 let base;
 test.before(async () => {
@@ -10,6 +11,28 @@ test.before(async () => {
 });
 test.after(async () => {
   await new Promise(resolve => server.close(resolve));
+});
+
+test('raw body limit rejects oversized payloads while preserving the response socket', async () => {
+  const req = new EventEmitter();
+  let resumed = false;
+  req.resume = () => { resumed = true; };
+  const pending = readRawBody(req, 4);
+  req.emit('data', Buffer.from('12345'));
+  await assert.rejects(pending, error => error.status === 413 && error.message === 'request_body_too_large');
+  assert.equal(resumed, true);
+  req.emit('data', Buffer.from('discarded'));
+  req.emit('end');
+});
+
+test('raw body reader preserves the exact signed payload bytes', async () => {
+  const req = new EventEmitter();
+  req.resume = () => {};
+  const pending = readRawBody(req, 32);
+  req.emit('data', Buffer.from('{"amount":'));
+  req.emit('data', Buffer.from('"100"}'));
+  req.emit('end');
+  assert.equal(await pending, '{"amount":"100"}');
 });
 
 test('product catalogue is served by the API', async () => {
