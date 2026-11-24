@@ -148,7 +148,7 @@ async function inspectDatabase(pool, options = {}) {
              )
              AND NOT EXISTS (
                SELECT 1 FROM pg_policies p
-               WHERE p.schemaname='public' AND p.tablename=c.relname
+               WHERE p.schemaname='public' AND p.tablename=c.relname AND p.permissive='PERMISSIVE'
                  AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
                  AND (
                    (p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
@@ -204,7 +204,7 @@ async function inspectDatabase(pool, options = {}) {
       FROM pg_roles r WHERE r.rolname=current_user`),
     pool.query(`SELECT
       EXISTS (SELECT 1 FROM aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='CREATE') AS public_create,
-      has_schema_privilege('keel_runtime','public','CREATE') AS runtime_create,
+      CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN has_schema_privilege('keel_runtime','public','CREATE') ELSE TRUE END AS runtime_create,
       CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_schema_privilege('keel_backup','public','CREATE') ELSE TRUE END AS backup_create
       FROM pg_namespace n WHERE n.nspname='public'`),
     pool.query(`SELECT COUNT(*)::int AS count
@@ -214,8 +214,8 @@ async function inspectDatabase(pool, options = {}) {
       WHERE n.nspname='public' AND p.prosecdef AND acl.privilege_type='EXECUTE'
         AND acl.grantee<>p.proowner
         AND NOT (
-          (grantee.rolname='keel_runtime' AND p.proname IN ('keel_authenticate_tenant_key','keel_touch_tenant_key'))
-          OR (grantee.rolname='keel_backup_reader' AND p.proname='keel_backup_tenant_ids')
+          (grantee.rolname='keel_runtime' AND p.oid IN ('public.keel_authenticate_tenant_key(text)'::regprocedure,'public.keel_touch_tenant_key(text,uuid)'::regprocedure))
+          OR (grantee.rolname='keel_backup_reader' AND p.oid='public.keel_backup_tenant_ids()'::regprocedure)
         )`),
     pool.query(`WITH RECURSIVE auth_owner_members(member_oid) AS (
       SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
