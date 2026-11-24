@@ -1,0 +1,72 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { REQUIRED_MIGRATIONS, REQUIRED_TABLES, evaluateInventory } = require('../src/financial-core-readiness');
+
+function readyInventory() {
+  return {
+    migrations: [...REQUIRED_MIGRATIONS],
+    tenantTables: REQUIRED_TABLES.map(table => ({table,rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
+    runtimeRole: {role:'keel_runtime',rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
+    runtimeMemberships: [],
+    backupRole: {exists:true,rolcanlogin:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false,rolconnlimit:6,canWriteLedger:false},
+    backupMemberships: ['keel_backup_reader'],
+    publicSecurityDefinerExecute: 0,
+    databaseSsl: true,
+    clientVerifiesCertificate: true
+  };
+}
+
+test('complete inventory passes only when all database assurance gates pass', () => {
+  const result = evaluateInventory(readyInventory());
+  assert.equal(result.status,'STRUCTURE_READY');
+  assert.equal(result.databaseReadiness,'PASS');
+  assert.equal(result.promotionEligible,false);
+  assert.equal(result.releaseApproval,'NOT_ASSESSED');
+  assert.ok(result.gates.every(item => item.status === 'PASS'));
+});
+
+test('missing migration is a hard block and is named', () => {
+  const input = readyInventory();
+  input.migrations = input.migrations.filter(name => name !== '023_backup_role_connection_capacity.sql');
+  const result = evaluateInventory(input);
+  const gate = result.gates.find(item => item.id === 'migration_manifest');
+  assert.equal(result.status,'BLOCKED');
+  assert.deepEqual(gate.missing,['023_backup_role_connection_capacity.sql']);
+});
+
+test('missing, unforced or policy-less tenant table is a hard block', () => {
+  const input = readyInventory();
+  input.tenantTables = input.tenantTables.filter(row => row.table !== 'keel_provider_inbox');
+  input.tenantTables[0] = {...input.tenantTables[0],rlsForced:false};
+  const result = evaluateInventory(input);
+  assert.equal(result.status,'BLOCKED');
+  assert.ok(result.gates.find(item=>item.id==='required_financial_core_tables').missing.includes('keel_provider_inbox'));
+  assert.ok(result.gates.find(item=>item.id==='tenant_rls_inventory').unsafeTables.length > 0);
+});
+
+test('privileged or unexpected runtime role membership blocks readiness', () => {
+  const input = readyInventory();
+  input.runtimeMemberships = [{rolname:'keel_auth_owner',rolbypassrls:true}];
+  const result = evaluateInventory(input);
+  assert.equal(result.gates.find(item=>item.id==='runtime_role').status,'FAIL');
+});
+
+test('backup privilege, public definer execute and unverified TLS each block readiness', () => {
+  const input = readyInventory();
+  input.backupRole.canWriteLedger = true;
+  input.publicSecurityDefinerExecute = 1;
+  input.clientVerifiesCertificate = false;
+  const result = evaluateInventory(input);
+  for (const id of ['backup_role','security_definer_public_grants','database_tls']) {
+    assert.equal(result.gates.find(item=>item.id===id).status,'FAIL',id);
+  }
+});
+
+test('unknown or empty inventory can never be promoted', () => {
+  const result = evaluateInventory({});
+  assert.equal(result.status,'BLOCKED');
+  assert.equal(result.databaseReadiness,'FAIL');
+  assert.equal(result.promotionEligible,false);
+  assert.ok(result.gates.some(item=>item.status==='FAIL'));
+});
