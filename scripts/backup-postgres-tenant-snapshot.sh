@@ -7,7 +7,14 @@ umask 077
 : "${KEEL_BACKUP_AGE_RECIPIENT:?KEEL_BACKUP_AGE_RECIPIENT required}"
 : "${KEEL_BACKUP_DATABASE_ID:?KEEL_BACKUP_DATABASE_ID required}"
 
-source /opt/keel/snapshot-keeper.sh
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/snapshot-keeper.sh" ]]; then
+  source "$SCRIPT_DIR/snapshot-keeper.sh"
+  BACKUP_ROLE_MEMBERSHIPS_SQL="$SCRIPT_DIR/backup-role-memberships.sql"
+else
+  source "$SCRIPT_DIR/../ops/backup/snapshot-keeper.sh"
+  BACKUP_ROLE_MEMBERSHIPS_SQL="$SCRIPT_DIR/../ops/backup/backup-role-memberships.sql"
+fi
 
 for bin in psql pg_dump age sha256sum node tar awk grep sed; do
   command -v "$bin" >/dev/null 2>&1 || { echo "missing_required_command:$bin" >&2; exit 127; }
@@ -17,7 +24,7 @@ psqlq() { psql "$DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
 
 identity="$(psqlq -c "SELECT current_user||'|'||CASE WHEN rolsuper THEN '1' ELSE '0' END||'|'||CASE WHEN rolbypassrls THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreatedb THEN '1' ELSE '0' END||'|'||CASE WHEN rolcreaterole THEN '1' ELSE '0' END||'|'||CASE WHEN rolreplication THEN '1' ELSE '0' END FROM pg_roles WHERE rolname=current_user")"
 [[ "$identity" == "keel_backup|0|0|0|0|0" ]] || { echo "backup_requires_dedicated_non_bypass_keel_backup_login" >&2; exit 78; }
-backup_role_memberships="$(psqlq -f /opt/keel/backup-role-memberships.sql)"
+backup_role_memberships="$(psqlq -f "$BACKUP_ROLE_MEMBERSHIPS_SQL")"
 [[ "$backup_role_memberships" == "keel_backup_reader" ]] || {
   echo "backup_blocked_unapproved_direct_or_transitive_role_membership:$backup_role_memberships" >&2
   exit 78
