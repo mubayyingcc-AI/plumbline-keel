@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { server, readRawBody } = require('../server');
+const { server, readRawBody, rateLimited, requestIp, rateLimitStateSize } = require('../server');
 const { EventEmitter } = require('node:events');
 
 let base;
