@@ -205,13 +205,14 @@ async function inspectDatabase(pool, options = {}) {
     pool.query(`SELECT
       EXISTS (SELECT 1 FROM aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='CREATE') AS public_create,
       has_schema_privilege('keel_runtime','public','CREATE') AS runtime_create,
-      has_schema_privilege('keel_backup','public','CREATE') AS backup_create
+      CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN has_schema_privilege('keel_backup','public','CREATE') ELSE TRUE END AS backup_create
       FROM pg_namespace n WHERE n.nspname='public'`),
     pool.query(`SELECT COUNT(*)::int AS count
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
       JOIN pg_roles grantee ON grantee.oid=acl.grantee
       WHERE n.nspname='public' AND p.prosecdef AND acl.privilege_type='EXECUTE'
+        AND acl.grantee<>p.proowner
         AND NOT (
           (grantee.rolname='keel_runtime' AND p.proname IN ('keel_authenticate_tenant_key','keel_touch_tenant_key'))
           OR (grantee.rolname='keel_backup_reader' AND p.proname='keel_backup_tenant_ids')
