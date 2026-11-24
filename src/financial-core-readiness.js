@@ -50,15 +50,15 @@ function evaluateInventory(input) {
   const tables = new Map((input.tenantTables || []).map(row => [row.table, row]));
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
   const unsafeRls = (input.tenantTables || []).filter(row =>
-    !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy
+    !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy || row.tenantIdType !== 'uuid'
   ).map(row => row.table);
   const runtime = input.runtimeRole || {};
   const backup = input.backupRole || {};
   const runtimeMemberships = input.runtimeMemberships || [];
-  const unsafeMemberships = runtimeMemberships.filter(role =>
-    role.rolsuper || role.rolbypassrls || role.rolcreatedb || role.rolcreaterole ||
-    ['keel_auth_owner', 'keel_backup', 'keel_backup_reader'].includes(role.rolname)
-  ).map(role => role.rolname);
+  const unsafeMemberships = runtimeMemberships.map(role => role.rolname);
+  const runtimeOwnership = input.runtimeOwnership || {};
+  const authOwner = input.authOwner || {};
+  const unsafeBackupMemberships = (input.backupMemberships || []).filter(role => role.rolname !== 'keel_backup_reader' || role.rolcanlogin !== false || role.rolinherit !== true || role.rolsuper !== false || role.rolcreatedb !== false || role.rolcreaterole !== false || role.rolreplication !== false || role.rolbypassrls !== false).map(role => role.rolname);
   const gates = [
     gate('migration_manifest', missingMigrations.length === 0,
       missingMigrations.length ? 'Required migrations are missing.' : 'All required migrations 012–023 are recorded.',
@@ -69,17 +69,20 @@ function evaluateInventory(input) {
     gate('tenant_rls_inventory', unsafeRls.length === 0,
       unsafeRls.length ? 'Tenant tables must have ENABLE RLS, FORCE RLS and a tenant-context policy.' : 'Every discovered tenant_id UUID table has forced RLS and a tenant-context policy.',
       { unsafeTables: unsafeRls, discoveredTenantTables: tables.size }),
-    gate('runtime_role', runtime.role === 'keel_runtime' && runtime.rolsuper === false &&
+    gate('runtime_role', runtime.role === 'keel_runtime' && runtime.rolcanlogin === true && runtime.rolinherit === false && runtime.rolsuper === false &&
       runtime.rolcreatedb === false && runtime.rolcreaterole === false && runtime.rolreplication === false &&
       runtime.rolbypassrls === false && unsafeMemberships.length === 0,
       'Runtime role identity, role attributes and inherited memberships must remain least-privileged.',
       { role: runtime.role || 'unknown', unsafeMemberships }),
-    gate('backup_role', backup.exists === true && backup.rolcanlogin === true &&
+    gate('auth_function_owner', authOwner.exists === true && authOwner.rolcanlogin === false && authOwner.rolsuper === false && authOwner.rolcreatedb === false && authOwner.rolcreaterole === false && authOwner.rolbypassrls === true && authOwner.member_count === 0, 'Dedicated BYPASSRLS function owner must be non-login and not assumable through role membership.', authOwner),
+    gate('runtime_object_ownership', runtimeOwnership.publicRelationsOwned === 0 && runtimeOwnership.securityDefinerFunctionsOwned === 0 && runtimeOwnership.publicSchemaOwnedByRuntime === false && runtimeOwnership.unsafeSecurityDefinerFunctions === 0,
+      'The runtime login must not own public relations, the public schema or SECURITY DEFINER functions; privileged functions must use the dedicated owner and fixed search_path.', runtimeOwnership),
+    gate('backup_role', backup.exists === true && backup.rolcanlogin === true && backup.rolinherit === true &&
       backup.rolsuper === false && backup.rolcreatedb === false && backup.rolcreaterole === false &&
       backup.rolreplication === false && backup.rolbypassrls === false && backup.rolconnlimit === 6 &&
-      (input.backupMemberships || []).length === 1 &&
-      (input.backupMemberships || [])[0] === 'keel_backup_reader' && backup.canWriteLedger !== true,
-      'Dedicated backup login must be non-privileged, capped at six connections, read-only and a member only of keel_backup_reader.'),
+      (input.backupMemberships || []).length === 1 && unsafeBackupMemberships.length === 0 && backup.canWriteLedger !== true,
+      'Dedicated backup login must be non-privileged, capped at six connections, read-only and a member only of a non-login, non-privileged keel_backup_reader.',
+      { unsafeInheritedRoles: unsafeBackupMemberships }),
     gate('security_definer_public_grants', input.publicSecurityDefinerExecute === 0,
       'SECURITY DEFINER functions must not be executable by PUBLIC.',
       { unsafeFunctionCount: input.publicSecurityDefinerExecute }),
@@ -117,34 +120,36 @@ async function inspectDatabase(pool, options = {}) {
   }
   const [
     migrationResult, runtimeResult, tenantTableResult, backupResult,
-    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult
+    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult, runtimeOwnershipResult, authOwnerResult
   ] = await Promise.all([
     pool.query('SELECT version FROM public.keel_schema_migrations WHERE version = ANY($1::text[])', [REQUIRED_MIGRATIONS]),
-    pool.query("SELECT current_user AS role, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user"),
+    pool.query("SELECT current_user AS role, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user"),
     pool.query(`
-      SELECT c.relname AS table, c.relrowsecurity AS "rlsEnabled",
+      SELECT c.relname AS table, format_type(a.atttypid,a.atttypmod) AS "tenantIdType", c.relrowsecurity AS "rlsEnabled",
              c.relforcerowsecurity AS "rlsForced",
-             EXISTS (
+             EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname='public' AND p.tablename=c.relname)
+             AND NOT EXISTS (
                SELECT 1 FROM pg_policies p
-               WHERE p.schemaname='public' AND p.tablename=c.relname
-                 AND COALESCE(p.qual,'') LIKE '%keel.tenant_id%'
-                 AND COALESCE(p.with_check,'') LIKE '%keel.tenant_id%'
+               WHERE p.schemaname='public' AND p.tablename=c.relname AND (
+                 (p.cmd IN ('ALL','SELECT','UPDATE','DELETE') AND COALESCE(p.qual,'') NOT LIKE '%keel.tenant_id%')
+                 OR (p.cmd IN ('ALL','INSERT','UPDATE') AND COALESCE(p.with_check,'') NOT LIKE '%keel.tenant_id%')
+               )
              ) AS "tenantPolicy"
       FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
       JOIN pg_attribute a ON a.attrelid=c.oid
       WHERE n.nspname='public' AND c.relkind IN ('r','p')
-        AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype
+        AND a.attname='tenant_id'
         AND a.attnum>0 AND NOT a.attisdropped
       ORDER BY c.relname
     `),
-    pool.query("SELECT r.rolname, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls, r.rolconnlimit FROM pg_roles r WHERE r.rolname='keel_backup'"),
-    pool.query(`WITH RECURSIVE backup_roles(role_oid) AS (SELECT oid FROM pg_roles WHERE rolname='keel_backup' UNION SELECT m.roleid FROM pg_auth_members m JOIN backup_roles br ON m.member=br.role_oid WHERE m.inherit_option) SELECT r.rolname FROM backup_roles br JOIN pg_roles r ON r.oid=br.role_oid WHERE r.rolname<>'keel_backup' ORDER BY r.rolname`),
+    pool.query("SELECT r.rolname, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls, r.rolconnlimit FROM pg_roles r WHERE r.rolname='keel_backup'"),
+    pool.query(`WITH RECURSIVE backup_roles(role_oid) AS (SELECT oid FROM pg_roles WHERE rolname='keel_backup' UNION SELECT m.roleid FROM pg_auth_members m JOIN backup_roles br ON m.member=br.role_oid) SELECT r.rolname,r.rolcanlogin,r.rolinherit,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls FROM backup_roles br JOIN pg_roles r ON r.oid=br.role_oid WHERE r.rolname<>'keel_backup' ORDER BY r.rolname`),
     pool.query(`
       WITH RECURSIVE inherited_roles(role_oid) AS (
         SELECT oid FROM pg_roles WHERE rolname=current_user
         UNION
-        SELECT m.roleid FROM pg_auth_members m JOIN inherited_roles ir ON m.member=ir.role_oid WHERE m.inherit_option
+        SELECT m.roleid FROM pg_auth_members m JOIN inherited_roles ir ON m.member=ir.role_oid
       )
       SELECT r.rolname, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls
       FROM inherited_roles ir JOIN pg_roles r ON r.oid=ir.role_oid
@@ -160,7 +165,19 @@ async function inspectDatabase(pool, options = {}) {
         )
     `),
     pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()'),
-    pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`)
+    pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`),
+    pool.query(`SELECT
+      (SELECT COUNT(*)::int FROM pg_class c WHERE c.relowner=r.oid AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','v','m','S')) AS "publicRelationsOwned",
+      (SELECT COUNT(*)::int FROM pg_proc p WHERE p.proowner=r.oid AND p.pronamespace='public'::regnamespace AND p.prosecdef) AS "securityDefinerFunctionsOwned",
+      (SELECT n.nspowner=r.oid FROM pg_namespace n WHERE n.nspname='public') AS "publicSchemaOwnedByRuntime",
+      (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_roles owner ON owner.oid=p.proowner
+        WHERE p.pronamespace='public'::regnamespace AND p.prosecdef
+          AND (owner.rolname<>'keel_auth_owner' OR NOT EXISTS (
+            SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg WHERE replace(lower(cfg),' ','')='search_path=pg_catalog,public'
+          ))
+      ) AS "unsafeSecurityDefinerFunctions"
+      FROM pg_roles r WHERE r.rolname=current_user`),
+    pool.query("SELECT TRUE AS exists,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolbypassrls,(SELECT COUNT(*)::int FROM pg_auth_members m WHERE m.roleid=r.oid) AS member_count FROM pg_roles r WHERE r.rolname='keel_auth_owner'")
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
@@ -171,10 +188,12 @@ async function inspectDatabase(pool, options = {}) {
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,
-    backupMemberships: backupMembershipResult.rows.map(row => row.rolname),
+    backupMemberships: backupMembershipResult.rows,
     publicSecurityDefinerExecute: functionGrantResult.rows[0] ? functionGrantResult.rows[0].count : null,
     databaseSsl: tlsResult.rows[0] ? tlsResult.rows[0].ssl === true : false,
-    clientVerifiesCertificate: !!ssl && typeof ssl === 'object' && ssl.rejectUnauthorized === true
+    clientVerifiesCertificate: !!ssl && typeof ssl === 'object' && ssl.rejectUnauthorized === true,
+    runtimeOwnership: runtimeOwnershipResult.rows[0] || {publicRelationsOwned:null,securityDefinerFunctionsOwned:null},
+    authOwner: authOwnerResult.rows[0] || {exists:false}
   });
 }
 

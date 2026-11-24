@@ -6,14 +6,16 @@ const { REQUIRED_MIGRATIONS, REQUIRED_TABLES, evaluateInventory } = require('../
 function readyInventory() {
   return {
     migrations: [...REQUIRED_MIGRATIONS],
-    tenantTables: REQUIRED_TABLES.map(table => ({table,rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
-    runtimeRole: {role:'keel_runtime',rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
+    tenantTables: REQUIRED_TABLES.map(table => ({table,tenantIdType:'uuid',rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
+    runtimeRole: {role:'keel_runtime',rolcanlogin:true,rolinherit:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
     runtimeMemberships: [],
-    backupRole: {exists:true,rolcanlogin:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false,rolconnlimit:6,canWriteLedger:false},
-    backupMemberships: ['keel_backup_reader'],
+    backupRole: {exists:true,rolcanlogin:true,rolinherit:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false,rolconnlimit:6,canWriteLedger:false},
+    backupMemberships: [{rolname:'keel_backup_reader',rolcanlogin:false,rolinherit:true,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false}],
     publicSecurityDefinerExecute: 0,
     databaseSsl: true,
-    clientVerifiesCertificate: true
+    clientVerifiesCertificate: true,
+    runtimeOwnership: {publicRelationsOwned:0,securityDefinerFunctionsOwned:0,publicSchemaOwnedByRuntime:false,unsafeSecurityDefinerFunctions:0},
+    authOwner: {exists:true,rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolbypassrls:true,member_count:0}
   };
 }
 
@@ -81,4 +83,47 @@ test('readiness manifest is versioned and contains no duplicate required objects
     '022_direct_tenant_fk_coverage.sql','023_backup_role_connection_capacity.sql'
   ]);
   assert.equal(new Set(REQUIRED_TABLES).size, REQUIRED_TABLES.length);
+});
+
+test('backup login cannot inherit an unsafe reader role or nested role grant', () => {
+  const input = readyInventory();
+  input.backupMemberships = [
+    {rolname:'keel_backup_reader',rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
+    {rolname:'keel_backup_admin',rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false}
+  ];
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='backup_role').status,'FAIL');
+  input.backupMemberships = [
+    {rolname:'keel_backup_reader',rolcanlogin:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:true}
+  ];
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='backup_role').status,'FAIL');
+});
+
+test('runtime role inheritance and ownership of protected objects block readiness', () => {
+  const input = readyInventory();
+  input.runtimeRole.rolinherit = true;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='runtime_role').status,'FAIL');
+  input.runtimeRole.rolinherit = false;
+  input.runtimeOwnership.publicSchemaOwnedByRuntime = true;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='runtime_object_ownership').status,'FAIL');
+});
+
+test('dedicated BYPASSRLS function owner must remain non-login and unassumable', () => {
+  const input = readyInventory();
+  input.authOwner.member_count = 1;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
+  input.authOwner.member_count = 0;
+  input.authOwner.rolcanlogin = true;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
+});
+
+test('non-UUID tenant_id columns block the tenant RLS inventory', () => {
+  const input = readyInventory();
+  input.tenantTables[0].tenantIdType = 'text';
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
+});
+
+test('a broad additional permissive policy blocks tenant readiness', () => {
+  const input = readyInventory();
+  input.tenantTables[0].tenantPolicy = false;
+  assert.equal(evaluateInventory(input).gates.find(item=>item.id==='tenant_rls_inventory').status,'FAIL');
 });
