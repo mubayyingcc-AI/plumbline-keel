@@ -279,7 +279,7 @@ function sameOriginIfBrowser(req) {
 function assuranceAuthorized(req) {
   const expected = process.env.KEEL_ASSURANCE_TOKEN;
   if (!expected) return false;
-  const supplied = String(req.headers.authorization || '').replace(/^Bearer\\s+/i,'').trim();
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i,'').trim();
   const a = Buffer.from(supplied), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a,b);
 }
