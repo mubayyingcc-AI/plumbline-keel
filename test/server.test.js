@@ -185,13 +185,35 @@ test('assurance status exposes the contract consumed by the website', async () =
   assert.equal(typeof data.boundary, 'string');
 });
 
-test('ledger status fails closed when no database is configured', async () => {
+test('public ledger status exposes only a redacted readiness summary', async () => {
   if (process.env.KEEL_RUNTIME_DATABASE_URL) return;
   const response = await fetch(base + '/api/ledger/status');
   const data = await response.json();
   assert.equal(response.status, 503);
   assert.equal(data.status, 'BLOCKED');
   assert.equal(data.reason, 'database_not_configured');
+  assert.deepEqual(data.readiness, {databaseReadiness:'FAIL',promotionEligible:false,releaseApproval:'NOT_ASSESSED'});
+  assert.equal(Object.hasOwn(data,'runtimeRole'),false);
+  assert.equal(Object.hasOwn(data,'gates'),false);
+  assert.equal(Object.hasOwn(data,'missing'),false);
+});
+
+test('internal ledger readiness diagnostics require the configured assurance token', async () => {
+  const previous=process.env.KEEL_ASSURANCE_TOKEN;
+  try {
+    process.env.KEEL_ASSURANCE_TOKEN='test-assurance-secret';
+    const unauthenticated=await fetch(base+'/api/internal/ledger/readiness');
+    assert.equal(unauthenticated.status,401);
+    const malformed=await fetch(base+'/api/internal/ledger/readiness',{headers:{Authorization:'Bearer wrong'}});
+    assert.equal(malformed.status,401);
+    const valid=await fetch(base+'/api/internal/ledger/readiness',{headers:{Authorization:'Bearer test-assurance-secret'}});
+    assert.equal(valid.status,503);
+    const body=await valid.json();
+    assert.equal(body.reason,'database_not_configured');
+  } finally {
+    if(previous===undefined) delete process.env.KEEL_ASSURANCE_TOKEN;
+    else process.env.KEEL_ASSURANCE_TOKEN=previous;
+  }
 });
 
 test('Payment Authority sandbox runs the real evaluator and never executes a payment', async () => {
