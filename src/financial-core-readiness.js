@@ -74,7 +74,7 @@ function evaluateInventory(input) {
       'Runtime role identity, role attributes and inherited memberships must remain least-privileged.',
       { role: runtime.role || 'unknown', unsafeMemberships }),
     gate('runtime_object_ownership', runtimeOwnership.publicRelationsOwned === 0 && runtimeOwnership.securityDefinerFunctionsOwned === 0 && runtimeOwnership.publicSchemaOwnedByRuntime === false && runtimeOwnership.unsafeSecurityDefinerFunctions === 0,
-      'The runtime login must not own tenant tables or SECURITY DEFINER functions.', runtimeOwnership),
+      'The runtime login must not own public relations, the public schema or SECURITY DEFINER functions; privileged functions must use the dedicated owner and fixed search_path.', runtimeOwnership),
     gate('backup_role', backup.exists === true && backup.rolcanlogin === true && backup.rolinherit === true &&
       backup.rolsuper === false && backup.rolcreatedb === false && backup.rolcreaterole === false &&
       backup.rolreplication === false && backup.rolbypassrls === false && backup.rolconnlimit === 6 &&
@@ -163,13 +163,16 @@ async function inspectDatabase(pool, options = {}) {
     pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()'),
     pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`),
     pool.query(`SELECT
-      COUNT(*) FILTER (WHERE c.relkind IN ('r','p') AND a.attname='tenant_id' AND a.atttypid='uuid'::regtype)::int AS public_relations_owned,
-      COUNT(DISTINCT p.oid) FILTER (WHERE p.prosecdef)::int AS security_definer_functions_owned
-      FROM pg_roles r
-      LEFT JOIN pg_class c ON c.relowner=r.oid AND c.relnamespace='public'::regnamespace
-      LEFT JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-      LEFT JOIN pg_proc p ON p.proowner=r.oid AND p.pronamespace='public'::regnamespace
-      WHERE r.rolname=current_user`)
+      (SELECT COUNT(*)::int FROM pg_class c WHERE c.relowner=r.oid AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','v','m','S')) AS "publicRelationsOwned",
+      (SELECT COUNT(*)::int FROM pg_proc p WHERE p.proowner=r.oid AND p.pronamespace='public'::regnamespace AND p.prosecdef) AS "securityDefinerFunctionsOwned",
+      (SELECT n.nspowner=r.oid FROM pg_namespace n WHERE n.nspname='public') AS "publicSchemaOwnedByRuntime",
+      (SELECT COUNT(*)::int FROM pg_proc p JOIN pg_roles owner ON owner.oid=p.proowner
+        WHERE p.pronamespace='public'::regnamespace AND p.prosecdef
+          AND (owner.rolname<>'keel_auth_owner' OR NOT EXISTS (
+            SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg WHERE cfg LIKE 'search_path=%'
+          ))
+      ) AS "unsafeSecurityDefinerFunctions"
+      FROM pg_roles r WHERE r.rolname=current_user`)
   ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
