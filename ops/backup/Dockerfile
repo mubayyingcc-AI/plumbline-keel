@@ -6,7 +6,9 @@ RUN apt-get update \
 WORKDIR /opt/keel
 COPY scripts/backup-postgres-tenant-snapshot.sh /opt/keel/backup-postgres-tenant-snapshot.sh
 COPY ops/backup/entrypoint.sh /opt/keel/entrypoint.sh
-RUN chmod 0755 /opt/keel/backup-postgres-tenant-snapshot.sh /opt/keel/entrypoint.sh \
+COPY ops/backup/snapshot-keeper.sh /opt/keel/snapshot-keeper.sh
+COPY ops/backup/backup-role-memberships.sql /opt/keel/backup-role-memberships.sql
+RUN chmod 0755 /opt/keel/backup-postgres-tenant-snapshot.sh /opt/keel/entrypoint.sh /opt/keel/snapshot-keeper.sh \
  && mkdir -p /var/lib/keel-backups \
  && chmod 0700 /var/lib/keel-backups
 ENV KEEL_BACKUP_DIR=/var/lib/keel-backups
