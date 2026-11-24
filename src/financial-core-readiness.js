@@ -190,7 +190,7 @@ async function inspectDatabase(pool, options = {}) {
         )
     `),
     pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()'),
-    pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`),
+    pool.query(`SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN (EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','f') AND (has_table_privilege('keel_backup',c.oid,'INSERT') OR has_table_privilege('keel_backup',c.oid,'UPDATE') OR has_table_privilege('keel_backup',c.oid,'DELETE') OR has_table_privilege('keel_backup',c.oid,'TRUNCATE') OR has_table_privilege('keel_backup',c.oid,'REFERENCES') OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='S' AND (has_sequence_privilege('keel_backup',c.oid,'USAGE') OR has_sequence_privilege('keel_backup',c.oid,'UPDATE')))) ELSE TRUE END AS can_write`),
     pool.query(`SELECT
       (SELECT COUNT(*)::int FROM pg_class c WHERE c.relowner=r.oid AND c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p','v','m','S','f')) AS "publicRelationsOwned",
       (SELECT COUNT(*)::int FROM pg_proc p WHERE p.proowner=r.oid AND p.pronamespace='public'::regnamespace AND p.prosecdef) AS "securityDefinerFunctionsOwned",
@@ -214,8 +214,8 @@ async function inspectDatabase(pool, options = {}) {
       WHERE n.nspname='public' AND p.prosecdef AND acl.privilege_type='EXECUTE'
         AND acl.grantee<>p.proowner
         AND NOT (
-          (grantee.rolname='keel_runtime' AND p.oid IN ('public.keel_authenticate_tenant_key(text)'::regprocedure,'public.keel_touch_tenant_key(text,uuid)'::regprocedure))
-          OR (grantee.rolname='keel_backup_reader' AND p.oid='public.keel_backup_tenant_ids()'::regprocedure)
+          (grantee.rolname='keel_runtime' AND p.oid IN (to_regprocedure('public.keel_authenticate_tenant_key(text)'),to_regprocedure('public.keel_touch_tenant_key(text,uuid)')))
+          OR (grantee.rolname='keel_backup_reader' AND p.oid=to_regprocedure('public.keel_backup_tenant_ids()'))
         )`),
     pool.query(`WITH RECURSIVE auth_owner_members(member_oid) AS (
       SELECT m.member FROM pg_auth_members m JOIN pg_roles owner ON owner.oid=m.roleid WHERE owner.rolname='keel_auth_owner'
