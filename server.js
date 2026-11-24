@@ -968,7 +968,7 @@ const server = http.createServer(async (req,res) => {
         return send(res,ready?200:503,{
           ok:ready,
           status:readiness.status,
-          runtimeRole:'keel_runtime',
+          runtimeRole:readiness.gates.find(gate=>gate.id==='runtime_role')?.role || 'unknown',
           readiness
         });
       } catch (error) {
