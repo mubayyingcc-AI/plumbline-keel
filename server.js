@@ -3,6 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const net = require('node:net');
 const { evaluateAction, fingerprint } = require('./src/core');
 const sandboxRunner = require('./src/sandbox-runner');
 const assurance = require('./src/assurance');
@@ -33,6 +34,9 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
 const MAX_BODY = 256 * 1024;
 const RATE_WINDOW_MS = 60_000;
+const RATE_BUCKET_MAX = 4096;
+const configuredProxyHops = Number.parseInt(process.env.KEEL_TRUSTED_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'),10);
+const TRUSTED_PROXY_HOPS = Number.isInteger(configuredProxyHops) && configuredProxyHops >= 0 && configuredProxyHops <= 10 ? configuredProxyHops : 0;
 const RATE_LIMITS = { '/api/leads': 8, '/api/evaluate': 30, '/api/sandbox/runs': 30, '/api/sandbox/payment-authority/runs': 20, '/api/sandbox/human-card/runs': 20, '/api/sandbox/currency/precision': 30, '/api/sandbox/reconciliation/runs': 20, '/api/ledger/journals': 20, '/api/ledger/reservations': 30, '/api/ledger/books': 10, '/api/ledger/periods': 10, '/api/ledger/period-close': 10, '/api/ledger/provider-instructions': 10, '/api/providers/outbox/claim': 30, '/api/providers/outbox/outcome': 60, '/api/providers/callback/bank-sandbox': 120 };
 const rateBuckets = new Map();
 
@@ -249,8 +253,15 @@ function readBody(req) {
 }
 
 function requestIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket.remoteAddress || 'unknown';
+  if (TRUSTED_PROXY_HOPS > 0) {
+    const forwarded = String(req.headers['x-forwarded-for'] || '')
+      .split(',')
+      .map(value => value.trim())
+      .filter(value => net.isIP(value));
+    const clientIndex = forwarded.length - TRUSTED_PROXY_HOPS;
+    if (clientIndex >= 0) return forwarded[clientIndex];
+  }
+  return req.socket && req.socket.remoteAddress || 'unknown';
 }
 function rateLimited(req, route) {
   const limit = RATE_LIMITS[route];
@@ -258,12 +269,19 @@ function rateLimited(req, route) {
   const now = Date.now();
   const key = route + ':' + requestIp(req);
   const bucket = rateBuckets.get(key);
-  if (!bucket || now - bucket.startedAt >= RATE_WINDOW_MS) {
-    rateBuckets.set(key, { startedAt: now, count: 1 });
-    return false;
+  if (bucket && now - bucket.startedAt < RATE_WINDOW_MS) {
+    bucket.count += 1;
+    return bucket.count > limit;
   }
-  bucket.count += 1;
-  return bucket.count > limit;
+  rateBuckets.delete(key);
+  if (rateBuckets.size >= RATE_BUCKET_MAX) {
+    for (const [existingKey, existingBucket] of rateBuckets) {
+      if (now - existingBucket.startedAt >= RATE_WINDOW_MS) rateBuckets.delete(existingKey);
+    }
+    if (rateBuckets.size >= RATE_BUCKET_MAX) rateBuckets.delete(rateBuckets.keys().next().value);
+  }
+  rateBuckets.set(key, { startedAt: now, count: 1 });
+  return false;
 }
 function sameOriginIfBrowser(req) {
   const origin = req.headers.origin;
@@ -1398,4 +1416,4 @@ if (require.main === module) {
   process.on('SIGTERM',shutdown);
   process.on('SIGINT',shutdown);
 }
-module.exports = { server, demoPayload, products, rateLimited, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool, databaseSslOptions };
+module.exports = { server, demoPayload, products, rateLimited, requestIp, rateLimitStateSize:() => rateBuckets.size, readBody, readRawBody, dbPool, bootstrapCoreSchema, tenantScopedPool, databaseSslOptions };
