@@ -279,7 +279,7 @@ function sameOriginIfBrowser(req) {
 function assuranceAuthorized(req) {
   const expected = process.env.KEEL_ASSURANCE_TOKEN;
   if (!expected) return false;
-  const supplied = String(req.headers.authorization || '').replace(/^Bearer\\s+/i,'');
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\\s+/i,'').trim();
   const a = Buffer.from(supplied), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a,b);
 }
@@ -958,26 +958,36 @@ const server = http.createServer(async (req,res) => {
       const impact=regulatoryAssurance.assessRegulatoryChange({oldVersion:b.oldVersion,newVersion:b.newVersion,obligations:oq.rows.map(x=>x.payload),mappings:mq.rows.map(x=>({obligationId:x.obligation_id,controlId:x.control_id})),controls:cq.rows.map(x=>x.payload)});
       await recordEvent(pool,actor,'REGULATORY_CHANGE_IMPACT_ASSESSED',impact.impactFingerprint,impact);return send(res,200,{ok:true,impact});
     }
-    if (req.method === 'GET' && route === '/api/ledger/status') {
-      let pool;
+    if (req.method === 'GET' && route === '/api/internal/ledger/readiness') {
+      if (!process.env.KEEL_ASSURANCE_TOKEN) {
+        return send(res,503,{ok:false,error:'internal_diagnostics_not_configured'});
+      }
+      if (!assuranceAuthorized(req)) return send(res,401,{ok:false,error:'internal_authorization_required'});
       try {
-        pool = await dbPool();
-        if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured',readiness:{databaseReadiness:'FAIL',promotionEligible:false}});
+        const pool = await dbPool();
+        if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured'});
         const readiness = await financialCoreReadiness.inspectDatabase(pool,{ssl:pool.readinessSslOptions});
         const ready = readiness.databaseReadiness === 'PASS';
-        return send(res,ready?200:503,{
-          ok:ready,
-          status:readiness.status,
-          runtimeRole:readiness.gates.find(gate=>gate.id==='runtime_role')?.role || 'unknown',
-          readiness
-        });
+        return send(res,ready?200:503,{ok:ready,status:readiness.status,readiness});
       } catch (error) {
         console.error('financial_core_readiness_inspection_failed',{name:error.name});
-        return send(res,503,{
-          ok:false,status:'BLOCKED',
-          reason:'readiness_inspection_failed',
-          readiness:{databaseReadiness:'UNKNOWN',promotionEligible:false,releaseApproval:'NOT_ASSESSED'}
-        });
+        return send(res,503,{ok:false,status:'BLOCKED',reason:'readiness_inspection_failed',
+          readiness:{databaseReadiness:'UNKNOWN',promotionEligible:false,releaseApproval:'NOT_ASSESSED'}});
+      }
+    }
+    if (req.method === 'GET' && route === '/api/ledger/status') {
+      try {
+        const pool = await dbPool();
+        if (!pool) return send(res,503,{ok:false,status:'BLOCKED',reason:'database_not_configured',
+          readiness:{databaseReadiness:'FAIL',promotionEligible:false,releaseApproval:'NOT_ASSESSED'}});
+        const readiness = await financialCoreReadiness.inspectDatabase(pool,{ssl:pool.readinessSslOptions});
+        const ready = readiness.databaseReadiness === 'PASS';
+        return send(res,ready?200:503,{ok:ready,status:readiness.status,
+          readiness:{databaseReadiness:readiness.databaseReadiness,promotionEligible:false,releaseApproval:'NOT_ASSESSED'}});
+      } catch (error) {
+        console.error('financial_core_readiness_inspection_failed',{name:error.name});
+        return send(res,503,{ok:false,status:'BLOCKED',reason:'readiness_inspection_failed',
+          readiness:{databaseReadiness:'UNKNOWN',promotionEligible:false,releaseApproval:'NOT_ASSESSED'}});
       }
     }
     if(route==='/api/assurance/authority/envelopes' && req.method==='POST'){
