@@ -10,6 +10,14 @@ test('PostgreSQL catalog readiness enforces the required object, role and grant 
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: databaseUrl, max: 2 });
   try {
+    const diagnostics = await pool.query(`
+      SELECT tablename,cmd,roles::text AS roles,qual,with_check,
+        trim(both '()' from regexp_replace(lower(COALESCE(qual,'')), '[[:space:]]|::text', '', 'g')) AS normalized_qual,
+        trim(both '()' from regexp_replace(lower(COALESCE(with_check,'')), '[[:space:]]|::text', '', 'g')) AS normalized_check
+      FROM pg_policies WHERE schemaname='public' AND tablename='keel_ledger_journals'
+      ORDER BY policyname
+    `);
+    console.log('RLS policy diagnostics', JSON.stringify(diagnostics.rows));
     const result = await inspectDatabase(pool, { ssl: false });
     const required = [
       'migration_manifest',
