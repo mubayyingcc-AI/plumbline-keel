@@ -1,6 +1,6 @@
 'use strict';
 
-const { FINANCIAL_CORE_CONTRACT_VERSION, REQUIRED_MIGRATIONS, REQUIRED_TABLES } = require('./financial-core-contract');
+const { FINANCIAL_CORE_CONTRACT_VERSION, REQUIRED_MIGRATIONS, REQUIRED_TABLES, REQUIRED_FUNCTIONS } = require('./financial-core-contract');
 
 function gate(id, passed, detail, evidence = {}) {
   return { id, status: passed ? 'PASS' : 'FAIL', detail, ...evidence };
@@ -11,6 +11,8 @@ function evaluateInventory(input) {
   const missingMigrations = REQUIRED_MIGRATIONS.filter(version => !migrations.has(version));
   const tables = new Map((input.tenantTables || []).map(row => [row.table, row]));
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
+  const discoveredFunctions = new Set(input.functions || []);
+  const missingFunctions = REQUIRED_FUNCTIONS.filter(name => !discoveredFunctions.has(name));
   const unsafeRls = (input.tenantTables || []).filter(row =>
     !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy || row.tenantIdType !== 'uuid'
   ).map(row => row.table);
@@ -29,6 +31,9 @@ function evaluateInventory(input) {
     gate('required_financial_core_tables', missingTables.length === 0,
       missingTables.length ? 'Required financial-core tables are missing.' : 'All required financial-core tables exist.',
       { missing: missingTables }),
+    gate('required_financial_core_functions', missingFunctions.length === 0,
+      missingFunctions.length ? 'Required financial-core database functions are missing.' : 'All contract-required financial-core functions exist.',
+      { missing: missingFunctions }),
     gate('tenant_rls_inventory', unsafeRls.length === 0,
       unsafeRls.length ? 'Tenant tables must have ENABLE RLS, FORCE RLS and a tenant-context policy.' : 'Every discovered tenant_id UUID table has forced RLS and a tenant-context policy.',
       { unsafeTables: unsafeRls, discoveredTenantTables: tables.size }),
@@ -196,12 +201,17 @@ async function inspectDatabase(pool, options = {}) {
       (SELECT GREATEST(COUNT(DISTINCT role_oid)-1,0)::int FROM auth_owner_inherited_roles) AS inherited_role_count
     FROM pg_roles r WHERE r.rolname='keel_auth_owner'`)
   ]);
+  const functionInventoryResult = await pool.query(
+    'SELECT DISTINCT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
+    ['public']
+  );
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
   const ssl = options.ssl;
   return evaluateInventory({
     migrations: migrationResult.rows.map(row => row.version),
     tenantTables: tenantTableResult.rows,
+    functions: functionInventoryResult.rows.map(row => row.name),
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,
@@ -216,4 +226,4 @@ async function inspectDatabase(pool, options = {}) {
   });
 }
 
-module.exports = { REQUIRED_MIGRATIONS, REQUIRED_TABLES, evaluateInventory, inspectDatabase };
+module.exports = { REQUIRED_MIGRATIONS, REQUIRED_TABLES, REQUIRED_FUNCTIONS, evaluateInventory, inspectDatabase };

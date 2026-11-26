@@ -1,11 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { REQUIRED_MIGRATIONS, REQUIRED_TABLES, evaluateInventory } = require('../src/financial-core-readiness');
+const { REQUIRED_MIGRATIONS, REQUIRED_TABLES, REQUIRED_FUNCTIONS, evaluateInventory } = require('../src/financial-core-readiness');
 
 function readyInventory() {
   return {
     migrations: [...REQUIRED_MIGRATIONS],
+    functions: [...REQUIRED_FUNCTIONS],
     tenantTables: REQUIRED_TABLES.map(table => ({table,tenantIdType:'uuid',rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
     runtimeRole: {role:'keel_runtime',rolcanlogin:true,rolinherit:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
     runtimeMemberships: [],
@@ -85,6 +86,7 @@ test('readiness manifest is versioned and contains no duplicate required objects
     '022_direct_tenant_fk_coverage.sql','023_backup_role_connection_capacity.sql'
   ]);
   assert.equal(new Set(REQUIRED_TABLES).size, REQUIRED_TABLES.length);
+  assert.equal(new Set(REQUIRED_FUNCTIONS).size, REQUIRED_FUNCTIONS.length);
 });
 
 test('backup login cannot inherit an unsafe reader role or nested role grant', () => {
@@ -163,4 +165,21 @@ test('migration contract is shared, versioned, unique and backed by files', () =
   const runner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js'), 'utf8');
   assert.match(runner, /require\(['"]\.\.\/src\/financial-core-contract['"]\)/);
   assert.match(runner, /for \(const version of REQUIRED_MIGRATIONS\)/);
+});
+
+
+test('missing required authority, provider, regulatory and evidence functions hard-block readiness', () => {
+  const input = readyInventory();
+  input.functions = input.functions.filter(name => name !== 'keel_authenticate_tenant_key');
+  const result = evaluateInventory(input);
+  const gate = result.gates.find(item => item.id === 'required_financial_core_functions');
+  assert.equal(result.status, 'BLOCKED');
+  assert.deepEqual(gate.missing, ['keel_authenticate_tenant_key']);
+  assert.equal(result.promotionEligible, false);
+});
+
+test('the complete contract requires regulatory relations as well as ledger and provider objects', () => {
+  for (const name of ['keel_regulatory_mappings', 'keel_regulatory_obligations', 'keel_provider_reconciliation_cases', 'keel_authority_action_approvals']) {
+    assert.ok(REQUIRED_TABLES.includes(name), 'contract omits ' + name);
+  }
 });
