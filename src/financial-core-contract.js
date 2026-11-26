@@ -49,7 +49,7 @@ const REQUIRED_FUNCTIONS = Object.freeze([
   'keel_accounting_period_close_request_guard',
   'keel_accounting_period_close_request_no_delete',
   'keel_accounting_period_closure_immutable',
-  'keel_backup_tenant_ids','keel_reject_kAAA_evidence_mutation',
+  'keel_backup_tenant_ids','keel_reject_kaaa_evidence_mutation',
   'keel_reject_ai_release_assessment_mutation'
 ]);
 
