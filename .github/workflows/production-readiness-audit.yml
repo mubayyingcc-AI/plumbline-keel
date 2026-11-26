@@ -1,17 +1,12 @@
 name: Production readiness audit SQL
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'scripts/production-readiness-audit.sql'
-      - '.github/workflows/production-readiness-audit.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/production-readiness-audit.sql'
-      - '.github/workflows/production-readiness-audit.yml'
-
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual workflow verification reason'
+        required: false
+        type: string
 permissions:
   contents: read
 

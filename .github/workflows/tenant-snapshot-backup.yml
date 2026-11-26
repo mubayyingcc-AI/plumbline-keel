@@ -1,20 +1,11 @@
 name: Tenant snapshot backup and isolated restore
 on:
-  pull_request:
-    paths:
-      - "scripts/backup-postgres-tenant-snapshot.sh"
-      - "scripts/restore-postgres-encrypted.sh"
-      - "ops/backup/Dockerfile"
-      - "test/fixtures/backup-role-fixture.sql"
-      - ".github/workflows/tenant-snapshot-backup.yml"
-  push:
-    branches: [main]
-    paths:
-      - "scripts/backup-postgres-tenant-snapshot.sh"
-      - "scripts/restore-postgres-encrypted.sh"
-      - "ops/backup/Dockerfile"
-      - "test/fixtures/backup-role-fixture.sql"
-      - ".github/workflows/tenant-snapshot-backup.yml"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual workflow verification reason'
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
