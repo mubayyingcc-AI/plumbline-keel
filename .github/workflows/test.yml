@@ -1,9 +1,11 @@
 name: Plumbline Keel CI
 on:
-  push:
-    branches: [main, 'security/**', 'provider/**']
-  pull_request:
-    branches: [main, 'security/**']
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual verification reason'
+        required: false
+        type: string
 jobs:
   test:
     runs-on: ubuntu-latest

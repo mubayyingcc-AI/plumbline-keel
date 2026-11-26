@@ -1,10 +1,12 @@
 name: Keel disaster recovery verification
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main, 'feat/production-disaster-recovery-foundation', 'feat/keel-dr-backup-restore-controls']
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual disaster recovery verification reason'
+        required: false
+        type: string
 
 permissions:
   contents: read
