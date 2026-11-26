@@ -23,8 +23,7 @@ test('ledger migration runner refuses production even when migration flag is set
 
 test('guarded migration runner includes the full core migration sequence', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js'), 'utf8');
-  for (const migration of REQUIRED_MIGRATIONS) {
-    assert.ok(script.includes(migration), 'missing guarded migration: ' + migration);
-  }
   assert.match(script, /require\(['"]\.\.\/src\/financial-core-contract['"]\)/);
+  assert.match(script, /for \(const version of REQUIRED_MIGRATIONS\)/);
+  assert.ok(REQUIRED_MIGRATIONS.length >= 12, 'expected the complete financial-core migration sequence');
 });
