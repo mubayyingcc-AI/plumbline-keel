@@ -23,7 +23,7 @@ const REQUIRED_MIGRATIONS = Object.freeze([
 // Every CREATE TABLE relation found in migrations 001-023 (deduplicated).
 const REQUIRED_TABLES = Object.freeze([
   'keel_model_census','keel_proof_dockets','keel_assurance_events',
-  'keel_tenants','keel_tenant_keys',
+  'keel_tenants','keel_tenant_keys','keel_principals',
   'keel_regulatory_sources','keel_regulatory_obligations','keel_regulatory_controls',
   'keel_regulatory_mappings','keel_regulatory_evidence','keel_regulatory_findings',
   'keel_regulatory_actions','keel_conformity_dockets','keel_regulatory_assessments',
