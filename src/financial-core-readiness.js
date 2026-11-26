@@ -62,6 +62,7 @@ function evaluateInventory(input) {
     promotionEligible: false,
     releaseApproval: 'NOT_ASSESSED',
     scope: 'database_schema_runtime_privileges_tenant_rls_backup_identity_and_tls_only',
+    contractVersion: FINANCIAL_CORE_CONTRACT_VERSION,
     gates,
     releaseGatesNotEstablished: [
       'cross-tenant positive and negative application acceptance matrix',
