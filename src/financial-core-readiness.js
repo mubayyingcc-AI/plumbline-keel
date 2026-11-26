@@ -11,6 +11,12 @@ function evaluateInventory(input) {
   const missingMigrations = REQUIRED_MIGRATIONS.filter(version => !migrations.has(version));
   const tables = new Map((input.tenantTables || []).map(row => [row.table, row]));
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
+  const relations = new Map((input.relations || []).map(row => [row.name, row]));
+  const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
+  const unsafeRelations = REQUIRED_TABLES.map(name => relations.get(name)).filter(row => row && (row.owner === 'keel_runtime' || row.owner === 'keel_backup' || row.runtimePrivileges !== true || row.backupReadOnly !== true)).map(row => row.name);
+  const functionDetails = new Map((input.functionDetails || []).map(row => [row.name, row]));
+  const missingFunctionDetails = REQUIRED_FUNCTIONS.filter(name => !functionDetails.has(name));
+  const unsafeFunctions = (input.functionDetails || []).filter(row => row.securityDefiner === true && (row.owner !== 'keel_auth_owner' || row.fixedSearchPath !== true)).map(row => row.name);
   const discoveredFunctions = new Set(input.functions || []);
   const missingFunctions = REQUIRED_FUNCTIONS.filter(name => !discoveredFunctions.has(name));
   const unsafeRls = (input.tenantTables || []).filter(row =>
@@ -31,9 +37,12 @@ function evaluateInventory(input) {
     gate('required_financial_core_tables', missingTables.length === 0,
       missingTables.length ? 'Required financial-core tables are missing.' : 'All required financial-core tables exist.',
       { missing: missingTables }),
-    gate('required_financial_core_functions', missingFunctions.length === 0,
-      missingFunctions.length ? 'Required financial-core database functions are missing.' : 'All contract-required financial-core functions exist.',
-      { missing: missingFunctions }),
+    gate('required_financial_core_relations', missingRelations.length === 0 && unsafeRelations.length === 0,
+      missingRelations.length || unsafeRelations.length ? 'Required relations are missing or have unsafe ownership/privilege posture.' : 'All migration-created relations exist with safe runtime and backup privileges.',
+      { missing: missingRelations, unsafe: unsafeRelations }),
+    gate('required_financial_core_functions', missingFunctions.length === 0 && missingFunctionDetails.length === 0 && unsafeFunctions.length === 0,
+      missingFunctions.length || missingFunctionDetails.length || unsafeFunctions.length ? 'Required financial-core functions are missing or have unsafe ownership/search_path.' : 'All contract-required financial-core functions exist with safe ownership/search_path.',
+      { missing: [...new Set([...missingFunctions, ...missingFunctionDetails])], unsafe: unsafeFunctions }),
     gate('tenant_rls_inventory', unsafeRls.length === 0,
       unsafeRls.length ? 'Tenant tables must have ENABLE RLS, FORCE RLS and a tenant-context policy.' : 'Every discovered tenant_id UUID table has forced RLS and a tenant-context policy.',
       { unsafeTables: unsafeRls, discoveredTenantTables: tables.size }),
@@ -104,12 +113,12 @@ async function inspectDatabase(pool, options = {}) {
                  AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
                  AND (
                    p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
-                   AND regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]()]|::text', '', 'g')
+                   AND trim(both '()' from regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]]|::text', '', 'g'))
                      = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
                  )
                  AND (
                    p.cmd IN ('ALL','INSERT','UPDATE')
-                   AND regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]()]|::text', '', 'g')
+                   AND trim(both '()' from regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]]|::text', '', 'g'))
                      = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
                    OR p.cmd IN ('SELECT','DELETE')
                  )
@@ -120,11 +129,11 @@ async function inspectDatabase(pool, options = {}) {
                  AND (p.roles @> ARRAY['public']::name[] OR p.roles @> ARRAY['keel_runtime']::name[])
                  AND (
                    (p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
-                     AND regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]()]|::text', '', 'g')
+                     AND trim(both '()' from regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]]|::text', '', 'g'))
                        <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
                    OR
                    (p.cmd IN ('ALL','INSERT','UPDATE')
-                     AND regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]()]|::text', '', 'g')
+                     AND trim(both '()' from regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]]|::text', '', 'g'))
                        <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
                  )
              ) AS "tenantPolicy"
@@ -201,10 +210,36 @@ async function inspectDatabase(pool, options = {}) {
       (SELECT GREATEST(COUNT(DISTINCT role_oid)-1,0)::int FROM auth_owner_inherited_roles) AS inherited_role_count
     FROM pg_roles r WHERE r.rolname='keel_auth_owner'`)
   ]);
-  const functionInventoryResult = await pool.query(
-    'SELECT DISTINCT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
-    ['public']
-  );
+  const [functionInventoryResult, relationInventoryResult] = await Promise.all([
+    pool.query(`
+      SELECT DISTINCT p.proname AS name, owner.rolname AS owner, p.prosecdef AS "securityDefiner",
+        EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg
+          WHERE replace(lower(cfg),' ','')='search_path=pg_catalog,public') AS "fixedSearchPath"
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      JOIN pg_roles owner ON owner.oid=p.proowner WHERE n.nspname='public'
+    `),
+    pool.query(`
+      SELECT c.relname AS name, owner.rolname AS owner,
+        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN
+          has_table_privilege('keel_runtime',c.oid,'SELECT')
+          AND has_table_privilege('keel_runtime',c.oid,'INSERT')
+          AND CASE WHEN c.relname='keel_ai_release_assessments'
+            THEN NOT (has_table_privilege('keel_runtime',c.oid,'UPDATE') OR has_table_privilege('keel_runtime',c.oid,'DELETE'))
+            ELSE has_table_privilege('keel_runtime',c.oid,'UPDATE') AND has_table_privilege('keel_runtime',c.oid,'DELETE')
+          END ELSE FALSE END AS "runtimePrivileges",
+        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN
+          NOT (has_table_privilege('keel_backup',c.oid,'INSERT')
+            OR has_table_privilege('keel_backup',c.oid,'UPDATE')
+            OR has_table_privilege('keel_backup',c.oid,'DELETE')
+            OR has_table_privilege('keel_backup',c.oid,'TRUNCATE')
+            OR has_table_privilege('keel_backup',c.oid,'REFERENCES')
+            OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))
+          ELSE FALSE END AS "backupReadOnly"
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_roles owner ON owner.oid=c.relowner
+      WHERE n.nspname='public' AND c.relkind IN ('r','p')
+    `)
+  ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
   const ssl = options.ssl;
@@ -212,6 +247,8 @@ async function inspectDatabase(pool, options = {}) {
     migrations: migrationResult.rows.map(row => row.version),
     tenantTables: tenantTableResult.rows,
     functions: functionInventoryResult.rows.map(row => row.name),
+    functionDetails: functionInventoryResult.rows,
+    relations: relationInventoryResult.rows,
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,

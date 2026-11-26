@@ -1,8 +1,10 @@
 'use strict';
 
-// Single versioned contract shared by migration application and readiness inspection.
-// Keep object inventories aligned with reviewed migrations and their acceptance tests.
-const FINANCIAL_CORE_CONTRACT_VERSION = '1.1.0';
+// Authoritative, versioned database-object inventory. Update only alongside reviewed
+// migrations and acceptance tests. Relations/functions below are extracted from
+// migrations 012-023; tenant RLS is checked independently for every discovered
+// public relation carrying tenant_id.
+const FINANCIAL_CORE_CONTRACT_VERSION = '1.2.0';
 
 const REQUIRED_MIGRATIONS = Object.freeze([
   '012_double_entry_ledger.sql',
@@ -19,55 +21,35 @@ const REQUIRED_MIGRATIONS = Object.freeze([
   '023_backup_role_connection_capacity.sql'
 ]);
 
-// All tenant-scoped financial-core relations introduced or required by migrations
-// 012-023. Catalog inspection separately discovers any additional tenant_id tables.
+// Every required tenant-scoped financial-core relation, including regulatory, provider, authority, evidence, accounting and backup dependencies.
 const REQUIRED_TABLES = Object.freeze([
-  'keel_tenants',
-  'keel_tenant_keys',
-  'keel_principals',
-  'keel_ledger_accounts',
-  'keel_ledger_journals',
-  'keel_ledger_lines',
-  'keel_ledger_account_balances',
-  'keel_ledger_reservations',
-  'keel_ledger_event_heads',
+  'keel_tenants','keel_tenant_keys','keel_principals',
+  'keel_regulatory_sources','keel_regulatory_obligations','keel_regulatory_controls',
+  'keel_regulatory_mappings','keel_regulatory_evidence','keel_regulatory_findings',
+  'keel_regulatory_actions','keel_conformity_dockets','keel_regulatory_assessments',
+  'keel_regulatory_applicability_decisions',
+  'keel_ledger_accounts','keel_ledger_journals','keel_ledger_lines',
+  'keel_ledger_account_balances','keel_ledger_reservations','keel_ledger_event_heads',
   'keel_ledger_events',
-  'keel_accounting_books',
-  'keel_accounting_book_accounts',
-  'keel_accounting_periods',
-  'keel_accounting_period_close_requests',
-  'keel_accounting_period_closures',
-  'keel_provider_outbox',
-  'keel_provider_inbox',
-  'keel_provider_reconciliation_cases',
-  'keel_authority_envelopes',
-  'keel_action_proof_objects',
-  'keel_authority_action_approvals',
-  'keel_ai_release_assessments',
-  'keel_regulatory_mappings',
-  'keel_regulatory_obligations'
+  'keel_accounting_books','keel_accounting_book_accounts','keel_accounting_periods',
+  'keel_accounting_period_close_requests','keel_accounting_period_closures',
+  'keel_provider_outbox','keel_provider_inbox','keel_provider_reconciliation_cases',
+  'keel_authority_envelopes','keel_action_proof_objects','keel_authority_action_approvals',
+  'keel_ai_release_assessments'
 ]);
 
-// Critical database functions are checked by catalog name; signature-specific
-// invocation/grant checks remain separate acceptance requirements.
+// Every CREATE FUNCTION name found in migrations 003-021 (deduplicated).
 const REQUIRED_FUNCTIONS = Object.freeze([
-  'keel_authenticate_tenant_key',
-  'keel_touch_tenant_key',
-  'keel_ledger_reject_posted_mutation',
-  'keel_ledger_reject_posted_header_mutation',
-  'keel_ledger_assert_balanced',
-  'keel_ledger_account_currency_guard',
-  'keel_ledger_account_metadata_guard',
-  'keel_ledger_balance_currency_guard',
-  'keel_ledger_reservation_guard',
-  'keel_ledger_events_immutable',
-  'keel_accounting_period_transition_guard',
-  'keel_ledger_journal_period_guard',
+  'keel_authenticate_tenant_key','keel_touch_tenant_key',
+  'keel_ledger_reject_posted_mutation','keel_ledger_reject_posted_header_mutation',
+  'keel_ledger_assert_balanced','keel_ledger_account_currency_guard',
+  'keel_ledger_account_metadata_guard','keel_ledger_balance_currency_guard',
+  'keel_ledger_reservation_guard','keel_ledger_events_immutable',
+  'keel_accounting_period_transition_guard','keel_ledger_journal_period_guard',
   'keel_accounting_period_close_request_guard',
   'keel_accounting_period_close_request_no_delete',
   'keel_accounting_period_closure_immutable',
-  'keel_backup_tenant_ids',
-  'keel_reject_kAAA_evidence_mutation',
+  'keel_backup_tenant_ids','keel_reject_kaaa_evidence_mutation',
   'keel_reject_ai_release_assessment_mutation'
 ]);
 
