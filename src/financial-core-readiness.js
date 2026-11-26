@@ -220,18 +220,21 @@ async function inspectDatabase(pool, options = {}) {
     `),
     pool.query(`
       SELECT c.relname AS name, owner.rolname AS owner,
-        has_table_privilege('keel_runtime',c.oid,'SELECT')
+        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_runtime') THEN
+          has_table_privilege('keel_runtime',c.oid,'SELECT')
           AND has_table_privilege('keel_runtime',c.oid,'INSERT')
           AND CASE WHEN c.relname='keel_ai_release_assessments'
             THEN NOT (has_table_privilege('keel_runtime',c.oid,'UPDATE') OR has_table_privilege('keel_runtime',c.oid,'DELETE'))
             ELSE has_table_privilege('keel_runtime',c.oid,'UPDATE') AND has_table_privilege('keel_runtime',c.oid,'DELETE')
-          END AS "runtimePrivileges",
-        NOT (has_table_privilege('keel_backup',c.oid,'INSERT')
-          OR has_table_privilege('keel_backup',c.oid,'UPDATE')
-          OR has_table_privilege('keel_backup',c.oid,'DELETE')
-          OR has_table_privilege('keel_backup',c.oid,'TRUNCATE')
-          OR has_table_privilege('keel_backup',c.oid,'REFERENCES')
-          OR has_table_privilege('keel_backup',c.oid,'TRIGGER')) AS "backupReadOnly"
+          END ELSE FALSE END AS "runtimePrivileges",
+        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='keel_backup') THEN
+          NOT (has_table_privilege('keel_backup',c.oid,'INSERT')
+            OR has_table_privilege('keel_backup',c.oid,'UPDATE')
+            OR has_table_privilege('keel_backup',c.oid,'DELETE')
+            OR has_table_privilege('keel_backup',c.oid,'TRUNCATE')
+            OR has_table_privilege('keel_backup',c.oid,'REFERENCES')
+            OR has_table_privilege('keel_backup',c.oid,'TRIGGER'))
+          ELSE FALSE END AS "backupReadOnly"
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       JOIN pg_roles owner ON owner.oid=c.relowner
       WHERE n.nspname='public' AND c.relkind IN ('r','p')
