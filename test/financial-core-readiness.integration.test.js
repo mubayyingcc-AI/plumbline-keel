@@ -40,6 +40,10 @@ test('PostgreSQL catalog readiness enforces the required object, role and grant 
       assert.ok(gate, 'missing readiness gate: ' + id);
       assert.equal(gate.status, 'PASS', id + ': ' + JSON.stringify(gate));
     }
+    const authOwnerGate = result.gates.find(item => item.id === 'auth_function_owner');
+    assert.equal(authOwnerGate.exists, true, 'auth owner catalog result must map to the auth-owner gate');
+    assert.equal(authOwnerGate.member_count, 0, 'auth owner must have no direct or indirect members');
+    assert.equal(authOwnerGate.inherited_role_count, 0, 'auth owner must inherit no roles');
     assert.equal(result.promotionEligible, false);
     assert.equal(result.releaseApproval, 'NOT_ASSESSED');
   } finally {
