@@ -231,8 +231,10 @@ async function inspectDatabase(pool, options = {}) {
       SELECT c.relname AS name, owner.rolname AS owner,
         has_table_privilege('keel_runtime',c.oid,'SELECT')
           AND has_table_privilege('keel_runtime',c.oid,'INSERT')
-          AND has_table_privilege('keel_runtime',c.oid,'UPDATE')
-          AND has_table_privilege('keel_runtime',c.oid,'DELETE') AS "runtimePrivileges",
+          AND CASE WHEN c.relname='keel_ai_release_assessments'
+            THEN NOT (has_table_privilege('keel_runtime',c.oid,'UPDATE') OR has_table_privilege('keel_runtime',c.oid,'DELETE'))
+            ELSE has_table_privilege('keel_runtime',c.oid,'UPDATE') AND has_table_privilege('keel_runtime',c.oid,'DELETE')
+          END AS "runtimePrivileges",
         NOT (has_table_privilege('keel_backup',c.oid,'INSERT')
           OR has_table_privilege('keel_backup',c.oid,'UPDATE')
           OR has_table_privilege('keel_backup',c.oid,'DELETE')
