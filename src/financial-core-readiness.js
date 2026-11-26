@@ -114,12 +114,12 @@ async function inspectDatabase(pool, options = {}) {
                  AND (
                    p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
                    AND trim(both '()' from regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]]|::text', '', 'g'))
-                     = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
+                     = 'tenant_id=(nullif(current_setting(''keel.tenant_id'',true),''''))::uuid'
                  )
                  AND (
                    p.cmd IN ('ALL','INSERT','UPDATE')
                    AND trim(both '()' from regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]]|::text', '', 'g'))
-                     = 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid'
+                     = 'tenant_id=(nullif(current_setting(''keel.tenant_id'',true),''''))::uuid'
                    OR p.cmd IN ('SELECT','DELETE')
                  )
              )
@@ -130,11 +130,11 @@ async function inspectDatabase(pool, options = {}) {
                  AND (
                    (p.cmd IN ('ALL','SELECT','UPDATE','DELETE')
                      AND trim(both '()' from regexp_replace(lower(COALESCE(p.qual,'')), '[[:space:]]|::text', '', 'g'))
-                       <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
+                       <> 'tenant_id=(nullif(current_setting(''keel.tenant_id'',true),''''))::uuid')
                    OR
                    (p.cmd IN ('ALL','INSERT','UPDATE')
                      AND trim(both '()' from regexp_replace(lower(COALESCE(p.with_check,'')), '[[:space:]]|::text', '', 'g'))
-                       <> 'tenant_id=nullif(current_setting(''keel.tenant_id'',true),'''')::uuid')
+                       <> 'tenant_id=(nullif(current_setting(''keel.tenant_id'',true),''''))::uuid')
                  )
              ) AS "tenantPolicy"
       FROM pg_class c
