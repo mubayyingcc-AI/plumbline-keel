@@ -155,7 +155,7 @@ test('migration contract is shared, versioned, unique and backed by files', () =
   const contract = require('../src/financial-core-contract');
   const fs = require('node:fs');
   const path = require('node:path');
-  assert.equal(contract.FINANCIAL_CORE_CONTRACT_VERSION, '1.0.0');
+  assert.equal(contract.FINANCIAL_CORE_CONTRACT_VERSION, '1.1.0');
   assert.deepEqual(REQUIRED_MIGRATIONS, contract.REQUIRED_MIGRATIONS);
   assert.deepEqual(REQUIRED_TABLES, contract.REQUIRED_TABLES);
   assert.equal(new Set(contract.REQUIRED_MIGRATIONS).size, contract.REQUIRED_MIGRATIONS.length);
