@@ -11,8 +11,6 @@ function evaluateInventory(input) {
   const missingMigrations = REQUIRED_MIGRATIONS.filter(version => !migrations.has(version));
   const tables = new Map((input.tenantTables || []).map(row => [row.table, row]));
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
-  const discoveredFunctions = new Set(input.functions || []);
-  const missingFunctions = REQUIRED_FUNCTIONS.filter(name => !discoveredFunctions.has(name));
   const relations = new Map((input.relations || []).map(row => [row.name, row]));
   const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
   const unsafeRelations = (input.relations || []).filter(row => row.owner === 'keel_runtime' || row.owner === 'keel_backup' || row.runtimePrivileges !== true || row.backupReadOnly !== true).map(row => row.name);
@@ -39,9 +37,6 @@ function evaluateInventory(input) {
     gate('required_financial_core_tables', missingTables.length === 0,
       missingTables.length ? 'Required financial-core tables are missing.' : 'All required financial-core tables exist.',
       { missing: missingTables }),
-    gate('required_financial_core_functions', missingFunctions.length === 0,
-      missingFunctions.length ? 'Required financial-core database functions are missing.' : 'All contract-required financial-core functions exist.',
-      { missing: missingFunctions }),
     gate('required_financial_core_relations', missingRelations.length === 0 && unsafeRelations.length === 0,
       missingRelations.length || unsafeRelations.length ? 'Required relations are missing or have unsafe ownership/privilege posture.' : 'All migration-created relations exist with safe runtime and backup privileges.',
       { missing: missingRelations, unsafe: unsafeRelations }),
@@ -215,10 +210,6 @@ async function inspectDatabase(pool, options = {}) {
       (SELECT GREATEST(COUNT(DISTINCT role_oid)-1,0)::int FROM auth_owner_inherited_roles) AS inherited_role_count
     FROM pg_roles r WHERE r.rolname='keel_auth_owner'`)
   ]);
-  const functionInventoryResult = await pool.query(
-    'SELECT DISTINCT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
-    ['public']
-  );
   const [functionInventoryResult, relationInventoryResult] = await Promise.all([
     pool.query(`
       SELECT DISTINCT p.proname AS name, owner.rolname AS owner, p.prosecdef AS "securityDefiner",
@@ -255,7 +246,6 @@ async function inspectDatabase(pool, options = {}) {
     functions: functionInventoryResult.rows.map(row => row.name),
     functionDetails: functionInventoryResult.rows,
     relations: relationInventoryResult.rows,
-    functions: functionInventoryResult.rows.map(row => row.name),
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,
