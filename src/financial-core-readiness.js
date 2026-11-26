@@ -16,6 +16,12 @@ function evaluateInventory(input) {
   const unsafeRls = (input.tenantTables || []).filter(row =>
     !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy || row.tenantIdType !== 'uuid'
   ).map(row => row.table);
+  const relations = new Map((input.relations || []).map(row => [row.name, row]));
+  const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
+  const unsafeRelations = (input.relations || []).filter(row => row.owner !== 'keel_migrator' || row.runtimePrivileges !== true || row.backupReadOnly !== true).map(row => row.name);
+  const functionDetails = new Map((input.functionDetails || []).map(row => [row.name, row]));
+  const missingFunctionDetails = REQUIRED_FUNCTIONS.filter(name => !functionDetails.has(name));
+  const unsafeFunctions = (input.functionDetails || []).filter(row => row.owner !== 'keel_auth_owner' && row.securityDefiner === true).map(row => row.name);
   const runtime = input.runtimeRole || {};
   const backup = input.backupRole || {};
   const runtimeMemberships = input.runtimeMemberships || [];
@@ -31,9 +37,9 @@ function evaluateInventory(input) {
     gate('required_financial_core_tables', missingTables.length === 0,
       missingTables.length ? 'Required financial-core tables are missing.' : 'All required financial-core tables exist.',
       { missing: missingTables }),
-    gate('required_financial_core_functions', missingFunctions.length === 0,
+    gate('required_financial_core_relations', missingRelations.length === 0 && unsafeRelations.length === 0,\n      missingRelations.length || unsafeRelations.length ? 'Required relations are missing or have unsafe owner/privilege posture.' : 'All migration-created relations exist with expected ownership and runtime/backup privilege posture.',\n      { missing: missingRelations, unsafe: unsafeRelations }),\n    gate('required_financial_core_functions', missingFunctions.length === 0 && missingFunctionDetails.length === 0 && unsafeFunctions.length === 0,
       missingFunctions.length ? 'Required financial-core database functions are missing.' : 'All contract-required financial-core functions exist.',
-      { missing: missingFunctions }),
+      { missing: [...new Set([...missingFunctions, ...missingFunctionDetails])], unsafe: unsafeFunctions }),
     gate('tenant_rls_inventory', unsafeRls.length === 0,
       unsafeRls.length ? 'Tenant tables must have ENABLE RLS, FORCE RLS and a tenant-context policy.' : 'Every discovered tenant_id UUID table has forced RLS and a tenant-context policy.',
       { unsafeTables: unsafeRls, discoveredTenantTables: tables.size }),
@@ -211,7 +217,7 @@ async function inspectDatabase(pool, options = {}) {
   return evaluateInventory({
     migrations: migrationResult.rows.map(row => row.version),
     tenantTables: tenantTableResult.rows,
-    functions: functionInventoryResult.rows.map(row => row.name),
+    functions: functionInventoryResult.rows.map(row => row.name),\n    functionDetails: functionInventoryResult.rows.map(row => ({name:row.name,owner:row.owner,securityDefiner:row.securityDefiner})),\n    relations: relationInventoryResult.rows,
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,
