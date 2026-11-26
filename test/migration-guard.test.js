@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const { REQUIRED_MIGRATIONS } = require('../src/financial-core-contract');
 
 test('ledger migration runner refuses production even when migration flag is set', () => {
   const script = path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js');
@@ -22,15 +23,8 @@ test('ledger migration runner refuses production even when migration flag is set
 
 test('guarded migration runner includes the full core migration sequence', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js'), 'utf8');
-  for (const migration of [
-    '014_accounting_books_and_periods.sql',
-    '015_period_close_dual_control.sql',
-    '016_global_tenant_rls_and_auth.sql',
-    '017_provider_outbox_inbox_reconciliation.sql',
-    '018_keel_authority_action_assurance.sql',
-    '019_kAAA_provider_authority_event_type.sql',
-    '020_rls_aware_backup_identity.sql'
-  ]) {
+  for (const migration of REQUIRED_MIGRATIONS) {
     assert.ok(script.includes(migration), 'missing guarded migration: ' + migration);
   }
+  assert.match(script, /require\(['"]\.\.\/src\/financial-core-contract['"]\)/);
 });
