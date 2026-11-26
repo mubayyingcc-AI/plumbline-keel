@@ -185,7 +185,7 @@ test('the complete contract requires regulatory relations as well as ledger and 
 
 test('missing relation, runtime grant, backup read-only posture and unsafe owner block readiness', () => {
   const input = readyInventory();
-  input.relations = input.relations.filter(row => row.name !== 'keel_payment_intents');
+  input.relations = input.relations.filter(row => row.name !== 'keel_ledger_journals');
   let result = evaluateInventory(input);
   assert.equal(result.gates.find(item => item.id === 'required_financial_core_relations').status, 'FAIL');
   input.relations = readyInventory().relations;
