@@ -7,6 +7,8 @@ function readyInventory() {
   return {
     migrations: [...REQUIRED_MIGRATIONS],
     functions: [...REQUIRED_FUNCTIONS],
+    functionDetails: REQUIRED_FUNCTIONS.map(name => ({name,owner:'keel_auth_owner',securityDefiner:true,fixedSearchPath:true})),
+    relations: REQUIRED_TABLES.map(name => ({name,owner:'keel_migrator',runtimePrivileges:true,backupReadOnly:true})),
     tenantTables: REQUIRED_TABLES.map(table => ({table,tenantIdType:'uuid',rlsEnabled:true,rlsForced:true,tenantPolicy:true})),
     runtimeRole: {role:'keel_runtime',rolcanlogin:true,rolinherit:false,rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,rolbypassrls:false},
     runtimeMemberships: [],
@@ -155,9 +157,10 @@ test('migration contract is shared, versioned, unique and backed by files', () =
   const contract = require('../src/financial-core-contract');
   const fs = require('node:fs');
   const path = require('node:path');
-  assert.equal(contract.FINANCIAL_CORE_CONTRACT_VERSION, '1.1.0');
+  assert.equal(contract.FINANCIAL_CORE_CONTRACT_VERSION, '1.2.0');
   assert.deepEqual(REQUIRED_MIGRATIONS, contract.REQUIRED_MIGRATIONS);
   assert.deepEqual(REQUIRED_TABLES, contract.REQUIRED_TABLES);
+  assert.deepEqual(REQUIRED_FUNCTIONS, contract.REQUIRED_FUNCTIONS);
   assert.equal(new Set(contract.REQUIRED_MIGRATIONS).size, contract.REQUIRED_MIGRATIONS.length);
   for (const migration of contract.REQUIRED_MIGRATIONS) {
     assert.ok(fs.existsSync(path.join(__dirname, '..', 'db', 'migrations', migration)), 'missing migration file: ' + migration);
@@ -182,4 +185,35 @@ test('the complete contract requires regulatory relations as well as ledger and 
   for (const name of ['keel_regulatory_mappings', 'keel_regulatory_obligations', 'keel_provider_reconciliation_cases', 'keel_authority_action_approvals']) {
     assert.ok(REQUIRED_TABLES.includes(name), 'contract omits ' + name);
   }
+});
+
+
+test('missing relation, runtime grant, backup read-only posture and unsafe owner block readiness', () => {
+  const input = readyInventory();
+  input.relations = input.relations.filter(row => row.name !== 'keel_payment_intents');
+  let result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_relations').status, 'FAIL');
+  input.relations = readyInventory().relations;
+  input.relations[0].runtimePrivileges = false;
+  result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_relations').status, 'FAIL');
+  input.relations[0].runtimePrivileges = true;
+  input.relations[0].backupReadOnly = false;
+  result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_relations').status, 'FAIL');
+  input.relations[0].backupReadOnly = true;
+  input.relations[0].owner = 'keel_runtime';
+  result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_relations').status, 'FAIL');
+});
+
+test('security-definer functions require dedicated owner and fixed search_path', () => {
+  const input = readyInventory();
+  input.functionDetails[0].owner = 'keel_runtime';
+  let result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_functions').status, 'FAIL');
+  input.functionDetails[0].owner = 'keel_auth_owner';
+  input.functionDetails[0].fixedSearchPath = false;
+  result = evaluateInventory(input);
+  assert.equal(result.gates.find(item => item.id === 'required_financial_core_functions').status, 'FAIL');
 });
