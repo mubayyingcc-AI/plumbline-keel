@@ -100,7 +100,7 @@ async function inspectDatabase(pool, options = {}) {
   }
   const [
     migrationResult, runtimeResult, tenantTableResult, backupResult,
-    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult, runtimeOwnershipResult, authOwnerResult, schemaPrivilegeResult, definerGrantResult
+    backupMembershipResult, runtimeMembershipResult, functionGrantResult, tlsResult, backupWriteResult, runtimeOwnershipResult, schemaPrivilegeResult, definerGrantResult, authOwnerResult
   ] = await Promise.all([
     pool.query('SELECT version FROM public.keel_schema_migrations WHERE version = ANY($1::text[])', [REQUIRED_MIGRATIONS]),
     pool.query("SELECT current_user AS role, r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolbypassrls FROM pg_roles r WHERE r.rolname=current_user"),
