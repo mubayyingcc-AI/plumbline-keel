@@ -18,6 +18,9 @@ test('PostgreSQL catalog readiness enforces the required object, role and grant 
       ORDER BY policyname
     `);
     console.log('RLS policy diagnostics', JSON.stringify(diagnostics.rows));
+    assert.equal(diagnostics.rows.length, 1, 'expected one canonical tenant policy');
+    assert.equal(diagnostics.rows[0].normalized_qual, "tenant_id=(nullif(current_setting('keel.tenant_id',true),''))::uuid");
+    assert.equal(diagnostics.rows[0].normalized_check, "tenant_id=(nullif(current_setting('keel.tenant_id',true),''))::uuid");
     const result = await inspectDatabase(pool, { ssl: false });
     const required = [
       'migration_manifest',
