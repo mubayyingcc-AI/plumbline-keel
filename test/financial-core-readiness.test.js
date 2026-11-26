@@ -147,3 +147,20 @@ test('dedicated function owner cannot inherit another role or replication privil
   input.authOwner.rolreplication = true;
   assert.equal(evaluateInventory(input).gates.find(item=>item.id==='auth_function_owner').status,'FAIL');
 });
+
+
+test('migration contract is shared, versioned, unique and backed by files', () => {
+  const contract = require('../src/financial-core-contract');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  assert.equal(contract.FINANCIAL_CORE_CONTRACT_VERSION, '1.0.0');
+  assert.deepEqual(REQUIRED_MIGRATIONS, contract.REQUIRED_MIGRATIONS);
+  assert.deepEqual(REQUIRED_TABLES, contract.REQUIRED_TABLES);
+  assert.equal(new Set(contract.REQUIRED_MIGRATIONS).size, contract.REQUIRED_MIGRATIONS.length);
+  for (const migration of contract.REQUIRED_MIGRATIONS) {
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'db', 'migrations', migration)), 'missing migration file: ' + migration);
+  }
+  const runner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'apply-ledger-migrations.js'), 'utf8');
+  assert.match(runner, /require\(['"]\.\.\/src\/financial-core-contract['"]\)/);
+  assert.match(runner, /for \(const version of REQUIRED_MIGRATIONS\)/);
+});
