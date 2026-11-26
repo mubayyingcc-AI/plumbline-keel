@@ -1,15 +1,12 @@
 name: Keel ledger verification
 
 on:
-  pull_request:
-    branches: [main, 'security/**', 'recovery/**']
-  push:
-    branches:
-      - main
-      - 'ledger/**'
-      - 'security/**'
-      - 'provider/**'
-      - 'recovery/**'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual verification reason'
+        required: false
+        type: string
 
 permissions:
   contents: read
