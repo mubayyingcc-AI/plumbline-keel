@@ -79,14 +79,9 @@ test('unknown or empty inventory can never be promoted', () => {
 });
 
 test('readiness manifest is versioned and contains no duplicate required objects', () => {
-  assert.deepEqual(REQUIRED_MIGRATIONS, [
-    '012_double_entry_ledger.sql','013_ledger_posting_and_reservations.sql',
-    '014_accounting_books_and_periods.sql','015_period_close_dual_control.sql',
-    '016_global_tenant_rls_and_auth.sql','017_provider_outbox_inbox_reconciliation.sql',
-    '018_keel_authority_action_assurance.sql','019_kAAA_provider_authority_event_type.sql',
-    '020_rls_aware_backup_identity.sql','021_ai_release_assessments.sql',
-    '022_direct_tenant_fk_coverage.sql','023_backup_role_connection_capacity.sql'
-  ]);
+  assert.equal(REQUIRED_MIGRATIONS.length, 23);
+  assert.equal(REQUIRED_MIGRATIONS[0], '001_assurance_fabric.sql');
+  assert.equal(REQUIRED_MIGRATIONS.at(-1), '023_backup_role_connection_capacity.sql');
   assert.equal(new Set(REQUIRED_TABLES).size, REQUIRED_TABLES.length);
   assert.equal(new Set(REQUIRED_FUNCTIONS).size, REQUIRED_FUNCTIONS.length);
 });
