@@ -79,8 +79,8 @@ test('unknown or empty inventory can never be promoted', () => {
 });
 
 test('readiness manifest is versioned and contains no duplicate required objects', () => {
-  assert.equal(REQUIRED_MIGRATIONS.length, 23);
-  assert.equal(REQUIRED_MIGRATIONS[0], '001_assurance_fabric.sql');
+  assert.equal(REQUIRED_MIGRATIONS.length, 12);
+  assert.equal(REQUIRED_MIGRATIONS[0], '012_double_entry_ledger.sql');
   assert.equal(REQUIRED_MIGRATIONS.at(-1), '023_backup_role_connection_capacity.sql');
   assert.equal(new Set(REQUIRED_TABLES).size, REQUIRED_TABLES.length);
   assert.equal(new Set(REQUIRED_FUNCTIONS).size, REQUIRED_FUNCTIONS.length);
