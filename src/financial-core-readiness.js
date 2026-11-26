@@ -13,7 +13,7 @@ function evaluateInventory(input) {
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
   const relations = new Map((input.relations || []).map(row => [row.name, row]));
   const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
-  const unsafeRelations = (input.relations || []).filter(row => row.owner === 'keel_runtime' || row.owner === 'keel_backup' || row.runtimePrivileges !== true || row.backupReadOnly !== true).map(row => row.name);
+  const unsafeRelations = REQUIRED_TABLES.map(name => relations.get(name)).filter(row => row && (row.owner === 'keel_runtime' || row.owner === 'keel_backup' || row.runtimePrivileges !== true || row.backupReadOnly !== true)).map(row => row.name);
   const functionDetails = new Map((input.functionDetails || []).map(row => [row.name, row]));
   const missingFunctionDetails = REQUIRED_FUNCTIONS.filter(name => !functionDetails.has(name));
   const unsafeFunctions = (input.functionDetails || []).filter(row => row.securityDefiner === true && (row.owner !== 'keel_auth_owner' || row.fixedSearchPath !== true)).map(row => row.name);
