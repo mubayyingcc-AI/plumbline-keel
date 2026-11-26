@@ -13,15 +13,17 @@ function evaluateInventory(input) {
   const missingTables = REQUIRED_TABLES.filter(name => !tables.has(name));
   const discoveredFunctions = new Set(input.functions || []);
   const missingFunctions = REQUIRED_FUNCTIONS.filter(name => !discoveredFunctions.has(name));
+  const relations = new Map((input.relations || []).map(row => [row.name, row]));
+  const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
+  const unsafeRelations = (input.relations || []).filter(row => row.owner === 'keel_runtime' || row.owner === 'keel_backup' || row.runtimePrivileges !== true || row.backupReadOnly !== true).map(row => row.name);
+  const functionDetails = new Map((input.functionDetails || []).map(row => [row.name, row]));
+  const missingFunctionDetails = REQUIRED_FUNCTIONS.filter(name => !functionDetails.has(name));
+  const unsafeFunctions = (input.functionDetails || []).filter(row => row.securityDefiner === true && (row.owner !== 'keel_auth_owner' || row.fixedSearchPath !== true)).map(row => row.name);
+  const discoveredFunctions = new Set(input.functions || []);
+  const missingFunctions = REQUIRED_FUNCTIONS.filter(name => !discoveredFunctions.has(name));
   const unsafeRls = (input.tenantTables || []).filter(row =>
     !row.rlsEnabled || !row.rlsForced || !row.tenantPolicy || row.tenantIdType !== 'uuid'
   ).map(row => row.table);
-  const relations = new Map((input.relations || []).map(row => [row.name, row]));
-  const missingRelations = REQUIRED_TABLES.filter(name => !relations.has(name));
-  const unsafeRelations = (input.relations || []).filter(row => row.owner !== 'keel_migrator' || row.runtimePrivileges !== true || row.backupReadOnly !== true).map(row => row.name);
-  const functionDetails = new Map((input.functionDetails || []).map(row => [row.name, row]));
-  const missingFunctionDetails = REQUIRED_FUNCTIONS.filter(name => !functionDetails.has(name));
-  const unsafeFunctions = (input.functionDetails || []).filter(row => row.owner !== 'keel_auth_owner' && row.securityDefiner === true).map(row => row.name);
   const runtime = input.runtimeRole || {};
   const backup = input.backupRole || {};
   const runtimeMemberships = input.runtimeMemberships || [];
@@ -37,8 +39,14 @@ function evaluateInventory(input) {
     gate('required_financial_core_tables', missingTables.length === 0,
       missingTables.length ? 'Required financial-core tables are missing.' : 'All required financial-core tables exist.',
       { missing: missingTables }),
-    gate('required_financial_core_relations', missingRelations.length === 0 && unsafeRelations.length === 0,\n      missingRelations.length || unsafeRelations.length ? 'Required relations are missing or have unsafe owner/privilege posture.' : 'All migration-created relations exist with expected ownership and runtime/backup privilege posture.',\n      { missing: missingRelations, unsafe: unsafeRelations }),\n    gate('required_financial_core_functions', missingFunctions.length === 0 && missingFunctionDetails.length === 0 && unsafeFunctions.length === 0,
+    gate('required_financial_core_functions', missingFunctions.length === 0,
       missingFunctions.length ? 'Required financial-core database functions are missing.' : 'All contract-required financial-core functions exist.',
+      { missing: missingFunctions }),
+    gate('required_financial_core_relations', missingRelations.length === 0 && unsafeRelations.length === 0,
+      missingRelations.length || unsafeRelations.length ? 'Required relations are missing or have unsafe ownership/privilege posture.' : 'All migration-created relations exist with safe runtime and backup privileges.',
+      { missing: missingRelations, unsafe: unsafeRelations }),
+    gate('required_financial_core_functions', missingFunctions.length === 0 && missingFunctionDetails.length === 0 && unsafeFunctions.length === 0,
+      missingFunctions.length || missingFunctionDetails.length || unsafeFunctions.length ? 'Required financial-core functions are missing or have unsafe ownership/search_path.' : 'All contract-required financial-core functions exist with safe ownership/search_path.',
       { missing: [...new Set([...missingFunctions, ...missingFunctionDetails])], unsafe: unsafeFunctions }),
     gate('tenant_rls_inventory', unsafeRls.length === 0,
       unsafeRls.length ? 'Tenant tables must have ENABLE RLS, FORCE RLS and a tenant-context policy.' : 'Every discovered tenant_id UUID table has forced RLS and a tenant-context policy.',
@@ -211,13 +219,41 @@ async function inspectDatabase(pool, options = {}) {
     'SELECT DISTINCT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
     ['public']
   );
+  const [functionInventoryResult, relationInventoryResult] = await Promise.all([
+    pool.query(`
+      SELECT DISTINCT p.proname AS name, owner.rolname AS owner, p.prosecdef AS "securityDefiner",
+        EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig,ARRAY[]::text[])) cfg
+          WHERE replace(lower(cfg),' ','')='search_path=pg_catalog,public') AS "fixedSearchPath"
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      JOIN pg_roles owner ON owner.oid=p.proowner WHERE n.nspname='public'
+    `),
+    pool.query(`
+      SELECT c.relname AS name, owner.rolname AS owner,
+        has_table_privilege('keel_runtime',c.oid,'SELECT')
+          AND has_table_privilege('keel_runtime',c.oid,'INSERT')
+          AND has_table_privilege('keel_runtime',c.oid,'UPDATE')
+          AND has_table_privilege('keel_runtime',c.oid,'DELETE') AS "runtimePrivileges",
+        NOT (has_table_privilege('keel_backup',c.oid,'INSERT')
+          OR has_table_privilege('keel_backup',c.oid,'UPDATE')
+          OR has_table_privilege('keel_backup',c.oid,'DELETE')
+          OR has_table_privilege('keel_backup',c.oid,'TRUNCATE')
+          OR has_table_privilege('keel_backup',c.oid,'REFERENCES')
+          OR has_table_privilege('keel_backup',c.oid,'TRIGGER')) AS "backupReadOnly"
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_roles owner ON owner.oid=c.relowner
+      WHERE n.nspname='public' AND c.relkind IN ('r','p')
+    `)
+  ]);
   const backupRole = backupResult.rows[0] ? { exists: true, ...backupResult.rows[0] } : { exists: false };
   backupRole.canWriteLedger = backupWriteResult.rows[0] ? backupWriteResult.rows[0].can_write : true;
   const ssl = options.ssl;
   return evaluateInventory({
     migrations: migrationResult.rows.map(row => row.version),
     tenantTables: tenantTableResult.rows,
-    functions: functionInventoryResult.rows.map(row => row.name),\n    functionDetails: functionInventoryResult.rows.map(row => ({name:row.name,owner:row.owner,securityDefiner:row.securityDefiner})),\n    relations: relationInventoryResult.rows,
+    functions: functionInventoryResult.rows.map(row => row.name),
+    functionDetails: functionInventoryResult.rows,
+    relations: relationInventoryResult.rows,
+    functions: functionInventoryResult.rows.map(row => row.name),
     runtimeRole: runtimeResult.rows[0] || {},
     runtimeMemberships: runtimeMembershipResult.rows,
     backupRole,
